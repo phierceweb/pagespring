@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pagespring"
+version = "0.1.0"
+description = "Acquire and normalize online software manuals into clean, convertible source files — the acquisition front-end to pagespeak."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mike Farr" }]
+keywords = ["manuals", "documentation", "ingest", "acquisition", "rag", "markdown"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Typing :: Typed",
+]
+dependencies = [
+    # Lean by design: stdlib urllib fetches, BeautifulSoup parses, pf-core[cli]
+    # gives the Typer scaffolding + AppConfig + structured logging. No ML stack.
+    "beautifulsoup4>=4.12",
+    # YAML OpenAPI specs (JSON is stdlib); pure-data parser, no transport.
+    "pyyaml>=6.0",
+    "pf-core[cli]~=0.4.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+]
+
+[project.scripts]
+pagespring = "pagespring.cli:main"
+
+[project.urls]
+Repository = "https://github.com/phierceweb/pagespring"
+Changelog = "https://github.com/phierceweb/pagespring/blob/main/CHANGELOG.md"
+Issues = "https://github.com/phierceweb/pagespring/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pagespring = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/pagespring/cli.py" = ["B008"]  # Typer uses function calls in argument defaults
+"tests/*" = ["B011"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

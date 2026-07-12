@@ -1,0 +1,47 @@
+# ─── Acquired output (the deliverable; large, regenerable — not tracked) ────
+# pagespring writes one incoming/<slug>/ per manual. A separate step
+# (pagespeak) consumes these; regenerate with `bin/run ingest <url>`.
+/incoming/
+
+# ─── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# ─── Virtual env / secrets ─────────────────────────────────────────────────
+.venv/
+.env
+
+# ─── Tooling caches ────────────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# ─── IDE / OS ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# ─── AI / agent workspace ──────────────────────────────────────────────────
+# .ai/docs/, .ai/plans/, .ai/scripts/ are local-only working docs.
+# Tracked: .ai/rules/, plus .gitkeep markers.
+.ai/docs/*
+!.ai/docs/.gitkeep
+.ai/plans/*
+!.ai/plans/.gitkeep
+.ai/scripts/*
+!.ai/scripts/.gitkeep
+
+# ─── Claude Code / Cursor local-only state ─────────────────────────────────
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+.cursor/settings.local.json
+
+# ─── Playwright MCP artifacts ──────────────────────────────────────────────
+.playwright-mcp/
+docs/pf-core

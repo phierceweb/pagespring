@@ -1,0 +1,37 @@
+# Local hooks run in the project venv (the upstream mirrors won't have our
+# deps/stubs). The .github/workflows/ci.yml job is the unskippable backstop.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff check
+        entry: .venv/bin/ruff check
+        language: system
+        types: [python]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format --check
+        entry: .venv/bin/ruff format --check
+        language: system
+        types: [python]
+        require_serial: true
+      - id: mypy
+        name: mypy
+        entry: .venv/bin/mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+        args: ["src"]
+      - id: pf-guards
+        name: structural gate
+        entry: .venv/bin/python -m pf_core.guards
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: pytest-fast
+        name: pytest
+        entry: .venv/bin/pytest
+        language: system
+        types: [python]
+        pass_filenames: false
+        args: ["-q"]

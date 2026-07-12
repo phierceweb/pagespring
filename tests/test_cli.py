@@ -1,0 +1,227 @@
+"""CLI commands (patterns / classify / ingest / status), via Typer's runner."""
+
+from typer.testing import CliRunner
+
+import pagespring.cli as climod
+from pagespring import manifest
+from pagespring.cli import app
+from pagespring.orchestrate import AcquireError, EmptyOutputError, NoPatternError
+
+runner = CliRunner()
+
+
+def test_patterns_lists_registered():
+    r = runner.invoke(app, ["patterns"])
+    assert r.exit_code == 0
+    assert "apple_help" in r.output
+    assert "gitbook" in r.output
+
+
+def test_classify_routes_apple():
+    r = runner.invoke(app, ["classify", "https://support.apple.com/guide/keynote/welcome/mac"])
+    assert r.exit_code == 0
+    assert "apple_help" in r.output
+
+
+def test_classify_unknown():
+    # docs_probe now claims every http(s) URL — "no pattern" is only reachable
+    # for a non-web argument (a local file path / file:// URL).
+    r = runner.invoke(app, ["classify", "./no-such-file"])
+    assert r.exit_code == 0
+    assert "no pattern" in r.output.lower()
+
+
+def test_ingest_formats_output(monkeypatch, tmp_path):
+    def fake_run_ingest(url, **kwargs):
+        return {
+            "pattern": "apple_help",
+            "slug": "keynote",
+            "kind": "html",
+            "clean": str(tmp_path / "keynote.html"),
+            "images": 0,
+            "pages": 187,
+            "bytes": 1_153_433,
+        }
+
+    monkeypatch.setattr(climod, "run_ingest", fake_run_ingest)
+    r = runner.invoke(app, ["ingest", "https://support.apple.com/guide/keynote/welcome/mac"])
+    assert r.exit_code == 0
+    assert "apple_help" in r.output
+    assert "incoming" in r.output.lower()
+    assert "187" in r.output  # crawl scale visible at a glance
+    assert "1.1 MB" in r.output
+
+
+def test_ingest_no_pattern_exits_2(monkeypatch):
+    def fake_run_ingest(url, **kwargs):
+        raise NoPatternError(url)
+
+    monkeypatch.setattr(climod, "run_ingest", fake_run_ingest)
+    r = runner.invoke(app, ["ingest", "https://example.com/x"])
+    assert r.exit_code == 2
+    assert "no pattern matched" in r.output.lower()
+
+
+def test_ingest_empty_output_exits_3(monkeypatch):
+    def fake_run_ingest(url, **kwargs):
+        raise EmptyOutputError(url)
+
+    monkeypatch.setattr(climod, "run_ingest", fake_run_ingest)
+    r = runner.invoke(app, ["ingest", "https://example.com/x"])
+    assert r.exit_code == 3
+    assert "empty" in r.output.lower()
+
+
+def test_ingest_fetch_failure_exits_4(monkeypatch):
+    def fake_run_ingest(url, **kwargs):
+        raise AcquireError(url, "HTTP Error 404: Not Found")
+
+    monkeypatch.setattr(climod, "run_ingest", fake_run_ingest)
+    r = runner.invoke(app, ["ingest", "https://docs.x.com"])
+    assert r.exit_code == 4
+    assert "fetch failed" in r.output.lower()
+    assert "404" in r.output
+
+
+def test_status_reports_incoming_slugs(monkeypatch, tmp_path):
+    """status: one row per incoming/<slug>/ with its deliverable file + size.
+    No corpus/converted column — that's pagespeak's side, downstream."""
+    monkeypatch.setattr(climod.cfg, "INCOMING_DIR", str(tmp_path / "incoming"))
+    (tmp_path / "incoming" / "keynote").mkdir(parents=True)
+    (tmp_path / "incoming" / "keynote" / "keynote.html").write_text("<h1>K</h1>", encoding="utf-8")
+    (tmp_path / "incoming" / "numbers").mkdir()
+    (tmp_path / "incoming" / "numbers" / "numbers.md").write_text("# N", encoding="utf-8")
+
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 0
+    keynote = next(line for line in r.output.splitlines() if "keynote" in line)
+    assert "keynote.html" in keynote
+    assert any("numbers.md" in line for line in r.output.splitlines())
+    assert "converted" not in r.output  # corpus column dropped
+
+
+def test_status_empty_incoming(monkeypatch, tmp_path):
+    monkeypatch.setattr(climod.cfg, "INCOMING_DIR", str(tmp_path / "incoming"))
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 0
+    assert "nothing in incoming/" in r.output
+
+
+def test_ingest_if_changed_forwarded_and_unchanged_reported(monkeypatch, tmp_path):
+    """--if-changed reaches run_ingest; a changed=False result prints 'unchanged'."""
+    captured: dict = {}
+
+    def fake_run_ingest(url, **kwargs):
+        captured.update(kwargs)
+        return {
+            "pattern": "gitbook",
+            "slug": "docs",
+            "kind": "markdown",
+            "clean": str(tmp_path / "docs.md"),
+            "images": 0,
+            "pages": 5,
+            "bytes": 100,
+            "changed": False,
+        }
+
+    monkeypatch.setattr(climod, "run_ingest", fake_run_ingest)
+    r = runner.invoke(app, ["ingest", "https://docs.x.com", "--if-changed"])
+    assert r.exit_code == 0
+    assert captured.get("if_changed") is True
+    assert "unchanged" in r.output.lower()
+
+
+def test_localize_command_reports_done(monkeypatch):
+    monkeypatch.setattr(
+        climod,
+        "localize_images",
+        lambda s: {"slug": s, "localized": 5, "remaining": 0, "images_total": 5},
+    )
+    r = runner.invoke(app, ["localize", "biology-2e"])
+    assert r.exit_code == 0
+    assert "biology-2e" in r.output
+    assert "5" in r.output
+    assert "done" in r.output.lower()
+
+
+def test_localize_command_reports_remaining(monkeypatch):
+    """When images remain (a big book exceeded one pass), the output says re-run."""
+    monkeypatch.setattr(
+        climod,
+        "localize_images",
+        lambda s: {"slug": s, "localized": 50, "remaining": 120, "images_total": 50},
+    )
+    r = runner.invoke(app, ["localize", "biology-2e"])
+    assert r.exit_code == 0
+    assert "120" in r.output
+    assert "re-run" in r.output.lower()
+
+
+def test_localize_all_iterates_incoming(monkeypatch, tmp_path):
+    monkeypatch.setattr(climod.cfg, "INCOMING_DIR", str(tmp_path / "incoming"))
+    (tmp_path / "incoming" / "a").mkdir(parents=True)
+    (tmp_path / "incoming" / "b").mkdir()
+    calls: list[str] = []
+
+    def fake(slug):
+        calls.append(slug)
+        return {"slug": slug, "localized": 1, "remaining": 0, "images_total": 1}
+
+    monkeypatch.setattr(climod, "localize_images", fake)
+    r = runner.invoke(app, ["localize", "--all"])
+    assert r.exit_code == 0
+    assert sorted(calls) == ["a", "b"]
+
+
+def test_localize_requires_slug_or_all():
+    r = runner.invoke(app, ["localize"])
+    assert r.exit_code == 2
+
+
+def _write_manifest(slug_dir, **over):
+    slug_dir.mkdir(parents=True, exist_ok=True)
+    fields = {
+        "source_url": "https://docs.tableplus.com/",
+        "pattern": "gitbook",
+        "slug": slug_dir.name,
+        "kind": "markdown",
+        "deliverable": "docs-tableplus-com.md",
+        "convert_recipe": ["--split-sections"],
+        "pages": 62,
+        "size_bytes": 100,
+        "sha256": "abc",
+        "images": 0,
+        "ingested_at": "2026-06-14T17:23:01Z",
+    }
+    fields.update(over)
+    manifest.write_manifest(slug_dir, manifest.build_manifest(**fields))
+
+
+def test_ingest_unrecognized_spec_exits_2(monkeypatch):
+    from pf_core.exceptions import InvalidInputError
+
+    def fake_run_ingest(url, **kwargs):
+        raise InvalidInputError("…not a recognizable OpenAPI/Swagger spec or Postman collection")
+
+    monkeypatch.setattr(climod, "run_ingest", fake_run_ingest)
+    r = runner.invoke(app, ["ingest", "https://x.com/thing.json"])
+    assert r.exit_code == 2
+    assert "not a recognizable" in r.output.lower()
+
+
+def test_status_reads_manifest(monkeypatch, tmp_path):
+    """status surfaces the manifest's pattern, pages, source host, and date —
+    and never reports manifest.json itself as the deliverable."""
+    monkeypatch.setattr(climod.cfg, "INCOMING_DIR", str(tmp_path / "incoming"))
+    slug_dir = tmp_path / "incoming" / "docs-tableplus-com"
+    _write_manifest(slug_dir)
+    (slug_dir / "docs-tableplus-com.md").write_text("# T", encoding="utf-8")
+
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 0
+    line = next(line for line in r.output.splitlines() if "docs-tableplus-com" in line)
+    assert "gitbook" in line  # pattern from manifest
+    assert "62" in line  # pages from manifest
+    assert "docs.tableplus.com" in line  # source host
+    assert "2026-06-14" in line  # ingested date from manifest
+    assert "manifest.json" not in r.output  # never the deliverable
