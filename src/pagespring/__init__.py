@@ -9,4 +9,4 @@ that consumes ``incoming/`` independently — this package neither runs nor impo
 This package stays dependency-light (pf-core[cli] + beautifulsoup4).
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

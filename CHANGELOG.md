@@ -4,6 +4,18 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.1.1] — 2026-07-12
+
+### Fixed
+
+- **Microsoft 365 pattern** — article images served as relative `media/…`
+  paths (e.g. Sway, Publisher) are now made absolute against the article URL,
+  so the deliverable's asset refs resolve and `--download-images` can fetch them.
+- **Microsoft 365 pattern** — a throttle (403) or network error while
+  paginating a product sitemap now logs `microsoft_support.sitemap_error`
+  rather than silently truncating the article catalog; the expected
+  end-of-pagination 404 stays quiet.
+
 ## [0.1.0] — 2026-07-12
 
 Initial public release.

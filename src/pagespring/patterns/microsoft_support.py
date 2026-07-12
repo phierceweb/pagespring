@@ -24,6 +24,7 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
+from pagespring.patterns._site import absolutize_refs
 
 log = get_logger(__name__)
 
@@ -42,7 +43,7 @@ _COOLDOWN = 60.0  # seconds to back off when the site throttles (it 403s, not 42
 _MAX_FAILED_COOLDOWNS = 3  # consecutive failed retries → sustained block; stop paying cooldowns
 
 
-def _title_and_body(page_html: str) -> tuple[str | None, str | None]:
+def _title_and_body(page_html: str, page_url: str) -> tuple[str | None, str | None]:
     soup = BeautifulSoup(page_html, _PARSER)
     body = (
         soup.find(class_="learnArticleContent")
@@ -57,6 +58,7 @@ def _title_and_body(page_html: str) -> tuple[str | None, str | None]:
         junk.decompose()
     for junk in body.find_all(id=_CHROME_RE):
         junk.decompose()
+    absolutize_refs(body, page_url)  # articles serve relative media/ paths
     h1 = soup.find("h1")
     title = h1.get_text(" ", strip=True) if h1 else ""
     return title, body.decode_contents()
@@ -80,9 +82,19 @@ def _sitemap_articles(product: str, locale: str) -> list[str]:
     links: list[str] = []
     n = 1
     while True:
+        url = _SITEMAP_TPL.format(product=product, locale=locale, n=n)
         try:
-            _f, xml = http.fetch_text(_SITEMAP_TPL.format(product=product, locale=locale, n=n))
-        except Exception:
+            _f, xml = http.fetch_text(url)
+        except urllib.error.HTTPError as exc:
+            # 404 is the expected end of pagination; any other status (e.g. a 403
+            # throttle mid-crawl) stopped us early and silently truncated the catalog.
+            if exc.code != 404:
+                log.warning(
+                    "microsoft_support.sitemap_error", url=url, status=exc.code, pages=n - 1
+                )
+            break
+        except Exception as exc:  # network/timeout mid-crawl — truncation, not the end
+            log.warning("microsoft_support.sitemap_error", url=url, error=str(exc), pages=n - 1)
             break
         links.extend(_LOC_RE.findall(xml))
         n += 1
@@ -133,7 +145,7 @@ class MicrosoftSupportPattern:
                         failed_cooldowns += 1
                         raise
                     failed_cooldowns = 0  # recovered — the block was a burst
-                title, body = _title_and_body(art)
+                title, body = _title_and_body(art, link)
             except Exception as exc:
                 log.warning("microsoft_support.fetch_error", url=link, error=str(exc))
                 continue

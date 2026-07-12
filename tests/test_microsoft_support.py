@@ -184,6 +184,85 @@ def test_article_cap_warns(tmp_path, monkeypatch):
     assert any(event == "microsoft_support.capped" for event, _ in spy.warnings)
 
 
+def test_sitemap_non_404_error_warns(tmp_path, monkeypatch):
+    """A non-404 on a mid-pagination sitemap page (e.g. a 403 throttle) truncates
+    the catalog — warn loudly instead of breaking silently like the fetch loop does."""
+    from pagespring.patterns import microsoft_support as mod
+
+    def fake_fetch(url, **kwargs):
+        if url.endswith("_sitemaps/excel_en-us_1.xml"):
+            return url, _SITEMAP
+        if "_sitemaps/" in url:  # _2.xml throttled — NOT a genuine end-of-pages 404
+            raise urllib.error.HTTPError(url, 403, "Forbidden", None, None)
+        if "create-a-pivottable" in url:
+            return url, _ART1
+        if "chrome-shell" in url:
+            return url, _SHELL
+        return url, _ART2
+
+    monkeypatch.setattr(http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    spy = _LogSpy()
+    monkeypatch.setattr(mod, "log", spy)
+
+    acq = MicrosoftSupportPattern().acquire("https://support.microsoft.com/en-us/excel", tmp_path)
+
+    assert acq.pages == 2  # articles from _1.xml still acquired despite the early break
+    assert any(event == "microsoft_support.sitemap_error" for event, _ in spy.warnings)
+
+
+def test_sitemap_404_end_is_silent(tmp_path, monkeypatch):
+    """Running off the end of the sitemap pages (the terminal 404) is the normal
+    stop — it must NOT warn, or the noise would fire on every sitemap crawl."""
+    from pagespring.patterns import microsoft_support as mod
+
+    monkeypatch.setattr(http, "fetch_text", _fake_fetch_sitemap_mode)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    spy = _LogSpy()
+    monkeypatch.setattr(mod, "log", spy)
+
+    MicrosoftSupportPattern().acquire("https://support.microsoft.com/en-us/excel", tmp_path)
+
+    assert not any(event == "microsoft_support.sitemap_error" for event, _ in spy.warnings)
+
+
+def test_relative_image_src_is_absolutized(tmp_path, monkeypatch):
+    """Articles served with relative media/ image paths (Sway, Publisher, …) must be
+    absolutized against the article URL — the deliverable promises absolute assets.
+    Already-absolute srcs are left untouched."""
+    sitemap = (
+        "<urlset><url>"
+        "<loc>https://support.microsoft.com/en-us/sway/create-in-sway</loc>"
+        "</url></urlset>"
+    )
+    article = (
+        "<html><body><h1>Create in Sway</h1>"
+        '<div class="learnArticleContent">'
+        "<p>Create a new Sway from scratch or from a document.</p>"
+        '<img src="media/welcome.png" data-linktype="relative-path">'
+        '<img src="https://support.content.office.net/img/keep.png">'
+        "</div></body></html>"
+    )
+
+    def fake_fetch(url, **kwargs):
+        if url.endswith("_sitemaps/sway_en-us_1.xml"):
+            return url, sitemap
+        if "_sitemaps/" in url:
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+        return url, article
+
+    monkeypatch.setattr(http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    p = MicrosoftSupportPattern()
+
+    acq = p.acquire("https://support.microsoft.com/en-us/sway", tmp_path)
+    html = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert 'src="https://support.microsoft.com/en-us/sway/media/welcome.png"' in html
+    assert 'src="media/welcome.png"' not in html  # no relative ref survives
+    assert 'src="https://support.content.office.net/img/keep.png"' in html  # absolute untouched
+
+
 def test_acquire_extracts_articles(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "fetch_text", _fake_fetch_text)
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
