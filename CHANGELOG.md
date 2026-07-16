@@ -4,6 +4,13 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.1.2] — 2026-07-15
+
+### Changed
+
+- **README** — add a PyPI version badge and switch the docs and pf-core links to
+  absolute URLs so they resolve on the PyPI project page.
+
 ## [0.1.1] — 2026-07-12
 
 ### Fixed
