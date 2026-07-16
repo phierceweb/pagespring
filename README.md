@@ -1,5 +1,7 @@
 # pagespring
 
+[![PyPI](https://img.shields.io/pypi/v/pagespring)](https://pypi.org/project/pagespring/)
+
 Acquire and normalize online software manuals into clean, convertible source
 files — the **acquisition front-end to
 [pagespeak](https://github.com/phierceweb/pagespeak)**.
@@ -10,7 +12,7 @@ HTML/markdown file with absolute asset URLs under `incoming/<slug>/`. That clean
 file is the deliverable; converting it into the finished RAG corpus is a separate
 step (pagespeak) that consumes `incoming/` on its own — pagespring never runs it.
 
-Lean by design: `pf-core[cli]` + `beautifulsoup4`, stdlib fetch, no ML stack.
+Lean by design: [`pf-core[cli]`](https://github.com/phierceweb/pf-core) ([PyPI](https://pypi.org/project/pf-core/)) + `beautifulsoup4`, stdlib fetch, no ML stack.
 
 ## Intended use
 
@@ -56,6 +58,6 @@ bin/test    # pytest
 bin/lint    # ruff check + ruff format --check + mypy (strict)
 ```
 
-See [docs/usage.md](docs/usage.md) for the full command set and
-[docs/architecture.md](docs/architecture.md) for the acquire → normalize flow
+See [docs/usage.md](https://github.com/phierceweb/pagespring/blob/main/docs/usage.md) for the full command set and
+[docs/architecture.md](https://github.com/phierceweb/pagespring/blob/main/docs/architecture.md) for the acquire → normalize flow
 and how to add a new source pattern.
