@@ -14,6 +14,7 @@ pagespring is the **acquisition** front-end. It is not pagespeak: pagespeak *con
 - [Localizing images separately](#localizing-images-separately)
 - [Renormalizing without a re-crawl](#renormalizing-without-a-re-crawl)
 - [Refreshing the corpus](#refreshing-the-corpus)
+- [Auditing deliverables](#auditing-deliverables)
 - [Reading the result](#reading-the-result)
 - [When no pattern matches](#when-no-pattern-matches)
 - [Exit codes](#exit-codes)
@@ -26,6 +27,7 @@ The installed command is `pagespring` (in a repo checkout, `bin/run <cmd>` runs 
 pagespring ingest <url>      # acquire + normalize a manual → incoming/<slug>/
 pagespring renormalize <slug># re-run normalize against kept raw/ — no re-crawl (needs --keep-raw at ingest)
 pagespring refresh <slug>    # re-check a manual against its live source; --all sweeps the corpus
+pagespring audit <slug>      # $0 deterministic checks on staged deliverables; --all; --strict gates
 pagespring localize <slug>   # grab an already-ingested deliverable's images → images/ (resumable; --all)
 pagespring patterns          # list the registered source patterns + convert recipes
 pagespring classify <url>    # show which pattern handles a URL — no fetch
@@ -116,6 +118,21 @@ One line per slug, then a summary count:
 A slug ingested with `--keep-raw` keeps that property across a refresh (the new crawl's raw is kept, so `renormalize` stays possible). A refresh never auto-downloads images — re-run `localize` after a `changed` slug that needs them.
 
 The summary is the wrapper hook: grep the report for `: changed` to know which slugs to re-convert (pagespeak) and re-index.
+
+## Auditing deliverables
+
+`pagespring audit [<slug>|--all]` runs deterministic, $0 checks over staged deliverables — no network, no LLM, read-only. It catches what a glance at `status` can't:
+
+- **errors** (the deliverable can't be trusted): `manifest_missing`, `deliverable_missing`, `deliverable_empty`, and `sha_mismatch` — the on-disk file no longer hashes to the staged `sha256` (hand-edited or corrupted; only checked while un-localized, since `localize` legitimately rewrites refs).
+- **warnings** (real but survivable): `localize_incomplete` (localized images recorded but remote refs remain — re-run `localize`), `no_headings` (a multi-page crawl normalized to heading-less soup — the half-lost-crawl signature; it will split into nothing downstream).
+
+Report-only by default (exit `0`). `--strict` exits `1` when any **error**-level finding exists, so a script can gate the pagespeak hand-off:
+
+```
+pagespring audit --all --strict && <hand off to pagespeak>
+```
+
+`audit` complements — it does not replace — reading the deliverable. It catches structural defects; only a human read catches wrong content.
 
 ## Reading the result
 

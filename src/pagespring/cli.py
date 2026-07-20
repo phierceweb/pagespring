@@ -4,6 +4,7 @@ Commands:
     ingest <url>       acquire + normalize ("fix") a manual into incoming/<slug>/
     renormalize <slug> re-run normalize against kept raw/ (no re-crawl)
     refresh <slug>     re-check ingested manuals against their sources (--all sweeps)
+    audit <slug>       $0 deterministic checks over staged deliverables (--all; --strict gates)
     localize <slug>    grab an already-ingested deliverable's images (resumable; --all)
     patterns           list the registered source patterns
     classify <url>     show which pattern handles a URL (no acquisition)
@@ -19,6 +20,7 @@ from pf_core.cli import create_cli, run_cli
 from pf_core.exceptions import InvalidInputError, PreconditionError
 
 from pagespring import manifest
+from pagespring.audit import audit_all, audit_slug
 from pagespring.config import cfg
 from pagespring.orchestrate import (
     AcquireError,
@@ -169,6 +171,49 @@ def localize(
             continue
         tail = "done" if r["remaining"] == 0 else f"{r['remaining']} remaining — re-run to continue"
         typer.echo(f"{s}: +{r['localized']} images (total {r['images_total']}) — {tail}")
+
+
+@app.command("audit")
+def audit_cmd(
+    slug: str = typer.Argument(None, help="Slug under incoming/ to audit (omit when using --all)."),
+    all_slugs: bool = typer.Option(False, "--all", help="Audit every incoming/<slug>/."),
+    strict: bool = typer.Option(
+        False, "--strict", help="Exit 1 when any error-level finding exists (gate a hand-off)."
+    ),
+) -> None:
+    """Deterministic $0 checks over staged deliverables — no network, no LLM.
+    Report-only by default (exit 0); --strict turns error-level findings into
+    exit 1 so a script can gate the pagespeak hand-off."""
+    if all_slugs:
+        results = audit_all()
+    elif slug:
+        results = [(slug, audit_slug(slug))]
+    else:
+        typer.echo("Give a slug or --all.", err=True)
+        raise typer.Exit(2)
+
+    errors = warnings = 0
+    for s, findings in results:
+        if not findings:
+            typer.echo(f"{s}: ok")
+            continue
+        for f in findings:
+            typer.echo(f"{s}: {f['check']} ({f['level']}) — {f['detail']}")
+            errors += f["level"] == "error"
+            warnings += f["level"] == "warning"
+    typer.echo(_audit_summary(len(results), errors, warnings))
+
+    if strict and errors:
+        raise typer.Exit(1)
+
+
+def _audit_summary(n_slugs: int, errors: int, warnings: int) -> str:
+    if not errors and not warnings:
+        return f"{n_slugs} audited, all ok"
+    parts = [f"{errors} error{'s' if errors != 1 else ''}"] if errors else []
+    if warnings:
+        parts.append(f"{warnings} warning{'s' if warnings != 1 else ''}")
+    return f"{n_slugs} audited: " + ", ".join(parts)
 
 
 @app.command()

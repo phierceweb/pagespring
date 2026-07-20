@@ -4,6 +4,19 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.5.0] — 2026-07-19
+
+### Added
+
+- **`audit [<slug>|--all] [--strict]`** — deterministic $0 checks over staged
+  deliverables (read-only; no network, no LLM). Errors: missing manifest,
+  missing/empty deliverable, sha mismatch on an un-localized file. Warnings:
+  unfinished localize (remote refs remain), multi-page deliverable with zero
+  headings. Report-only by default; `--strict` exits 1 on any error-level
+  finding to gate the pagespeak hand-off.
+- **`llms.txt` at the repo root** — AI-discovery index of every shipped doc
+  (completeness enforced by `tests/test_llms_txt_index.py`).
+
 ## [0.4.0] — 2026-07-19
 
 ### Added

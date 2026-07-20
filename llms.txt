@@ -1,0 +1,15 @@
+# pagespring
+
+> Acquire and normalize online documentation into clean, convertible source files — the acquisition front-end to pagespeak. Point it at a manual's URL: a pattern recognizes the source type (Apple help, GitBook, llms.txt sites, Read the Docs, GitHub markdown repos, Zendesk, OpenStax, API specs, direct PDFs, doc archives, a generator-sniffing catch-all), acquires the raw pages politely over stdlib urllib, and normalizes them into ONE clean HTML/markdown/PDF deliverable with absolute asset URLs under `incoming/<slug>/`, beside a provenance manifest. Corpus tooling: offline renormalize replays, a refresh sweep with conditional-GET fast paths, deterministic $0 audits, and resumable image localization. Lean by design — pf-core + beautifulsoup4, no ML stack, no LLM anywhere.
+
+Published to PyPI as `pagespring` (Python 3.11+). The URLs below render `main`, the development line.
+
+## Start here
+
+- [README](https://raw.githubusercontent.com/phierceweb/pagespring/main/README.md): what it is, intended use, install, quick start
+- [Usage](https://raw.githubusercontent.com/phierceweb/pagespring/main/docs/usage.md): the full command set — ingest, renormalize, refresh, audit, localize, patterns, classify, status — and exit codes
+- [Architecture](https://raw.githubusercontent.com/phierceweb/pagespring/main/docs/architecture.md): the classify → acquire → normalize → stage pipeline, the manifest schema, and how to add a source pattern
+- [Docs index](https://raw.githubusercontent.com/phierceweb/pagespring/main/docs/README.md)
+- [Changelog](https://raw.githubusercontent.com/phierceweb/pagespring/main/CHANGELOG.md): release history
+- [Contributing](https://raw.githubusercontent.com/phierceweb/pagespring/main/CONTRIBUTING.md)
+- [Security policy](https://raw.githubusercontent.com/phierceweb/pagespring/main/SECURITY.md)

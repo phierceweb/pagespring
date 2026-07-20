@@ -236,6 +236,47 @@ def test_refresh_requires_slug_or_all():
     assert r.exit_code == 2
 
 
+def test_audit_all_prints_findings_and_ok_lines(monkeypatch):
+    results = [
+        ("aaa", []),
+        ("bbb", [{"check": "sha_mismatch", "level": "error", "detail": "content differs"}]),
+        ("ccc", [{"check": "no_headings", "level": "warning", "detail": "40 pages, 0 headings"}]),
+    ]
+    monkeypatch.setattr(climod, "audit_all", lambda: results)
+    r = runner.invoke(app, ["audit", "--all"])
+    assert r.exit_code == 0  # report-only by default
+    assert "aaa: ok" in r.output
+    assert "bbb: sha_mismatch (error) — content differs" in r.output
+    assert "ccc: no_headings (warning) — 40 pages, 0 headings" in r.output
+    assert "1 error, 1 warning" in r.output
+
+
+def test_audit_strict_exits_1_on_errors(monkeypatch):
+    results = [("bbb", [{"check": "deliverable_empty", "level": "error", "detail": "0 bytes"}])]
+    monkeypatch.setattr(climod, "audit_all", lambda: results)
+    r = runner.invoke(app, ["audit", "--all", "--strict"])
+    assert r.exit_code == 1
+
+
+def test_audit_strict_passes_on_warnings_only(monkeypatch):
+    results = [("ccc", [{"check": "no_headings", "level": "warning", "detail": "…"}])]
+    monkeypatch.setattr(climod, "audit_all", lambda: results)
+    r = runner.invoke(app, ["audit", "--all", "--strict"])
+    assert r.exit_code == 0
+
+
+def test_audit_single_slug(monkeypatch):
+    monkeypatch.setattr(climod, "audit_slug", lambda s: [])
+    r = runner.invoke(app, ["audit", "keynote"])
+    assert r.exit_code == 0
+    assert "keynote: ok" in r.output
+
+
+def test_audit_requires_slug_or_all():
+    r = runner.invoke(app, ["audit"])
+    assert r.exit_code == 2
+
+
 def test_localize_command_reports_done(monkeypatch):
     monkeypatch.setattr(
         climod,

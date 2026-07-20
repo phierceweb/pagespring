@@ -44,6 +44,7 @@ pip install pagespring
 pagespring ingest https://docs.tableplus.com   # acquire + normalize → incoming/tableplus/
 pagespring renormalize <slug>                   # replay normalize from kept raw/ — no re-crawl
 pagespring refresh --all                        # re-check every manual against its source
+pagespring audit --all                          # $0 sanity checks on everything staged
 pagespring localize <slug>                      # pull a deliverable's images later (resumable; --all)
 pagespring patterns                             # list the source patterns
 pagespring classify <url>                       # which pattern handles a URL (no fetch)
