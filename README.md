@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/pagespring)](https://pypi.org/project/pagespring/)
 
-Acquire and normalize online software manuals into clean, convertible source
+Acquire and normalize online documentation into clean, convertible source
 files — the **acquisition front-end to
 [pagespeak](https://github.com/phierceweb/pagespeak)**.
 
@@ -20,7 +20,7 @@ pagespring is for **publicly available documentation** — vendor manuals, help
 centers, open textbooks, API specs. It fetches only what the source serves to
 any reader: there is no login/session handling, no paywall traversal, and no
 bot-detection evasion. It is a **polite client**: it identifies itself with a
-`pagespring/<version>` User-Agent (see `.env.example` to override), honors
+`pagespring/<version>` User-Agent (`PAGESPRING_UA` overrides it), honors
 `429 Retry-After`, backs off on server errors, paces crawl requests, and caps
 crawl sizes.
 

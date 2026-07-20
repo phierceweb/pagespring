@@ -10,13 +10,13 @@ Sphinx ecosystem.
 from __future__ import annotations
 
 import io
-import re
 import tarfile
 import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
 from pf_core.log import get_logger
+from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult, SourceKind
@@ -34,7 +34,7 @@ def _slug_from(url: str) -> str:
         if name.lower().endswith(suf):
             name = name[: -len(suf)]
             break
-    return re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").lower() or "docs"
+    return slugify(name) or "docs"
 
 
 def _extract(data: bytes, dest: Path) -> None:

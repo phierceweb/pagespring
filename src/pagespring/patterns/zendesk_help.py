@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from pf_core.log import get_logger
+from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
@@ -37,7 +38,7 @@ def _api_base_and_locale(url: str) -> tuple[str, str]:
 
 def _slug(url: str) -> str:
     host = urlparse(url).netloc.lower().removeprefix("www.").removeprefix("support.")
-    return re.sub(r"[^a-z0-9]+", "-", host.split(".")[0]).strip("-") or "help"
+    return slugify(host.split(".")[0]) or "help"
 
 
 class ZendeskHelpPattern:

@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from pf_core.log import get_logger
+from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
@@ -22,8 +23,7 @@ log = get_logger(__name__)
 
 def _slugify(name: str) -> str:
     name = re.sub(r"\.pdf$", "", name, flags=re.IGNORECASE)
-    name = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").lower()
-    return name or "manual"
+    return slugify(name) or "manual"
 
 
 def _slug_from_url(url: str) -> str:

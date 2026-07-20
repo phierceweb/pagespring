@@ -26,21 +26,11 @@ dist/
 *.swp
 .DS_Store
 
-# ─── AI / agent workspace ──────────────────────────────────────────────────
-# .ai/docs/, .ai/plans/, .ai/scripts/ are local-only working docs.
-# Tracked: .ai/rules/, plus .gitkeep markers.
-.ai/docs/*
-!.ai/docs/.gitkeep
-.ai/plans/*
-!.ai/plans/.gitkeep
-.ai/scripts/*
-!.ai/scripts/.gitkeep
-
 # ─── Claude Code / Cursor local-only state ─────────────────────────────────
-.claude/settings.local.json
-.claude/scheduled_tasks.lock
-.claude/worktrees/
-.cursor/settings.local.json
+.ai
+.claude
+.cursor
+CLAUDE.md
 
 # ─── Playwright MCP artifacts ──────────────────────────────────────────────
 .playwright-mcp/

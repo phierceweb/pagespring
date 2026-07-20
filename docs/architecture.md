@@ -26,7 +26,7 @@ One command, `ingest`, drives `run_ingest` in `orchestrate.py`:
 
 All work happens in a temp dir; only the final clean file (plus its `manifest.json`, and optionally `raw/`, `images/`) lands in `incoming/`. Empty normalize output raises `EmptyOutputError` *before* the staging clear, so a bad re-crawl never destroys a prior good deliverable.
 
-**Image localization is a decoupled step.** Because normalize leaves asset URLs **absolute**, a no-image deliverable is already complete (pagespeak can fetch those URLs at convert time). Images can be pulled either inline (`ingest --download-images`) or after the fact (`bin/run localize <slug>` → `orchestrate.localize_images`), both downloading into `incoming/<slug>/images/` and re-pointing refs. `localize` is **resumable** — it re-points each image as it lands and checkpoints the file — so a book whose image set exceeds one run's budget is finished by re-running until none remain.
+**Image localization is a decoupled step.** Because normalize leaves asset URLs **absolute**, a no-image deliverable is already complete (pagespeak can fetch those URLs at convert time). Images can be pulled either inline (`ingest --download-images`) or after the fact (`pagespring localize <slug>` → `orchestrate.localize_images`), both downloading into `incoming/<slug>/images/` and re-pointing refs. `localize` is **resumable** — it re-points each image as it lands and checkpoints the file — so a book whose image set exceeds one run's budget is finished by re-running until none remain.
 
 ## The manifest
 
@@ -79,7 +79,7 @@ So `classify` reporting `docs_probe` means "will content-probe at acquire" — n
 
 `api_spec` and `docs_probe` are the two patterns that match on **content shape** rather than host, following the same precedent: a cheap `match`, then a content-sniffing `acquire`. `api_spec`'s `match` is the usual cheap path check, but OpenAPI-vs-Postman can't be told from a URL — so `acquire` fetches the file and *content-sniffs* it: an `openapi`/`swagger` key ⇒ OpenAPI, `info` + `item` ⇒ Postman, neither ⇒ a clean `InvalidInputError` (CLI exit 2). It emits `kind="markdown"`, rendering the spec's endpoints, params, and responses (or the collection's requests) into one file instead of crawling pages. It also accepts a **local file path**, since a spec is often behind a ReDoc/Swagger-UI "Download" button rather than at a stable URL.
 
-Check a URL's routing with `bin/run classify <url>`; list what's registered with `bin/run patterns`.
+Check a URL's routing with `pagespring classify <url>`; list what's registered with `pagespring patterns`.
 
 ## Fetching
 

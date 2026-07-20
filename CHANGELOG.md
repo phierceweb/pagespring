@@ -4,6 +4,15 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.2.0] — 2026-07-19
+
+### Changed
+
+- **Slug folds unified on pf-core's `slugify`** (pf-core floor raised to
+  `~=0.9.0`): `pdf_url`, `archive_download`, `github_markdown`, `api_spec`,
+  and `zendesk_help` share one fold. ASCII inputs slug identically;
+  accented input folds to ASCII (`Café` → `cafe`).
+
 ## [0.1.2] — 2026-07-15
 
 ### Changed

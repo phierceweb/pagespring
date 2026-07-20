@@ -18,29 +18,29 @@ pagespring is the **acquisition** front-end. It is not pagespeak: pagespeak *con
 
 ## Commands
 
-Run everything through `bin/run` (it execs the CLI in the project venv):
+The installed command is `pagespring` (in a repo checkout, `bin/run <cmd>` runs the same CLI from the project venv):
 
 ```
-bin/run ingest <url>     # acquire + normalize a manual → incoming/<slug>/
-bin/run localize <slug>  # grab an already-ingested deliverable's images → images/ (resumable; --all)
-bin/run patterns         # list the registered source patterns + convert recipes
-bin/run classify <url>   # show which pattern handles a URL — no fetch
-bin/run status           # list incoming/ deliverables (pattern, pages, size, date, source)
-bin/run --help           # the live, authoritative command + flag reference
+pagespring ingest <url>      # acquire + normalize a manual → incoming/<slug>/
+pagespring localize <slug>   # grab an already-ingested deliverable's images → images/ (resumable; --all)
+pagespring patterns          # list the registered source patterns + convert recipes
+pagespring classify <url>    # show which pattern handles a URL — no fetch
+pagespring status            # list incoming/ deliverables (pattern, pages, size, date, source)
+pagespring --help            # the live, authoritative command + flag reference
 ```
 
-Treat `bin/run --help` as the source of truth for flags — do not rely on a copy here.
+Treat `pagespring --help` as the source of truth for flags — do not rely on a copy here.
 
 ## Ingesting a manual
 
-`bin/run ingest <url>` runs the full flow: classify the URL, acquire the raw pages, then normalize them into ONE clean file with absolute asset URLs under `incoming/<slug>/`.
+`pagespring ingest <url>` runs the full flow: classify the URL, acquire the raw pages, then normalize them into ONE clean file with absolute asset URLs under `incoming/<slug>/`.
 
 ```
-bin/run ingest https://support.apple.com/guide/keynote/welcome/mac
-bin/run ingest https://docs.tableplus.com
-bin/run ingest https://example.com/manual.pdf
-bin/run ingest https://requests.readthedocs.io/en/latest/   # Read the Docs → PDF build
-bin/run ingest ./openapi.json                # a local file or file:// path, not just a URL
+pagespring ingest https://support.apple.com/guide/keynote/welcome/mac
+pagespring ingest https://docs.tableplus.com
+pagespring ingest https://example.com/manual.pdf
+pagespring ingest https://requests.readthedocs.io/en/latest/   # Read the Docs → PDF build
+pagespring ingest ./openapi.json                # a local file or file:// path, not just a URL
 ```
 
 The argument can be a **local file path or `file://` URL**, not only a remote URL — handy for a spec or doc you've saved from a viewer's "Download" button (the source is then recognized by its content shape rather than its host).
@@ -58,9 +58,9 @@ A few flags worth knowing (run `--help` for the rest):
 `ingest` also accepts an **API specification** — an OpenAPI/Swagger spec or a Postman collection — and renders its structure (endpoints, parameters, request bodies, responses, or Postman requests) into one clean markdown file. The `api_spec` pattern recognises these by content, so point it at the raw spec — a URL **or a local file**:
 
 ```
-bin/run ingest https://api.vendor.com/openapi.json     # OpenAPI 3.x / Swagger 2.0 → markdown
-bin/run ingest ./vendor-openapi.yaml                   # local spec file (e.g. a ReDoc "Download")
-bin/run ingest ./vendor-postman_collection.json        # Postman collection → markdown
+pagespring ingest https://api.vendor.com/openapi.json     # OpenAPI 3.x / Swagger 2.0 → markdown
+pagespring ingest ./vendor-openapi.yaml                   # local spec file (e.g. a ReDoc "Download")
+pagespring ingest ./vendor-postman_collection.json        # Postman collection → markdown
 ```
 
 Do hand it the **spec file itself**, not the rendered docs page. Most modern API portals (Swagger UI, ReDoc, ReadMe) render client-side from a spec `ingest` can fetch directly even when the page is an empty JS shell; when the spec sits behind a "Download" button, save it and ingest the local file. `ingest` reads the spec only — it never calls the API.
@@ -72,17 +72,17 @@ The deliverable is markdown carrying the `--split-sections` recipe, so pagespeak
 `--download-images` runs *inline* during `ingest`, coupling the crawl and the (often far larger) image download into one run. For a big book — or when you just want the text now and the images later — ingest **without** `--download-images` (the deliverable is already complete, with **absolute** image URLs that pagespeak can fetch), then grab the images as a separate step:
 
 ```
-bin/run localize anatomy-and-physiology-2e   # one book
-bin/run localize --all                        # every incoming/<slug>/
+pagespring localize anatomy-and-physiology-2e   # one book
+pagespring localize --all                        # every incoming/<slug>/
 ```
 
 `localize` downloads the deliverable's remote images into `incoming/<slug>/images/` and re-points the refs — **no re-crawl** — then updates the manifest's image count. It is **resumable**: each image is re-pointed the moment it lands and the file is checkpointed, so a run cut short keeps its progress and a re-run skips what's done. Re-run until it prints `done` (none remaining) — this is how a book whose image set is too large for one run gets fully localized.
 
 ## Reading the result
 
-Each `incoming/<slug>/` holds the deliverable — one file per manual, `incoming/<slug>/<slug>.{html,md,pdf}` — plus a `manifest.json` recording its provenance (source URL, pattern, `convert_recipe`, page count, `sha256`, ingest time). The manifest makes the hand-off to pagespeak self-describing: the `convert_recipe` travels *with* the file instead of living only in `bin/run patterns`. **Verify a pattern by reading the deliverable file** — not by running pagespeak. `ingest` prints the page count and size so a half-lost crawl is obvious at a glance (a 187-page guide that returns 3 pages is a problem, not a result).
+Each `incoming/<slug>/` holds the deliverable — one file per manual, `incoming/<slug>/<slug>.{html,md,pdf}` — plus a `manifest.json` recording its provenance (source URL, pattern, `convert_recipe`, page count, `sha256`, ingest time). The manifest makes the hand-off to pagespeak self-describing: the `convert_recipe` travels *with* the file instead of living only in `pagespring patterns`. **Verify a pattern by reading the deliverable file** — not by running pagespeak. `ingest` prints the page count and size so a half-lost crawl is obvious at a glance (a 187-page guide that returns 3 pages is a problem, not a result).
 
-`bin/run status` lists every `incoming/<slug>/` from its manifest — pattern, pages, size, ingest date, and source host. (Legacy dirs from before the manifest fall back to the file's own name/size/date.) Whether a slug has been converted into the manuals corpus is pagespeak's concern, downstream and out of pagespring's view.
+`pagespring status` lists every `incoming/<slug>/` from its manifest — pattern, pages, size, ingest date, and source host. (Legacy dirs from before the manifest fall back to the file's own name/size/date.) Whether a slug has been converted into the manuals corpus is pagespeak's concern, downstream and out of pagespring's view.
 
 ## When no pattern matches
 

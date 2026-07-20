@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from pf_core.log import get_logger
+from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
@@ -120,7 +121,7 @@ class GitHubMarkdownPattern:
             http.polite_sleep()
 
         slug_base = subdir.rstrip("/").split("/")[-1] if subdir else f"{owner}-{repo}"
-        slug = re.sub(r"[^A-Za-z0-9]+", "-", slug_base).strip("-").lower() or "docs"
+        slug = slugify(slug_base) or "docs"
         log.info(
             "github_markdown.acquire", repo=f"{owner}/{repo}", branch=branch, pages=saved, slug=slug
         )

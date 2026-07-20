@@ -15,13 +15,13 @@ ReDoc/Swagger-UI "Download" button.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 from pf_core.exceptions import InvalidInputError
 from pf_core.log import get_logger
+from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
@@ -85,7 +85,7 @@ def _title_slug(data: dict[str, Any], fmt: str, src: str) -> tuple[str, str]:
         title = f"{title} {info['version']}".strip()
     if not title:
         title = _last_segment(src) or "api-spec"
-    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "api-spec"
+    slug = slugify(title) or "api-spec"
     return title, slug
 
 
