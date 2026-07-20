@@ -1,11 +1,12 @@
 """pagespring command-line interface (Typer, via pf_core.cli).
 
 Commands:
-    ingest <url>     acquire + normalize ("fix") a manual into incoming/<slug>/
-    localize <slug>  grab an already-ingested deliverable's images (resumable; --all)
-    patterns         list the registered source patterns
-    classify <url>   show which pattern handles a URL (no acquisition)
-    status           list incoming/ deliverables (pattern, pages, size, date, source)
+    ingest <url>       acquire + normalize ("fix") a manual into incoming/<slug>/
+    renormalize <slug> re-run normalize against kept raw/ (no re-crawl)
+    localize <slug>    grab an already-ingested deliverable's images (resumable; --all)
+    patterns           list the registered source patterns
+    classify <url>     show which pattern handles a URL (no acquisition)
+    status             list incoming/ deliverables (pattern, pages, size, date, source)
 """
 
 from datetime import date
@@ -24,6 +25,7 @@ from pagespring.orchestrate import (
     NoPatternError,
     localize_images,
     run_ingest,
+    run_renormalize,
 )
 from pagespring.registry import PATTERNS, classify
 
@@ -99,6 +101,39 @@ def ingest(
     typer.echo(f"size     : {_human_size(result['bytes'])}")
     if result.get("images"):
         typer.echo(f"images   : {result['images']} downloaded → images/")
+
+
+@app.command()
+def renormalize(
+    slug: str = typer.Argument(
+        ..., help="Ingested slug (with kept raw/) to re-normalize — no re-crawl, no network."
+    ),
+) -> None:
+    """Re-run the pattern's current normalize against incoming/<slug>/raw/ and
+    re-stage the deliverable — no acquire. Requires an ingest made with
+    --keep-raw. Byte-identical output re-stages nothing and reports unchanged."""
+    try:
+        result = run_renormalize(slug)
+    except PreconditionError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from None
+    except EmptyOutputError:
+        typer.echo(
+            f"Normalize produced an empty file for {slug} — nothing re-staged; "
+            "the existing deliverable is untouched.",
+            err=True,
+        )
+        raise typer.Exit(3) from None
+
+    typer.echo(f"pattern  : {result['pattern']}")
+    typer.echo(f"slug     : {result['slug']}")
+    typer.echo(f"incoming : {result['clean']}")
+    if result["changed"] is False:
+        typer.echo("status   : unchanged — normalize output matches the staged deliverable")
+        return
+    if result["pages"] is not None:
+        typer.echo(f"pages    : {result['pages']}")
+    typer.echo(f"size     : {_human_size(result['bytes'])}")
 
 
 @app.command()

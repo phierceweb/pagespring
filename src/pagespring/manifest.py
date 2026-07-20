@@ -12,16 +12,16 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from pagespring import __version__
 
 MANIFEST_NAME = "manifest.json"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # v2 added `title` (absent from files written by v1)
 
 
 class Manifest(TypedDict):
-    """The on-disk shape of ``incoming/<slug>/manifest.json`` (schema v1)."""
+    """The on-disk shape of ``incoming/<slug>/manifest.json``."""
 
     schema_version: int
     pagespring_version: str
@@ -29,6 +29,7 @@ class Manifest(TypedDict):
     pattern: str
     slug: str
     kind: str
+    title: NotRequired[str | None]  # acquire-time source title; read via .get (v1 files lack it)
     deliverable: str
     convert_recipe: list[str]
     pages: int | None
@@ -56,6 +57,7 @@ def build_manifest(
     sha256: str,
     images: int,
     ingested_at: str,
+    title: str | None = None,
 ) -> Manifest:
     """Assemble a manifest from one ingest's facts (stamps schema + version)."""
     return {
@@ -65,6 +67,7 @@ def build_manifest(
         "pattern": pattern,
         "slug": slug,
         "kind": kind,
+        "title": title,
         "deliverable": deliverable,
         "convert_recipe": convert_recipe,
         "pages": pages,

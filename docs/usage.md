@@ -12,6 +12,7 @@ pagespring is the **acquisition** front-end. It is not pagespeak: pagespeak *con
 - [Ingesting a manual](#ingesting-a-manual)
 - [Ingesting API specs](#ingesting-api-specs)
 - [Localizing images separately](#localizing-images-separately)
+- [Renormalizing without a re-crawl](#renormalizing-without-a-re-crawl)
 - [Reading the result](#reading-the-result)
 - [When no pattern matches](#when-no-pattern-matches)
 - [Exit codes](#exit-codes)
@@ -22,6 +23,7 @@ The installed command is `pagespring` (in a repo checkout, `bin/run <cmd>` runs 
 
 ```
 pagespring ingest <url>      # acquire + normalize a manual → incoming/<slug>/
+pagespring renormalize <slug># re-run normalize against kept raw/ — no re-crawl (needs --keep-raw at ingest)
 pagespring localize <slug>   # grab an already-ingested deliverable's images → images/ (resumable; --all)
 pagespring patterns          # list the registered source patterns + convert recipes
 pagespring classify <url>    # show which pattern handles a URL — no fetch
@@ -78,9 +80,23 @@ pagespring localize --all                        # every incoming/<slug>/
 
 `localize` downloads the deliverable's remote images into `incoming/<slug>/images/` and re-points the refs — **no re-crawl** — then updates the manifest's image count. It is **resumable**: each image is re-pointed the moment it lands and the file is checkpointed, so a run cut short keeps its progress and a re-run skips what's done. Re-run until it prints `done` (none remaining) — this is how a book whose image set is too large for one run gets fully localized.
 
+## Renormalizing without a re-crawl
+
+`pagespring renormalize <slug>` re-runs the pattern's **current** `normalize` against the kept `incoming/<slug>/raw/` and re-stages the deliverable — no acquire, no network. Use it to iterate on a pattern's normalize logic against a real crawl without re-fetching the site on every attempt (the polite way to field-test), or to re-stage a deliverable after upgrading pagespring.
+
+```
+pagespring ingest https://help.vendor.com --keep-raw   # crawl once, keep the raw pages
+pagespring renormalize <slug>                           # replay normalize as often as needed
+```
+
+- Requires the slug to have been ingested with `--keep-raw` — without a kept `raw/` there is nothing to replay (the error says so; re-ingest with the flag).
+- **Byte-identical output re-stages nothing** and prints `unchanged` — the signal that a normalize change was behavior-preserving. Changed output replaces the deliverable and updates the manifest.
+- A changed replay leaves the new deliverable's asset URLs **absolute** again (that is what normalize produces) and clears `images/` — the old files were named for the old deliverable's refs, and stale ones would push a re-localize onto suffixed names. If you had localized images, re-run `pagespring localize <slug>` afterwards.
+- Do not point it at a slug whose pattern has been renamed/removed since the ingest — the manifest records the pattern by name and the replay refuses rather than guessing.
+
 ## Reading the result
 
-Each `incoming/<slug>/` holds the deliverable — one file per manual, `incoming/<slug>/<slug>.{html,md,pdf}` — plus a `manifest.json` recording its provenance (source URL, pattern, `convert_recipe`, page count, `sha256`, ingest time). The manifest makes the hand-off to pagespeak self-describing: the `convert_recipe` travels *with* the file instead of living only in `pagespring patterns`. **Verify a pattern by reading the deliverable file** — not by running pagespeak. `ingest` prints the page count and size so a half-lost crawl is obvious at a glance (a 187-page guide that returns 3 pages is a problem, not a result).
+Each `incoming/<slug>/` holds the deliverable — one file per manual, `incoming/<slug>/<slug>.{html,md,pdf}` — plus a `manifest.json` recording its provenance (source URL, pattern, title, `convert_recipe`, page count, `sha256`, ingest time). The manifest makes the hand-off to pagespeak self-describing: the `convert_recipe` travels *with* the file instead of living only in `pagespring patterns`. **Verify a pattern by reading the deliverable file** — not by running pagespeak. `ingest` prints the page count and size so a half-lost crawl is obvious at a glance (a 187-page guide that returns 3 pages is a problem, not a result).
 
 `pagespring status` lists every `incoming/<slug>/` from its manifest — pattern, pages, size, ingest date, and source host. (Legacy dirs from before the manifest fall back to the file's own name/size/date.) Whether a slug has been converted into the manuals corpus is pagespeak's concern, downstream and out of pagespring's view.
 
@@ -92,10 +108,10 @@ Any http(s) URL that no specific pattern claims classifies to `docs_probe` rathe
 
 ## Exit codes
 
-`ingest` distinguishes failure modes so scripts (and you) can tell them apart:
+`ingest` and `renormalize` distinguish failure modes so scripts (and you) can tell them apart:
 
-- `2` — no pattern matched a local file/`file://` argument, `docs_probe` couldn't recognise the site's generator at acquire time, or a URL/file routed to `api_spec` that isn't a recognizable OpenAPI/Swagger/Postman document.
-- `3` — normalize produced an empty file (the source likely changed shape; nothing staged).
-- `4` — a network fetch died during acquire (nothing staged).
+- `2` — no pattern matched a local file/`file://` argument, `docs_probe` couldn't recognise the site's generator at acquire time, or a URL/file routed to `api_spec` that isn't a recognizable OpenAPI/Swagger/Postman document. For `renormalize`: the slug was never ingested, has no kept `raw/`, or its recorded pattern is no longer registered.
+- `3` — normalize produced an empty file (the source likely changed shape; nothing staged, a prior deliverable survives).
+- `4` — a network fetch died during acquire (nothing staged; `ingest` only — `renormalize` never touches the network).
 
 These rely on pf-core's `run_cli` propagating `typer.Exit` codes; without it a failed `ingest` would exit `0`.

@@ -57,3 +57,11 @@ def classify(url: str) -> Pattern | None:
         if pattern.match(url):
             return pattern
     return None
+
+
+def pattern_by_name(name: str) -> Pattern | None:
+    """Return the registered pattern named ``name``, or None (renamed/removed)."""
+    for pattern in PATTERNS:
+        if pattern.name == name:
+            return pattern
+    return None

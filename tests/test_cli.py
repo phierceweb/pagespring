@@ -131,6 +131,67 @@ def test_ingest_if_changed_forwarded_and_unchanged_reported(monkeypatch, tmp_pat
     assert "unchanged" in r.output.lower()
 
 
+def test_renormalize_formats_output(monkeypatch, tmp_path):
+    def fake_run_renormalize(slug):
+        return {
+            "pattern": "zendesk_help",
+            "slug": slug,
+            "kind": "html",
+            "clean": str(tmp_path / "incoming" / "helpsite" / "helpsite.html"),
+            "pages": 42,
+            "bytes": 200_000,
+            "changed": True,
+        }
+
+    monkeypatch.setattr(climod, "run_renormalize", fake_run_renormalize)
+    r = runner.invoke(app, ["renormalize", "helpsite"])
+    assert r.exit_code == 0
+    assert "zendesk_help" in r.output
+    assert "incoming" in r.output.lower()
+    assert "42" in r.output
+    assert "195.3 KB" in r.output
+
+
+def test_renormalize_unchanged_reported(monkeypatch, tmp_path):
+    def fake_run_renormalize(slug):
+        return {
+            "pattern": "gitbook",
+            "slug": slug,
+            "kind": "markdown",
+            "clean": str(tmp_path / "docs.md"),
+            "pages": 5,
+            "bytes": 100,
+            "changed": False,
+        }
+
+    monkeypatch.setattr(climod, "run_renormalize", fake_run_renormalize)
+    r = runner.invoke(app, ["renormalize", "docs"])
+    assert r.exit_code == 0
+    assert "unchanged" in r.output.lower()
+
+
+def test_renormalize_precondition_exits_2(monkeypatch):
+    from pf_core.exceptions import PreconditionError
+
+    def fake_run_renormalize(slug):
+        raise PreconditionError(f"no raw/ kept for incoming/{slug}/ — re-ingest with --keep-raw")
+
+    monkeypatch.setattr(climod, "run_renormalize", fake_run_renormalize)
+    r = runner.invoke(app, ["renormalize", "helpsite"])
+    assert r.exit_code == 2
+    assert "--keep-raw" in r.output
+
+
+def test_renormalize_empty_output_exits_3(monkeypatch):
+    def fake_run_renormalize(slug):
+        raise EmptyOutputError(slug)
+
+    monkeypatch.setattr(climod, "run_renormalize", fake_run_renormalize)
+    r = runner.invoke(app, ["renormalize", "helpsite"])
+    assert r.exit_code == 3
+    assert "empty" in r.output.lower()
+
+
 def test_localize_command_reports_done(monkeypatch):
     monkeypatch.setattr(
         climod,

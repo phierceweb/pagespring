@@ -4,6 +4,22 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.3.0] — 2026-07-19
+
+### Added
+
+- **`renormalize <slug>`** — re-run the pattern's current normalize against the
+  kept `incoming/<slug>/raw/` and re-stage the deliverable, with no re-crawl
+  (requires an ingest made with `--keep-raw`). Byte-identical output re-stages
+  nothing and reports `unchanged`; changed output replaces the deliverable and
+  refreshes the manifest's content facts (localized-image count resets — re-run
+  `localize`). Exit `2` when the slug/raw/pattern precondition fails, `3` on
+  empty output (prior deliverable survives).
+- **Manifest schema v2: `title`.** The manifest now records acquire's source
+  title, so a `renormalize` replay reproduces the deliverable's heading instead
+  of degrading it to the slug. v1 manifests (no `title`) replay with the
+  slug-fallback heading.
+
 ## [0.2.0] — 2026-07-19
 
 ### Changed

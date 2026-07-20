@@ -280,3 +280,221 @@ def test_localize_images_without_manifest_raises(tmp_path):
     (tmp_path / "incoming" / "bk").mkdir(parents=True)
     with pytest.raises(PreconditionError):
         orchestrate.localize_images("bk")
+
+
+class _RawDrivenPattern(_FakePattern):
+    """A fake whose normalize derives its output from raw/ contents — so a
+    renormalize replay visibly reflects both the kept raw and the current
+    normalize code (``prefix``)."""
+
+    def __init__(self, prefix: str = "v1"):
+        self.prefix = prefix
+
+    def normalize(self, acq, workdir):
+        body = (acq.raw_dir / "welcome.html").read_text(encoding="utf-8")
+        clean = workdir / f"{acq.slug}.html"
+        clean.write_text(f"{self.prefix}:{body}", encoding="utf-8")
+        return clean
+
+
+def test_renormalize_replays_from_kept_raw_without_network(tmp_path, monkeypatch):
+    """renormalize re-runs the pattern's CURRENT normalize against the kept
+    raw/ and re-stages the deliverable — no acquire, no re-crawl. The kept
+    raw/ survives for the next replay."""
+    p = _RawDrivenPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "v1:<html></html>"
+
+    p.prefix = "v2"  # the normalize code changed; raw did not
+
+    def _no_acquire(url, workdir):  # pragma: no cover - proves replay skips acquire
+        raise AssertionError("renormalize must not acquire")
+
+    monkeypatch.setattr(p, "acquire", _no_acquire)
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: p if name == "fake" else None)
+
+    res = orchestrate.run_renormalize("fakeapp")
+
+    assert res["changed"] is True
+    assert res["pattern"] == "fake"
+    assert res["slug"] == "fakeapp"
+    assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "v2:<html></html>"
+    assert (slug_dir / "raw" / "welcome.html").exists()  # raw kept for the next replay
+
+
+def test_renormalize_unchanged_output_leaves_slug_dir_untouched(tmp_path, monkeypatch):
+    """A replay whose output is byte-identical to the staged deliverable
+    reports changed=False and re-stages nothing — deliverable mtime and any
+    localized images/ stay exactly as they were (the refactor-was-safe signal)."""
+    p = _RawDrivenPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    deliverable = slug_dir / "fakeapp.html"
+    before_mtime = deliverable.stat().st_mtime_ns
+    (slug_dir / "images").mkdir()
+    (slug_dir / "images" / "a.png").write_bytes(b"png")
+
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: p)
+    res = orchestrate.run_renormalize("fakeapp")
+
+    assert res["changed"] is False
+    assert deliverable.stat().st_mtime_ns == before_mtime
+    assert (slug_dir / "images" / "a.png").read_bytes() == b"png"
+
+
+def test_renormalize_without_manifest_raises(tmp_path):
+    """A slug never ingested (no manifest) is a precondition failure."""
+    (tmp_path / "incoming" / "bk").mkdir(parents=True)
+    with pytest.raises(PreconditionError, match="ingest it first"):
+        orchestrate.run_renormalize("bk")
+
+
+def test_renormalize_without_kept_raw_raises(tmp_path, monkeypatch):
+    """An ingest without --keep-raw left no raw/ to replay — the error says how
+    to enable the replay, and the staged deliverable is untouched."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://x")  # no keep_raw
+    with pytest.raises(PreconditionError, match="--keep-raw"):
+        orchestrate.run_renormalize("fakeapp")
+    assert (tmp_path / "incoming" / "fakeapp" / "fakeapp.html").exists()
+
+
+def test_renormalize_empty_output_fails_and_preserves_previous(tmp_path, monkeypatch):
+    """A replay that normalizes to nothing hard-fails BEFORE staging — the
+    staged deliverable and manifest survive (same invariant as ingest)."""
+    p = _RawDrivenPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: _EmptyPattern())
+    with pytest.raises(orchestrate.EmptyOutputError):
+        orchestrate.run_renormalize("fakeapp")
+
+    assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "v1:<html></html>"
+    assert manifest.read_manifest(slug_dir)["sha256"] == manifest.sha256_file(
+        slug_dir / "fakeapp.html"
+    )
+
+
+def test_renormalize_unknown_pattern_raises(tmp_path, monkeypatch):
+    """A manifest naming a pattern that is no longer registered fails with the
+    pattern's name (renamed/removed since the ingest)."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: None)
+    with pytest.raises(PreconditionError, match="fake"):
+        orchestrate.run_renormalize("fakeapp")
+
+
+def test_renormalize_updates_manifest_and_resets_image_count(tmp_path, monkeypatch):
+    """A changed replay refreshes the deliverable's facts (sha256, bytes,
+    convert_recipe from the CURRENT pattern) and resets the localized-image
+    count — the new file's refs are absolute again. Provenance of the crawl
+    (source_url, ingested_at, pattern, pages) is untouched."""
+    p = _RawDrivenPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://docs.example.com/foo", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    before = manifest.read_manifest(slug_dir)
+
+    p.prefix = "v2"
+    p.convert_recipe = ["--split-sections", "--normalize-headings"]
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: p)
+    res = orchestrate.run_renormalize("fakeapp")
+
+    assert res["changed"] is True
+    after = manifest.read_manifest(slug_dir)
+    assert after["sha256"] == manifest.sha256_file(slug_dir / "fakeapp.html")
+    assert after["sha256"] != before["sha256"]
+    assert after["bytes"] == len("v2:<html></html>")
+    assert after["convert_recipe"] == ["--split-sections", "--normalize-headings"]
+    assert after["images"] == 0
+    assert after["source_url"] == before["source_url"]
+    assert after["ingested_at"] == before["ingested_at"]
+    assert after["pattern"] == before["pattern"]
+    assert after["pages"] == before["pages"]
+
+
+def test_renormalize_changed_clears_stale_localized_images(tmp_path, monkeypatch):
+    """A changed replay removes images/ — its files were named for the OLD
+    deliverable's refs, and localize seeds its collision set from the dir, so
+    stale files would force every re-download onto a suffixed name and orphan
+    the originals. Same principle as ingest's replace: no stale artifacts."""
+    p = _RawDrivenPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://docs.example.com/foo", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    (slug_dir / "images").mkdir()
+    (slug_dir / "images" / "a.png").write_bytes(b"png")
+
+    p.prefix = "v2"
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: p)
+    res = orchestrate.run_renormalize("fakeapp")
+
+    assert res["changed"] is True
+    assert not (slug_dir / "images").exists()
+    assert (slug_dir / "raw" / "welcome.html").exists()  # raw untouched — it is the input
+
+
+class _TitledPattern(_FakePattern):
+    """Normalize renders the acquire-time title — the field a replay can only
+    know if the manifest recorded it."""
+
+    def acquire(self, url, workdir):
+        raw = workdir / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        (raw / "welcome.html").write_text("<html></html>", encoding="utf-8")
+        return AcquireResult(
+            raw_dir=raw, kind="html", slug="fakeapp", pages=1, title="Fake App Guide"
+        )
+
+    def normalize(self, acq, workdir):
+        clean = workdir / f"{acq.slug}.html"
+        clean.write_text(f"<h1>{acq.title or acq.slug}</h1>", encoding="utf-8")
+        return clean
+
+
+def test_renormalize_reconstructs_title_from_manifest(tmp_path, monkeypatch):
+    """The manifest records acquire's title, and a replay feeds it back into
+    normalize — an unchanged pattern therefore reproduces byte-identical output
+    (changed=False) instead of degrading the heading to the slug."""
+    p = _TitledPattern()
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    assert manifest.read_manifest(slug_dir)["title"] == "Fake App Guide"
+
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: p)
+    res = orchestrate.run_renormalize("fakeapp")
+
+    assert res["changed"] is False
+    assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "<h1>Fake App Guide</h1>"
+
+
+class _MarkdownEmittingPattern(_FakePattern):
+    """The current normalize emits .md where the staged deliverable was .html."""
+
+    def normalize(self, acq, workdir):
+        clean = workdir / f"{acq.slug}.md"
+        clean.write_text("# now markdown", encoding="utf-8")
+        return clean
+
+
+def test_renormalize_replaces_deliverable_when_name_changes(tmp_path, monkeypatch):
+    """A normalize whose output filename changed (e.g. html → md) replaces the
+    old deliverable instead of leaving both, and the manifest tracks the new name."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: _MarkdownEmittingPattern())
+    res = orchestrate.run_renormalize("fakeapp")
+
+    assert res["changed"] is True
+    assert not (slug_dir / "fakeapp.html").exists()
+    assert (slug_dir / "fakeapp.md").read_text(encoding="utf-8") == "# now markdown"
+    assert manifest.read_manifest(slug_dir)["deliverable"] == "fakeapp.md"

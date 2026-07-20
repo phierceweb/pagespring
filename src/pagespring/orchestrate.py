@@ -13,14 +13,15 @@ import urllib.error
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import TypedDict
+from typing import TypedDict, cast
 
 from pf_core.exceptions import PreconditionError
 from pf_core.log import get_logger
 
 from pagespring import manifest
+from pagespring.base import AcquireResult, SourceKind
 from pagespring.config import cfg
-from pagespring.registry import classify
+from pagespring.registry import classify, pattern_by_name
 
 log = get_logger(__name__)
 
@@ -148,6 +149,7 @@ def run_ingest(
                 sha256=sha256,
                 images=n_images,
                 ingested_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                title=acq.title,
             ),
         )
 
@@ -167,6 +169,103 @@ def run_ingest(
             "pages": acq.pages,
             "bytes": size_bytes,
             "images": n_images,
+            "changed": True,
+        }
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+class RenormalizeResult(TypedDict):
+    """Stats from one renormalize replay (normalize re-run against kept raw/)."""
+
+    pattern: str
+    slug: str
+    kind: str
+    clean: str
+    pages: int | None
+    bytes: int
+    changed: bool  # False when the replay normalized byte-identical to the staged deliverable
+
+
+def run_renormalize(slug: str) -> RenormalizeResult:
+    """Re-run the pattern's CURRENT normalize against ``incoming/<slug>/raw/``
+    and re-stage the deliverable — no acquire, no network.
+
+    The replay reconstructs the ``AcquireResult`` from the manifest + kept raw
+    (which is copied into a fresh workdir, so a normalize that mutates its
+    input can't corrupt the kept copy).
+    """
+    incoming_dir = Path(cfg.INCOMING_DIR) / slug
+    m = manifest.read_manifest(incoming_dir)
+    if m is None:
+        raise PreconditionError(f"no manifest for incoming/{slug}/ — ingest it first")
+    raw_src = incoming_dir / "raw"
+    if not raw_src.is_dir():
+        raise PreconditionError(
+            f"no raw/ kept for incoming/{slug}/ — re-ingest with --keep-raw to enable renormalize"
+        )
+    pattern = pattern_by_name(m["pattern"])
+    if pattern is None:
+        raise PreconditionError(
+            f"pattern '{m['pattern']}' (recorded in the manifest) is not registered — "
+            "renamed or removed since the ingest?"
+        )
+
+    work = Path(mkdtemp(prefix="pagespring-"))
+    try:
+        raw_work = work / "raw"
+        shutil.copytree(raw_src, raw_work)
+        acq = AcquireResult(
+            raw_dir=raw_work,
+            kind=cast(SourceKind, m["kind"]),
+            slug=m["slug"],
+            pages=m["pages"],
+            title=m.get("title"),  # absent in schema-v1 manifests → slug-fallback heading
+        )
+        clean = pattern.normalize(acq, work)
+        if not clean.exists() or clean.stat().st_size == 0:
+            raise EmptyOutputError(slug)
+
+        sha256 = manifest.sha256_file(clean)
+        size_bytes = clean.stat().st_size
+
+        # Byte-identical replay: the staged deliverable, its localized images,
+        # and its mtime stay untouched — the "this refactor was safe" signal.
+        if sha256 == m["sha256"]:
+            log.info("renormalize.unchanged", pattern=pattern.name, slug=slug, sha256=sha256)
+            return {
+                "pattern": pattern.name,
+                "slug": slug,
+                "kind": m["kind"],
+                "clean": str(incoming_dir / m["deliverable"]),
+                "pages": m["pages"],
+                "bytes": m["bytes"],
+                "changed": False,
+            }
+
+        old = incoming_dir / m["deliverable"]
+        staged = incoming_dir / clean.name
+        shutil.copy2(clean, staged)
+        if old.exists() and old.name != staged.name:
+            old.unlink()
+        # Stale localized images would poison the next localize: its collision
+        # set seeds from images/, forcing re-downloads onto suffixed names.
+        shutil.rmtree(incoming_dir / "images", ignore_errors=True)
+
+        m["deliverable"] = staged.name
+        m["convert_recipe"] = list(pattern.convert_recipe)
+        m["bytes"] = size_bytes
+        m["sha256"] = sha256
+        m["images"] = 0  # refs are absolute again; re-run localize to re-point them
+        manifest.write_manifest(incoming_dir, m)
+        log.info("renormalize.done", pattern=pattern.name, slug=slug, clean=str(staged))
+        return {
+            "pattern": pattern.name,
+            "slug": slug,
+            "kind": m["kind"],
+            "clean": str(staged),
+            "pages": m["pages"],
+            "bytes": size_bytes,
             "changed": True,
         }
     finally:

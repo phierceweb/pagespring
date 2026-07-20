@@ -28,18 +28,21 @@ All work happens in a temp dir; only the final clean file (plus its `manifest.js
 
 **Image localization is a decoupled step.** Because normalize leaves asset URLs **absolute**, a no-image deliverable is already complete (pagespeak can fetch those URLs at convert time). Images can be pulled either inline (`ingest --download-images`) or after the fact (`pagespring localize <slug>` → `orchestrate.localize_images`), both downloading into `incoming/<slug>/images/` and re-pointing refs. `localize` is **resumable** — it re-points each image as it lands and checkpoints the file — so a book whose image set exceeds one run's budget is finished by re-running until none remain.
 
+**Renormalize is an offline replay of steps 3–4.** `pagespring renormalize <slug>` (→ `orchestrate.run_renormalize`) re-runs the pattern's **current** `normalize()` against the kept `incoming/<slug>/raw/` — no classify, no acquire, no network. The `AcquireResult` is reconstructed from the manifest (pattern by recorded name, kind/slug/pages/title), and raw is copied into a fresh workdir so a normalize that mutates its input can't corrupt the kept copy. Byte-identical output re-stages nothing and reports `unchanged` — the signal that a normalize refactor was behavior-preserving. Changed output replaces the deliverable, clears any stale `images/` (a re-localize would otherwise collide into suffixed names), and refreshes the manifest's content facts (`sha256`, `bytes`, `deliverable`, `convert_recipe`, `images` reset to 0 — refs are absolute again) while crawl provenance (`source_url`, `ingested_at`, `pages`) is untouched. Requires an ingest made with `--keep-raw`.
+
 ## The manifest
 
 Every staged deliverable gets a sibling `incoming/<slug>/manifest.json` (`manifest.py`) — the provenance record that makes the pagespeak hand-off self-describing:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "pagespring_version": "0.1.0",
   "source_url": "https://docs.tableplus.com/",
   "pattern": "docs_probe",
   "slug": "tableplus",
   "kind": "markdown",
+  "title": "TablePlus Documentation",
   "deliverable": "tableplus.md",
   "convert_recipe": ["--split-sections"],
   "pages": 62,
@@ -49,6 +52,8 @@ Every staged deliverable gets a sibling `incoming/<slug>/manifest.json` (`manife
   "ingested_at": "2026-06-14T17:23:01Z"
 }
 ```
+
+Schema v2 added `title` (acquire's source title, feeding `renormalize` replays); read it with `.get` — files written by v1 lack the key.
 
 `sha256` is the hash of the deliverable **as `normalize()` produced it** (before `--download-images` re-points any refs) — so on the default path it matches the on-disk file, and it stays stable as the content's identity regardless of image-localization.
 
