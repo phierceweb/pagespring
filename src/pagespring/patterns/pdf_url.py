@@ -37,9 +37,7 @@ def _slug_from_url(url: str) -> str:
 
 class PdfUrlPattern:
     name = "pdf_url"
-    single_fetch = (
-        True  # deliverable derives from exactly the one URL — refresh may probe validators
-    )
+    single_fetch = True  # one-URL source; refresh may probe its stored validators
 
     # Vendor PDF manuals rarely carry a usable heading outline, so llm_full
     # fixes levels; split for RAG.

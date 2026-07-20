@@ -107,6 +107,31 @@ def test_status_empty_incoming(monkeypatch, tmp_path):
     assert "nothing in incoming/" in r.output
 
 
+def test_ingest_slug_forwarded_and_duplicate_warned(monkeypatch, tmp_path):
+    """--slug reaches run_ingest; a duplicate_of result prints a warning line."""
+    captured: dict = {}
+
+    def fake_run_ingest(url, **kwargs):
+        captured.update(kwargs)
+        return {
+            "pattern": "pdf_url",
+            "slug": "tidy",
+            "kind": "pdf",
+            "clean": str(tmp_path / "tidy.pdf"),
+            "images": 0,
+            "pages": None,
+            "bytes": 100,
+            "changed": True,
+            "duplicate_of": "existing-slug",
+        }
+
+    monkeypatch.setattr(climod, "run_ingest", fake_run_ingest)
+    r = runner.invoke(app, ["ingest", "https://x/m.pdf", "--slug", "tidy"])
+    assert r.exit_code == 0
+    assert captured.get("slug_override") == "tidy"
+    assert "identical to incoming/existing-slug/" in r.output
+
+
 def test_ingest_if_changed_forwarded_and_unchanged_reported(monkeypatch, tmp_path):
     """--if-changed reaches run_ingest; a changed=False result prints 'unchanged'."""
     captured: dict = {}
@@ -197,15 +222,13 @@ def test_refresh_all_prints_report_and_summary(monkeypatch):
         {"slug": "aaa", "status": "changed", "detail": ""},
         {"slug": "bbb", "status": "unchanged", "detail": ""},
         {"slug": "ccc", "status": "unchanged", "detail": "not modified (validator probe)"},
-        {"slug": "ddd", "status": "moved", "detail": "ddd-v2"},
     ]
     monkeypatch.setattr(climod, "refresh_all", lambda: outcomes)
     r = runner.invoke(app, ["refresh", "--all"])
     assert r.exit_code == 0
     assert "aaa: changed" in r.output
     assert "ccc: unchanged — not modified (validator probe)" in r.output
-    assert "ddd: moved — ddd-v2" in r.output
-    assert "1 changed, 2 unchanged, 1 moved" in r.output
+    assert "1 changed, 2 unchanged" in r.output
 
 
 def test_refresh_all_exits_1_when_any_slug_failed(monkeypatch):

@@ -4,8 +4,7 @@ Read-only (no network, no LLM): each check compares what the manifest claims
 against what's actually on disk, so a half-lost crawl, a hand-edited file, or
 an unfinished localize surfaces as a finding instead of flowing silently into
 pagespeak. Error-level findings mean the deliverable can't be trusted;
-warnings are real-but-survivable RAG noise (pagespeak's report-only audit
-philosophy, applied at the acquisition end).
+warnings are real-but-survivable RAG noise.
 """
 
 from __future__ import annotations
@@ -54,9 +53,8 @@ def audit_slug(slug: str) -> list[Finding]:
 
     findings: list[Finding] = []
 
-    # images==0 ⇒ the on-disk bytes ARE the staged content; a hash mismatch
-    # means hand-edited or corrupted. After localize (images>0), refs were
-    # re-pointed, so the pre-localization manifest hash legitimately differs.
+    # Only un-localized files must hash to the staged sha — localize (images>0)
+    # re-points refs, so its bytes legitimately diverge.
     if m["images"] == 0 and manifest.sha256_file(deliverable) != m["sha256"]:
         findings.append(
             _f("sha_mismatch", "error", "on-disk content differs from the staged sha256")

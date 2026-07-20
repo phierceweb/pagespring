@@ -113,11 +113,16 @@ class _RenamedSlugPattern(_BodyPattern):
         (raw / "welcome.html").write_text("<html></html>", encoding="utf-8")
         return AcquireResult(raw_dir=raw, kind="html", slug="fakeapp-v2", pages=1)
 
+    def normalize(self, acq, workdir):
+        clean = workdir / f"{acq.slug}.html"
+        clean.write_text("retitled body", encoding="utf-8")
+        return clean
 
-def test_refresh_reports_moved_when_source_now_yields_new_slug(tmp_path, monkeypatch):
-    """A source whose acquire now derives a different slug staged elsewhere —
-    reported as moved with the new slug, so the stale dir isn't mistaken for
-    current."""
+
+def test_refresh_pins_the_recorded_slug(tmp_path, monkeypatch):
+    """A refresh re-ingests INTO the recorded slug even when acquire now
+    derives a different one (source retitled, or the slug was a --slug
+    override) — identity stays stable, no duplicate dir appears."""
     p = _BodyPattern("v1")
     monkeypatch.setattr(orchestrate, "classify", lambda url: p)
     orchestrate.run_ingest("https://x")
@@ -125,9 +130,11 @@ def test_refresh_reports_moved_when_source_now_yields_new_slug(tmp_path, monkeyp
     monkeypatch.setattr(orchestrate, "classify", lambda url: _RenamedSlugPattern())
     out = refresh.refresh_slug("fakeapp")
 
-    assert out["status"] == "moved"
-    assert out["detail"] == "fakeapp-v2"
-    assert (tmp_path / "incoming" / "fakeapp-v2" / "fakeapp-v2.html").exists()
+    assert out["status"] == "changed"
+    assert (tmp_path / "incoming" / "fakeapp" / "fakeapp.html").read_text(
+        encoding="utf-8"
+    ) == "retitled body"
+    assert not (tmp_path / "incoming" / "fakeapp-v2").exists()
 
 
 class _SingleFetchPattern(_BodyPattern):

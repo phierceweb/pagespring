@@ -36,7 +36,7 @@ class _FakePattern:
         return AcquireResult(raw_dir=raw, kind="html", slug="fakeapp", pages=1)
 
     def normalize(self, acq, workdir):
-        clean = workdir / "fakeapp.html"
+        clean = workdir / f"{acq.slug}.html"
         clean.write_text("<h1>Fake</h1>", encoding="utf-8")
         return clean
 
@@ -466,6 +466,76 @@ def test_renormalize_changed_clears_stale_localized_images(tmp_path, monkeypatch
     assert res["changed"] is True
     assert not (slug_dir / "images").exists()
     assert (slug_dir / "raw" / "welcome.html").exists()  # raw untouched — it is the input
+
+
+def test_ingest_warns_when_content_duplicates_another_slug(tmp_path, monkeypatch):
+    """The same manual ingested from a second URL (different slug) is flagged:
+    result carries duplicate_of naming the existing slug. Still staged — the
+    duplicate might be deliberate; the warning is the product."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://vendor-a.example/manual")
+
+    class _SameContentOtherSlug(_FakePattern):
+        def acquire(self, url, workdir):
+            raw = workdir / "raw"
+            raw.mkdir(parents=True, exist_ok=True)
+            (raw / "welcome.html").write_text("<html></html>", encoding="utf-8")
+            return AcquireResult(raw_dir=raw, kind="html", slug="fakeapp-alias", pages=1)
+
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _SameContentOtherSlug())
+    res = orchestrate.run_ingest("https://vendor-b.example/manual")
+
+    assert res["duplicate_of"] == "fakeapp"
+    assert (tmp_path / "incoming" / "fakeapp-alias" / "fakeapp-alias.html").exists()
+
+
+def test_ingest_unique_content_has_no_duplicate(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    res = orchestrate.run_ingest("https://x")
+    assert res["duplicate_of"] is None
+
+
+def test_ingest_slug_override_controls_naming(tmp_path, monkeypatch):
+    """--slug renames the staged identity end to end: dir, manifest slug, and
+    the deliverable filename the pattern's normalize produces."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    res = orchestrate.run_ingest("https://x", slug_override="Sennheiser EW IEM G4!")
+
+    assert res["slug"] == "sennheiser-ew-iem-g4"  # folded via slugify
+    slug_dir = tmp_path / "incoming" / "sennheiser-ew-iem-g4"
+    assert (slug_dir / "sennheiser-ew-iem-g4.html").exists()
+    m = manifest.read_manifest(slug_dir)
+    assert m["slug"] == "sennheiser-ew-iem-g4"
+    assert m["deliverable"] == "sennheiser-ew-iem-g4.html"
+
+
+def test_ingest_stages_deliverable_under_final_slug_name(tmp_path, monkeypatch):
+    """A pattern that names its output during acquire (pdf_url writes
+    raw/<url-slug>.pdf) can't know about --slug — staging renames centrally,
+    so the documented incoming/<slug>/<slug>.<ext> shape always holds."""
+
+    class _MisnamedOutputPattern(_FakePattern):
+        def normalize(self, acq, workdir):
+            clean = workdir / "whatever-acquire-called-it.html"
+            clean.write_text("<h1>x</h1>", encoding="utf-8")
+            return clean
+
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _MisnamedOutputPattern())
+    res = orchestrate.run_ingest("https://x", slug_override="tidy-name")
+
+    assert res["clean"].endswith("incoming/tidy-name/tidy-name.html")
+    assert (tmp_path / "incoming" / "tidy-name" / "tidy-name.html").exists()
+    assert manifest.read_manifest(tmp_path / "incoming" / "tidy-name")["deliverable"] == (
+        "tidy-name.html"
+    )
+
+
+def test_ingest_slug_override_that_folds_to_nothing_rejected(monkeypatch):
+    from pf_core.exceptions import InvalidInputError
+
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    with pytest.raises(InvalidInputError):
+        orchestrate.run_ingest("https://x", slug_override="!!!")
 
 
 class _TitledPattern(_FakePattern):

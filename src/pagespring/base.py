@@ -29,8 +29,7 @@ class AcquireResult:
     slug: str  # short id for the source; becomes the output dir name
     pages: int | None = None  # source units fetched (crawl pages / articles / files); manifest stat
     title: str | None = None  # human source title for the deliverable heading (falls back to slug)
-    # Response cache validators, for single-fetch patterns (the source IS the
-    # one fetched URL) — lets `refresh` probe with a conditional GET.
+    # Cache validators from single-fetch acquires — refresh probes with them.
     etag: str | None = None
     last_modified: str | None = None
 

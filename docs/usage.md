@@ -56,6 +56,9 @@ A few flags worth knowing (run `--help` for the rest):
 - `--keep-raw` keeps the raw crawl alongside the clean file in `incoming/<slug>/raw/`.
 - `--download-images` pulls an html/markdown source's remote images into `incoming/<slug>/images/` and re-points the refs (no-op for PDFs). Use it for sources whose images sit behind expiring or tokened URLs.
 - `--if-changed` re-crawls but **skips re-staging** when the result is byte-identical to the existing deliverable (compared via the manifest's `sha256`): it prints `unchanged` and leaves the file, its images, and its mtime alone. The crawl still runs — the slug isn't known until after acquire — so this saves the re-write and churn, not the download.
+- `--slug <name>` overrides the derived slug (folded to kebab-case) — it names the `incoming/` dir **and** the deliverable file, and `refresh` keeps it pinned thereafter. Use it when the URL-derived slug is noise (`auto-align-2-2-2-user-manual` → `auto-align-2`).
+
+**Duplicate detection.** Every ingest compares the new deliverable's `sha256` against every other slug's manifest; byte-identical content under a second name prints `warning : content identical to incoming/<other>/`. Still staged — a deliberate duplicate is allowed; the warning is the product (the same manual fetched from two vendor URLs is how duplicate chunks reach retrieval).
 
 **Re-ingesting replaces.** A second `ingest` of the same slug clears the slug dir first — no stale `raw/`, no orphaned files. The replace happens only once the new normalize succeeds, so a failed re-crawl never destroys a previous good deliverable.
 
@@ -111,11 +114,10 @@ One line per slug, then a summary count:
 
 - **`changed`** — the source produced different content; the deliverable was replaced (hand it back to pagespeak).
 - **`unchanged`** — byte-identical re-crawl (nothing touched), or, for single-fetch sources (direct PDFs, doc archives), a conditional-GET probe answered 304 — `unchanged — not modified (validator probe)` — and nothing was re-downloaded at all. Crawl sources always re-crawl: an entry page's validators prove nothing about the rest of a site.
-- **`moved`** — the source now derives a different slug (retitled/redirected); the fresh deliverable staged under the new slug and the old dir is stale — resolve by hand.
 - **`failed`** — the source didn't answer or normalized to nothing; the existing deliverable is kept.
 - **`skipped`** — no manifest (never ingested by a manifest-writing version).
 
-A slug ingested with `--keep-raw` keeps that property across a refresh (the new crawl's raw is kept, so `renormalize` stays possible). A refresh never auto-downloads images — re-run `localize` after a `changed` slug that needs them.
+A slug ingested with `--keep-raw` keeps that property across a refresh (the new crawl's raw is kept, so `renormalize` stays possible), and the **recorded slug is pinned** — a retitled source or a `--slug` override refreshes in place instead of minting a duplicate dir. A refresh never auto-downloads images — re-run `localize` after a `changed` slug that needs them.
 
 The summary is the wrapper hook: grep the report for `: changed` to know which slugs to re-convert (pagespeak) and re-index.
 

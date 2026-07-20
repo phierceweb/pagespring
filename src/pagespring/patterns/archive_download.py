@@ -52,9 +52,7 @@ def _extract(data: bytes, dest: Path) -> None:
 
 class ArchiveDownloadPattern:
     name = "archive_download"
-    single_fetch = (
-        True  # deliverable derives from exactly the one URL — refresh may probe validators
-    )
+    single_fetch = True  # one-URL source; refresh may probe its stored validators
     convert_recipe = ["--split-sections"]
 
     def match(self, url: str) -> bool:

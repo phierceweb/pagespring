@@ -4,6 +4,28 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.6.0] — 2026-07-20
+
+### Added
+
+- **`ingest --slug <name>`** — override the derived slug (folded to
+  kebab-case); names the `incoming/` dir and the deliverable file.
+- **Stage-time duplicate detection** — an ingest whose content is
+  byte-identical to another slug's manifest warns
+  `content identical to incoming/<other>/` (still staged; the warning is the
+  signal). Result field `duplicate_of` carries it for library callers.
+
+### Changed
+
+- **`refresh` pins the recorded slug**: the re-ingest is forced into the
+  existing slug, so a retitled source or a `--slug` override refreshes in
+  place instead of staging a duplicate dir. The `moved` outcome is retired.
+- **The deliverable always stages as `<slug>.<ext>`** regardless of what the
+  pattern's normalize named its output (patterns that name files at acquire
+  time can't see a `--slug` override).
+- **pf-core floor raised to `~=0.11.0`** — tracks the current minor line; no
+  new APIs consumed (the suite already runs against 0.11.0).
+
 ## [0.5.0] — 2026-07-19
 
 ### Added

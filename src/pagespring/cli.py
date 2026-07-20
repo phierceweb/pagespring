@@ -57,11 +57,20 @@ def ingest(
         "--if-changed",
         help="Skip re-staging when the re-fetch normalizes to byte-identical content (the crawl still runs).",
     ),
+    slug: str = typer.Option(
+        None,
+        "--slug",
+        help="Override the derived slug (folded to kebab-case) — names the incoming/ dir and deliverable.",
+    ),
 ) -> None:
     """Acquire a manual from URL and normalize it into incoming/<slug>/."""
     try:
         result = run_ingest(
-            url, keep_raw=keep_raw, download_images=download_images, if_changed=if_changed
+            url,
+            keep_raw=keep_raw,
+            download_images=download_images,
+            if_changed=if_changed,
+            slug_override=slug,
         )
     except NoPatternError:
         typer.echo(
@@ -95,6 +104,11 @@ def ingest(
     typer.echo(f"pattern  : {result['pattern']}")
     typer.echo(f"slug     : {result['slug']}")
     typer.echo(f"incoming : {result['clean']}")
+    if result.get("duplicate_of"):
+        typer.echo(
+            f"warning  : content identical to incoming/{result['duplicate_of']}/ — "
+            "same manual under two slugs?"
+        )
     if result.get("changed") is False:
         typer.echo(
             "status   : unchanged — source matches the existing deliverable, nothing re-staged"
@@ -224,7 +238,7 @@ def refresh(
     all_slugs: bool = typer.Option(False, "--all", help="Sweep every incoming/<slug>/."),
 ) -> None:
     """Re-check ingested manuals against their live sources and re-stage what
-    changed. One line per slug (changed / unchanged / moved / failed / skipped);
+    changed. One line per slug (changed / unchanged / failed / skipped);
     exit 1 if any source failed, so a wrapper can tell a clean sweep from a
     degraded one."""
     if all_slugs:
@@ -249,7 +263,7 @@ def refresh(
 def _refresh_summary(outcomes: list[RefreshOutcome]) -> str:
     counts = {
         s: sum(1 for o in outcomes if o["status"] == s)
-        for s in ("changed", "unchanged", "moved", "failed", "skipped")
+        for s in ("changed", "unchanged", "failed", "skipped")
     }
     return ", ".join(f"{n} {s}" for s, n in counts.items() if n)
 

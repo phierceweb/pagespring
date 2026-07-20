@@ -15,8 +15,9 @@ from pathlib import Path
 from tempfile import mkdtemp
 from typing import TypedDict, cast
 
-from pf_core.exceptions import PreconditionError
+from pf_core.exceptions import InvalidInputError, PreconditionError
 from pf_core.log import get_logger
+from pf_core.utils.slugify import slugify
 
 from pagespring import manifest
 from pagespring.base import AcquireResult, SourceKind
@@ -56,6 +57,7 @@ class IngestResult(TypedDict):
     bytes: int
     images: int
     changed: bool  # False only when --if-changed found the deliverable already current
+    duplicate_of: str | None  # another slug already holding byte-identical content
 
 
 def run_ingest(
@@ -64,6 +66,7 @@ def run_ingest(
     keep_raw: bool = False,
     download_images: bool = False,
     if_changed: bool = False,
+    slug_override: str | None = None,
 ) -> IngestResult:
     """Acquire + normalize ``url`` into ``incoming/<slug>/`` and return stats.
 
@@ -78,8 +81,12 @@ def run_ingest(
     leaves the existing deliverable untouched and returns ``changed=False`` (the
     crawl still runs — the slug is only known after acquire).
 
+    ``slug_override`` renames the staged identity (dir, manifest, deliverable
+    filename), folded via slugify.
+
     Returns a stats dict: pattern, slug, kind, clean (the incoming file), pages,
-    bytes, images (count localized), and changed.
+    bytes, images (count localized), changed, and duplicate_of (another slug
+    already holding byte-identical content, or None).
     """
     pattern = classify(url)
     if pattern is None:
@@ -91,6 +98,12 @@ def run_ingest(
             acq = pattern.acquire(url, work)
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             raise AcquireError(url, str(exc)) from exc
+        if slug_override is not None:
+            # Before normalize — patterns also use acq.slug in content (title fallback).
+            folded = slugify(slug_override)
+            if not folded:
+                raise InvalidInputError(f"--slug {slug_override!r} folds to an empty slug")
+            acq.slug = folded
         clean = pattern.normalize(acq, work)
         if not clean.exists() or clean.stat().st_size == 0:
             raise EmptyOutputError(url)
@@ -101,6 +114,9 @@ def run_ingest(
         sha256 = manifest.sha256_file(clean)
         size_bytes = clean.stat().st_size
         incoming_dir = Path(cfg.INCOMING_DIR) / acq.slug
+        duplicate_of = manifest.find_by_sha(Path(cfg.INCOMING_DIR), sha256, exclude_slug=acq.slug)
+        if duplicate_of:
+            log.warning("ingest.duplicate", slug=acq.slug, duplicate_of=duplicate_of)
 
         # --if-changed: an unchanged re-fetch preserves the existing deliverable,
         # its localized images, and its mtime — nothing is re-staged.
@@ -117,6 +133,7 @@ def run_ingest(
                     "bytes": prior["bytes"],
                     "images": prior["images"],
                     "changed": False,
+                    "duplicate_of": duplicate_of,
                 }
 
         # Re-ingest replaces: the slug dir holds exactly one ingest's output —
@@ -124,7 +141,9 @@ def run_ingest(
         if incoming_dir.exists():
             shutil.rmtree(incoming_dir)
         incoming_dir.mkdir(parents=True)
-        staged = incoming_dir / clean.name
+        # Stage as <slug>.<ext> regardless of what normalize called the file —
+        # patterns that name output at acquire time can't see a --slug override.
+        staged = incoming_dir / f"{acq.slug}{clean.suffix}"
         shutil.copy2(clean, staged)
         if keep_raw:
             shutil.copytree(acq.raw_dir, incoming_dir / "raw")
@@ -172,6 +191,7 @@ def run_ingest(
             "bytes": size_bytes,
             "images": n_images,
             "changed": True,
+            "duplicate_of": duplicate_of,
         }
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -193,9 +213,8 @@ def run_renormalize(slug: str) -> RenormalizeResult:
     """Re-run the pattern's CURRENT normalize against ``incoming/<slug>/raw/``
     and re-stage the deliverable — no acquire, no network.
 
-    The replay reconstructs the ``AcquireResult`` from the manifest + kept raw
-    (which is copied into a fresh workdir, so a normalize that mutates its
-    input can't corrupt the kept copy).
+    Raw is copied to a fresh workdir so a mutating normalize can't corrupt the
+    kept copy; the ``AcquireResult`` is rebuilt from the manifest.
     """
     incoming_dir = Path(cfg.INCOMING_DIR) / slug
     m = manifest.read_manifest(incoming_dir)
@@ -231,8 +250,8 @@ def run_renormalize(slug: str) -> RenormalizeResult:
         sha256 = manifest.sha256_file(clean)
         size_bytes = clean.stat().st_size
 
-        # Byte-identical replay: the staged deliverable, its localized images,
-        # and its mtime stay untouched — the "this refactor was safe" signal.
+        # Byte-identical replay: leave file, images, and mtime untouched — the
+        # refactor-was-safe signal.
         if sha256 == m["sha256"]:
             log.info("renormalize.unchanged", pattern=pattern.name, slug=slug, sha256=sha256)
             return {
@@ -246,7 +265,7 @@ def run_renormalize(slug: str) -> RenormalizeResult:
             }
 
         old = incoming_dir / m["deliverable"]
-        staged = incoming_dir / clean.name
+        staged = incoming_dir / f"{m['slug']}{clean.suffix}"  # same naming rule as ingest
         shutil.copy2(clean, staged)
         if old.exists() and old.name != staged.name:
             old.unlink()

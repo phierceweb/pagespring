@@ -93,6 +93,20 @@ def write_manifest(slug_dir: Path, manifest: Manifest) -> Path:
     return path
 
 
+def find_by_sha(incoming_root: Path, sha256: str, *, exclude_slug: str) -> str | None:
+    """First OTHER slug under ``incoming_root`` whose manifest records
+    ``sha256`` — the same-content-under-two-names detector."""
+    if not incoming_root.is_dir():
+        return None
+    for d in sorted(p for p in incoming_root.iterdir() if p.is_dir()):
+        if d.name == exclude_slug:
+            continue
+        m = read_manifest(d)
+        if m is not None and m.get("sha256") == sha256:
+            return d.name
+    return None
+
+
 def read_manifest(slug_dir: Path) -> Manifest | None:
     """Read ``slug_dir/manifest.json``; ``None`` if absent or unparseable.
 
