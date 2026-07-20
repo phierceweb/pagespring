@@ -150,6 +150,8 @@ def run_ingest(
                 images=n_images,
                 ingested_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 title=acq.title,
+                etag=acq.etag,
+                last_modified=acq.last_modified,
             ),
         )
 

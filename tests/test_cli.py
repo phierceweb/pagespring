@@ -192,6 +192,50 @@ def test_renormalize_empty_output_exits_3(monkeypatch):
     assert "empty" in r.output.lower()
 
 
+def test_refresh_all_prints_report_and_summary(monkeypatch):
+    outcomes = [
+        {"slug": "aaa", "status": "changed", "detail": ""},
+        {"slug": "bbb", "status": "unchanged", "detail": ""},
+        {"slug": "ccc", "status": "unchanged", "detail": "not modified (validator probe)"},
+        {"slug": "ddd", "status": "moved", "detail": "ddd-v2"},
+    ]
+    monkeypatch.setattr(climod, "refresh_all", lambda: outcomes)
+    r = runner.invoke(app, ["refresh", "--all"])
+    assert r.exit_code == 0
+    assert "aaa: changed" in r.output
+    assert "ccc: unchanged — not modified (validator probe)" in r.output
+    assert "ddd: moved — ddd-v2" in r.output
+    assert "1 changed, 2 unchanged, 1 moved" in r.output
+
+
+def test_refresh_all_exits_1_when_any_slug_failed(monkeypatch):
+    outcomes = [
+        {"slug": "aaa", "status": "changed", "detail": ""},
+        {"slug": "bbb", "status": "failed", "detail": "connection refused"},
+    ]
+    monkeypatch.setattr(climod, "refresh_all", lambda: outcomes)
+    r = runner.invoke(app, ["refresh", "--all"])
+    assert r.exit_code == 1
+    assert "bbb: failed — connection refused" in r.output
+    assert "1 failed" in r.output
+
+
+def test_refresh_single_slug_skipped_exits_2(monkeypatch):
+    monkeypatch.setattr(
+        climod,
+        "refresh_slug",
+        lambda s: {"slug": s, "status": "skipped", "detail": "no manifest — ingest it first"},
+    )
+    r = runner.invoke(app, ["refresh", "ghost"])
+    assert r.exit_code == 2
+    assert "no manifest" in r.output
+
+
+def test_refresh_requires_slug_or_all():
+    r = runner.invoke(app, ["refresh"])
+    assert r.exit_code == 2
+
+
 def test_localize_command_reports_done(monkeypatch):
     monkeypatch.setattr(
         climod,

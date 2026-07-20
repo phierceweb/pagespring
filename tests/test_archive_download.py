@@ -24,8 +24,29 @@ def test_match():
     assert not p.match("https://x.com/page.html")
 
 
+def test_acquire_captures_response_validators(tmp_path, monkeypatch):
+    """The single-fetch archive download records ETag/Last-Modified so a
+    refresh can probe with a conditional GET instead of re-downloading."""
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda url, **kw: (
+            url,
+            _zip_bytes(),
+            {"etag": '"z9"', "last_modified": "Fri, 17 Jul 2026 09:00:00 GMT"},
+        ),
+    )
+    acq = ArchiveDownloadPattern().acquire("https://x.com/docs.zip", tmp_path)
+    assert acq.etag == '"z9"'
+    assert acq.last_modified == "Fri, 17 Jul 2026 09:00:00 GMT"
+
+
 def test_acquire_extracts_and_concats(tmp_path, monkeypatch):
-    monkeypatch.setattr(http, "fetch_bytes", lambda url, **kw: (url, _zip_bytes()))
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda url, **kw: (url, _zip_bytes(), {"etag": None, "last_modified": None}),
+    )
     p = ArchiveDownloadPattern()
 
     acq = p.acquire("https://docs.python.org/3/archives/python-3.14-docs-text.zip", tmp_path)

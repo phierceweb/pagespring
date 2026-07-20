@@ -17,7 +17,9 @@ from typing import NotRequired, TypedDict
 from pagespring import __version__
 
 MANIFEST_NAME = "manifest.json"
-SCHEMA_VERSION = 2  # v2 added `title` (absent from files written by v1)
+# v2 added `title`; v3 added `etag`/`last_modified`. Additive only — read the
+# post-v1 keys with .get.
+SCHEMA_VERSION = 3
 
 
 class Manifest(TypedDict):
@@ -30,6 +32,8 @@ class Manifest(TypedDict):
     slug: str
     kind: str
     title: NotRequired[str | None]  # acquire-time source title; read via .get (v1 files lack it)
+    etag: NotRequired[str | None]  # response validators from single-fetch acquires
+    last_modified: NotRequired[str | None]
     deliverable: str
     convert_recipe: list[str]
     pages: int | None
@@ -58,6 +62,8 @@ def build_manifest(
     images: int,
     ingested_at: str,
     title: str | None = None,
+    etag: str | None = None,
+    last_modified: str | None = None,
 ) -> Manifest:
     """Assemble a manifest from one ingest's facts (stamps schema + version)."""
     return {
@@ -68,6 +74,8 @@ def build_manifest(
         "slug": slug,
         "kind": kind,
         "title": title,
+        "etag": etag,
+        "last_modified": last_modified,
         "deliverable": deliverable,
         "convert_recipe": convert_recipe,
         "pages": pages,

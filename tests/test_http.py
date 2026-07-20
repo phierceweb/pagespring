@@ -113,6 +113,66 @@ def test_url_error_still_retries(fake_net):
     assert len(calls) == 2
 
 
+def test_fetch_bytes_meta_returns_validators(fake_net):
+    queue, _, _ = fake_net
+    resp = _Resp(b"pdf-bytes")
+    resp.headers["ETag"] = '"abc123"'
+    resp.headers["Last-Modified"] = "Sat, 18 Jul 2026 10:00:00 GMT"
+    queue.append(resp)
+
+    final, data, meta = http.fetch_bytes_meta("https://x/manual.pdf")
+
+    assert data == b"pdf-bytes"
+    assert meta["etag"] == '"abc123"'
+    assert meta["last_modified"] == "Sat, 18 Jul 2026 10:00:00 GMT"
+
+
+def test_fetch_bytes_meta_absent_validators_are_none(fake_net):
+    queue, _, _ = fake_net
+    queue.append(_Resp(b"pdf-bytes"))
+    _f, _d, meta = http.fetch_bytes_meta("https://x/manual.pdf")
+    assert meta == {"etag": None, "last_modified": None}
+
+
+def test_not_modified_true_on_304_and_sends_validators(fake_net, monkeypatch):
+    queue, _, _ = fake_net
+    sent: dict = {}
+
+    def fake_urlopen(req, timeout=None):
+        sent.update(dict(req.header_items()))
+        raise _http_error(304)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert (
+        http.not_modified(
+            "https://x/manual.pdf",
+            etag='"abc123"',
+            last_modified="Sat, 18 Jul 2026 10:00:00 GMT",
+        )
+        is True
+    )
+    assert sent["If-none-match"] == '"abc123"'
+    assert sent["If-modified-since"] == "Sat, 18 Jul 2026 10:00:00 GMT"
+
+
+def test_not_modified_false_on_200(fake_net):
+    queue, _, _ = fake_net
+    queue.append(_Resp(b"changed content"))
+    assert http.not_modified("https://x/manual.pdf", etag='"abc123"', last_modified=None) is False
+
+
+def test_not_modified_false_without_validators_and_no_request(fake_net):
+    _queue, calls, _ = fake_net
+    assert http.not_modified("https://x/manual.pdf", etag=None, last_modified=None) is False
+    assert calls == []  # nothing to probe with — no network
+
+
+def test_not_modified_false_on_network_error(fake_net):
+    queue, _, _ = fake_net
+    queue.append(urllib.error.URLError("timeout"))
+    assert http.not_modified("https://x/manual.pdf", etag='"abc"', last_modified=None) is False
+
+
 def test_default_ua_identifies_pagespring(monkeypatch):
     monkeypatch.delenv("PAGESPRING_UA", raising=False)
     ua = http._request("https://x/a").get_header("User-agent")

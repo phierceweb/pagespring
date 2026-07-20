@@ -23,15 +23,40 @@ def test_rtd_pdf_match_and_host_slug(tmp_path, monkeypatch):
         == "picard-docs"
     )
 
-    monkeypatch.setattr(http, "fetch_bytes", lambda u, **k: (u, b"%PDF-1.5 body"))
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda u, **k: (u, b"%PDF-1.5 body", {"etag": None, "last_modified": None}),
+    )
     acq = p.acquire("https://picard-docs.musicbrainz.org/_/downloads/en/latest/pdf/", tmp_path)
     assert acq.kind == "pdf"
     assert acq.slug == "picard-docs"
     assert next(acq.raw_dir.glob("*.pdf")).name == "picard-docs.pdf"
 
 
+def test_acquire_captures_response_validators(tmp_path, monkeypatch):
+    """The single-fetch download records ETag/Last-Modified so a refresh can
+    probe with a conditional GET instead of re-downloading the PDF."""
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda url, **kw: (
+            url,
+            b"%PDF-1.7 body",
+            {"etag": '"v42"', "last_modified": "Sat, 18 Jul 2026 10:00:00 GMT"},
+        ),
+    )
+    acq = PdfUrlPattern().acquire("https://vendor.com/d/manual.pdf", tmp_path)
+    assert acq.etag == '"v42"'
+    assert acq.last_modified == "Sat, 18 Jul 2026 10:00:00 GMT"
+
+
 def test_acquire_downloads_and_slugs(tmp_path, monkeypatch):
-    monkeypatch.setattr(http, "fetch_bytes", lambda url, **kw: (url, b"%PDF-1.7 fake body"))
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda url, **kw: (url, b"%PDF-1.7 fake body", {"etag": None, "last_modified": None}),
+    )
     p = PdfUrlPattern()
     acq = p.acquire("https://vendor.com/d/KEMPER_PROFILER_Main_14.0.pdf", tmp_path)
 

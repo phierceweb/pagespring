@@ -186,6 +186,34 @@ def test_writes_manifest_beside_deliverable(tmp_path, monkeypatch):
     assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", m["ingested_at"])
 
 
+class _ValidatorPattern(_FakePattern):
+    """Single-fetch fake whose acquire captured response cache validators."""
+
+    def acquire(self, url, workdir):
+        raw = workdir / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        (raw / "m.pdf").write_bytes(b"%PDF")
+        return AcquireResult(
+            raw_dir=raw,
+            kind="pdf",
+            slug="fakeapp",
+            pages=None,
+            etag='"abc123"',
+            last_modified="Sat, 18 Jul 2026 10:00:00 GMT",
+        )
+
+
+def test_manifest_records_acquire_validators(tmp_path, monkeypatch):
+    """ETag/Last-Modified captured at acquire land in the manifest — the
+    refresh fast path probes with them instead of re-downloading."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _ValidatorPattern())
+    orchestrate.run_ingest("https://x/manual.pdf")
+
+    m = manifest.read_manifest(tmp_path / "incoming" / "fakeapp")
+    assert m["etag"] == '"abc123"'
+    assert m["last_modified"] == "Sat, 18 Jul 2026 10:00:00 GMT"
+
+
 class _BodyPattern(_FakePattern):
     """A fake whose normalized content can change between ingests."""
 

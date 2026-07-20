@@ -37,6 +37,9 @@ def _slug_from_url(url: str) -> str:
 
 class PdfUrlPattern:
     name = "pdf_url"
+    single_fetch = (
+        True  # deliverable derives from exactly the one URL — refresh may probe validators
+    )
 
     # Vendor PDF manuals rarely carry a usable heading outline, so llm_full
     # fixes levels; split for RAG.
@@ -55,10 +58,17 @@ class PdfUrlPattern:
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
         slug = _slug_from_url(url)
-        _final, data = http.fetch_bytes(url)
+        _final, data, meta = http.fetch_bytes_meta(url)
         (raw_dir / f"{slug}.pdf").write_bytes(data)
         log.info("pdf_url.acquire", url=url, slug=slug, bytes=len(data))
-        return AcquireResult(raw_dir=raw_dir, kind="pdf", slug=slug, pages=1)
+        return AcquireResult(
+            raw_dir=raw_dir,
+            kind="pdf",
+            slug=slug,
+            pages=1,
+            etag=meta["etag"],
+            last_modified=meta["last_modified"],
+        )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         # Passthrough: the downloaded PDF is already a pagespeak input.

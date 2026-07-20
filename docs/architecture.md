@@ -28,6 +28,8 @@ All work happens in a temp dir; only the final clean file (plus its `manifest.js
 
 **Image localization is a decoupled step.** Because normalize leaves asset URLs **absolute**, a no-image deliverable is already complete (pagespeak can fetch those URLs at convert time). Images can be pulled either inline (`ingest --download-images`) or after the fact (`pagespring localize <slug>` → `orchestrate.localize_images`), both downloading into `incoming/<slug>/images/` and re-pointing refs. `localize` is **resumable** — it re-points each image as it lands and checkpoints the file — so a book whose image set exceeds one run's budget is finished by re-running until none remain.
 
+**Refresh is a sweep of step-1-to-4 re-runs, driven by the manifests.** `pagespring refresh [<slug>|--all]` (→ `refresh.py`) re-ingests each slug from its manifest's `source_url` with `--if-changed` semantics, isolating per-slug failures so one dead source can't stop the sweep, preserving the kept-raw property, and reporting each outcome (`changed`/`unchanged`/`moved`/`failed`/`skipped`). Patterns that declare `single_fetch = True` (the deliverable derives from exactly the one recorded URL — `pdf_url`, `archive_download`) get a fast path first: their acquire captures the response's `ETag`/`Last-Modified` into the manifest, and refresh probes with one conditional GET (`http.not_modified`) — a definitive 304 reports `unchanged` with no re-download; anything else falls through to the full path. Crawl patterns never probe: an entry page's validators prove nothing about the rest of a site.
+
 **Renormalize is an offline replay of steps 3–4.** `pagespring renormalize <slug>` (→ `orchestrate.run_renormalize`) re-runs the pattern's **current** `normalize()` against the kept `incoming/<slug>/raw/` — no classify, no acquire, no network. The `AcquireResult` is reconstructed from the manifest (pattern by recorded name, kind/slug/pages/title), and raw is copied into a fresh workdir so a normalize that mutates its input can't corrupt the kept copy. Byte-identical output re-stages nothing and reports `unchanged` — the signal that a normalize refactor was behavior-preserving. Changed output replaces the deliverable, clears any stale `images/` (a re-localize would otherwise collide into suffixed names), and refreshes the manifest's content facts (`sha256`, `bytes`, `deliverable`, `convert_recipe`, `images` reset to 0 — refs are absolute again) while crawl provenance (`source_url`, `ingested_at`, `pages`) is untouched. Requires an ingest made with `--keep-raw`.
 
 ## The manifest
@@ -43,6 +45,8 @@ Every staged deliverable gets a sibling `incoming/<slug>/manifest.json` (`manife
   "slug": "tableplus",
   "kind": "markdown",
   "title": "TablePlus Documentation",
+  "etag": null,
+  "last_modified": null,
   "deliverable": "tableplus.md",
   "convert_recipe": ["--split-sections"],
   "pages": 62,
@@ -53,7 +57,7 @@ Every staged deliverable gets a sibling `incoming/<slug>/manifest.json` (`manife
 }
 ```
 
-Schema v2 added `title` (acquire's source title, feeding `renormalize` replays); read it with `.get` — files written by v1 lack the key.
+Schema v2 added `title` (acquire's source title, feeding `renormalize` replays); v3 added `etag`/`last_modified` (response validators from single-fetch acquires, feeding `refresh`'s conditional-GET probe). Read the post-v1 keys with `.get` — older files lack them.
 
 `sha256` is the hash of the deliverable **as `normalize()` produced it** (before `--download-images` re-points any refs) — so on the default path it matches the on-disk file, and it stays stable as the content's identity regardless of image-localization.
 

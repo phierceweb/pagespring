@@ -52,6 +52,9 @@ def _extract(data: bytes, dest: Path) -> None:
 
 class ArchiveDownloadPattern:
     name = "archive_download"
+    single_fetch = (
+        True  # deliverable derives from exactly the one URL — refresh may probe validators
+    )
     convert_recipe = ["--split-sections"]
 
     def match(self, url: str) -> bool:
@@ -61,7 +64,7 @@ class ArchiveDownloadPattern:
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
-        _f, data = http.fetch_bytes(url)
+        _f, data, meta = http.fetch_bytes_meta(url)
         _extract(data, raw_dir)
         kind: SourceKind = (
             "html" if any(raw_dir.rglob("*.html")) or any(raw_dir.rglob("*.htm")) else "markdown"
@@ -70,7 +73,14 @@ class ArchiveDownloadPattern:
         exts = _HTMLY if kind == "html" else _TEXTY
         pages = sum(1 for p in raw_dir.rglob("*") if p.suffix.lower() in exts)
         log.info("archive_download.acquire", url=url, slug=slug, kind=kind, bytes=len(data))
-        return AcquireResult(raw_dir=raw_dir, kind=kind, slug=slug, pages=pages)
+        return AcquireResult(
+            raw_dir=raw_dir,
+            kind=kind,
+            slug=slug,
+            pages=pages,
+            etag=meta["etag"],
+            last_modified=meta["last_modified"],
+        )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         exts = _HTMLY if acq.kind == "html" else _TEXTY

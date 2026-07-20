@@ -3,6 +3,7 @@
 Commands:
     ingest <url>       acquire + normalize ("fix") a manual into incoming/<slug>/
     renormalize <slug> re-run normalize against kept raw/ (no re-crawl)
+    refresh <slug>     re-check ingested manuals against their sources (--all sweeps)
     localize <slug>    grab an already-ingested deliverable's images (resumable; --all)
     patterns           list the registered source patterns
     classify <url>     show which pattern handles a URL (no acquisition)
@@ -27,6 +28,7 @@ from pagespring.orchestrate import (
     run_ingest,
     run_renormalize,
 )
+from pagespring.refresh import RefreshOutcome, refresh_all, refresh_slug
 from pagespring.registry import PATTERNS, classify
 
 app = create_cli(
@@ -167,6 +169,44 @@ def localize(
             continue
         tail = "done" if r["remaining"] == 0 else f"{r['remaining']} remaining — re-run to continue"
         typer.echo(f"{s}: +{r['localized']} images (total {r['images_total']}) — {tail}")
+
+
+@app.command()
+def refresh(
+    slug: str = typer.Argument(
+        None, help="Slug under incoming/ to re-check against its source (omit when using --all)."
+    ),
+    all_slugs: bool = typer.Option(False, "--all", help="Sweep every incoming/<slug>/."),
+) -> None:
+    """Re-check ingested manuals against their live sources and re-stage what
+    changed. One line per slug (changed / unchanged / moved / failed / skipped);
+    exit 1 if any source failed, so a wrapper can tell a clean sweep from a
+    degraded one."""
+    if all_slugs:
+        outcomes = refresh_all()
+    elif slug:
+        outcomes = [refresh_slug(slug)]
+    else:
+        typer.echo("Give a slug or --all.", err=True)
+        raise typer.Exit(2)
+
+    for o in outcomes:
+        tail = f" — {o['detail']}" if o["detail"] else ""
+        typer.echo(f"{o['slug']}: {o['status']}{tail}")
+    typer.echo(_refresh_summary(outcomes))
+
+    if not all_slugs and outcomes[0]["status"] == "skipped":
+        raise typer.Exit(2)  # the one slug you named can't be refreshed
+    if any(o["status"] == "failed" for o in outcomes):
+        raise typer.Exit(1)
+
+
+def _refresh_summary(outcomes: list[RefreshOutcome]) -> str:
+    counts = {
+        s: sum(1 for o in outcomes if o["status"] == s)
+        for s in ("changed", "unchanged", "moved", "failed", "skipped")
+    }
+    return ", ".join(f"{n} {s}" for s, n in counts.items() if n)
 
 
 @app.command()

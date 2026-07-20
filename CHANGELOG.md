@@ -4,6 +4,22 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.4.0] — 2026-07-19
+
+### Added
+
+- **`refresh [<slug>|--all]`** — re-check ingested manuals against their
+  recorded sources and re-stage what changed. One outcome line per slug
+  (`changed` / `unchanged` / `moved` / `failed` / `skipped`) plus a summary;
+  per-slug failures don't stop the sweep; the kept-raw property survives a
+  refresh. Exit `1` when any slug failed, `2` when a named slug can't be
+  refreshed.
+- **Conditional-GET fast path.** `pdf_url` and `archive_download` acquires now
+  record the response's `ETag`/`Last-Modified` (manifest schema v3, additive);
+  `refresh` probes those sources with one conditional GET and a definitive 304
+  skips the re-download entirely. Crawl sources always re-crawl — an entry
+  page's validators prove nothing about the rest of a site.
+
 ## [0.3.0] — 2026-07-19
 
 ### Added

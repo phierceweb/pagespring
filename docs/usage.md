@@ -13,6 +13,7 @@ pagespring is the **acquisition** front-end. It is not pagespeak: pagespeak *con
 - [Ingesting API specs](#ingesting-api-specs)
 - [Localizing images separately](#localizing-images-separately)
 - [Renormalizing without a re-crawl](#renormalizing-without-a-re-crawl)
+- [Refreshing the corpus](#refreshing-the-corpus)
 - [Reading the result](#reading-the-result)
 - [When no pattern matches](#when-no-pattern-matches)
 - [Exit codes](#exit-codes)
@@ -24,6 +25,7 @@ The installed command is `pagespring` (in a repo checkout, `bin/run <cmd>` runs 
 ```
 pagespring ingest <url>      # acquire + normalize a manual → incoming/<slug>/
 pagespring renormalize <slug># re-run normalize against kept raw/ — no re-crawl (needs --keep-raw at ingest)
+pagespring refresh <slug>    # re-check a manual against its live source; --all sweeps the corpus
 pagespring localize <slug>   # grab an already-ingested deliverable's images → images/ (resumable; --all)
 pagespring patterns          # list the registered source patterns + convert recipes
 pagespring classify <url>    # show which pattern handles a URL — no fetch
@@ -94,6 +96,27 @@ pagespring renormalize <slug>                           # replay normalize as of
 - A changed replay leaves the new deliverable's asset URLs **absolute** again (that is what normalize produces) and clears `images/` — the old files were named for the old deliverable's refs, and stale ones would push a re-localize onto suffixed names. If you had localized images, re-run `pagespring localize <slug>` afterwards.
 - Do not point it at a slug whose pattern has been renamed/removed since the ingest — the manifest records the pattern by name and the replay refuses rather than guessing.
 
+## Refreshing the corpus
+
+Manuals rev — plugin updates, firmware manuals, edition bumps. `pagespring refresh` re-checks ingested slugs against their recorded `source_url` and re-stages only what changed:
+
+```
+pagespring refresh <slug>    # one manual
+pagespring refresh --all     # sweep every incoming/<slug>/
+```
+
+One line per slug, then a summary count:
+
+- **`changed`** — the source produced different content; the deliverable was replaced (hand it back to pagespeak).
+- **`unchanged`** — byte-identical re-crawl (nothing touched), or, for single-fetch sources (direct PDFs, doc archives), a conditional-GET probe answered 304 — `unchanged — not modified (validator probe)` — and nothing was re-downloaded at all. Crawl sources always re-crawl: an entry page's validators prove nothing about the rest of a site.
+- **`moved`** — the source now derives a different slug (retitled/redirected); the fresh deliverable staged under the new slug and the old dir is stale — resolve by hand.
+- **`failed`** — the source didn't answer or normalized to nothing; the existing deliverable is kept.
+- **`skipped`** — no manifest (never ingested by a manifest-writing version).
+
+A slug ingested with `--keep-raw` keeps that property across a refresh (the new crawl's raw is kept, so `renormalize` stays possible). A refresh never auto-downloads images — re-run `localize` after a `changed` slug that needs them.
+
+The summary is the wrapper hook: grep the report for `: changed` to know which slugs to re-convert (pagespeak) and re-index.
+
 ## Reading the result
 
 Each `incoming/<slug>/` holds the deliverable — one file per manual, `incoming/<slug>/<slug>.{html,md,pdf}` — plus a `manifest.json` recording its provenance (source URL, pattern, title, `convert_recipe`, page count, `sha256`, ingest time). The manifest makes the hand-off to pagespeak self-describing: the `convert_recipe` travels *with* the file instead of living only in `pagespring patterns`. **Verify a pattern by reading the deliverable file** — not by running pagespeak. `ingest` prints the page count and size so a half-lost crawl is obvious at a glance (a 187-page guide that returns 3 pages is a problem, not a result).
@@ -107,6 +130,8 @@ Any http(s) URL that no specific pattern claims classifies to `docs_probe` rathe
 `classify` returns no pattern only for a non-web argument nothing claims — every http(s) URL is routed, since any URL the specific patterns decline falls through to `docs_probe`.
 
 ## Exit codes
+
+`refresh` reports per-slug outcomes instead of failing fast: exit `0` for a clean sweep, `1` when any slug failed (the report names them), `2` when the single slug you named can't be refreshed (or neither slug nor `--all` was given).
 
 `ingest` and `renormalize` distinguish failure modes so scripts (and you) can tell them apart:
 
