@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pagespring"
-version = "0.6.0"
+version = "0.7.0"
 description = "Acquire and normalize online documentation into clean, convertible source files — the acquisition front-end to pagespeak."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,12 +23,13 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # Lean by design: stdlib urllib fetches, BeautifulSoup parses, pf-core[cli]
-    # gives the Typer scaffolding + AppConfig + structured logging. No ML stack.
+    # Lean by design: BeautifulSoup parses, pf-core[cli] gives the Typer
+    # scaffolding + AppConfig + structured logging + the stdlib-urllib fetch
+    # core. No ML stack.
     "beautifulsoup4>=4.12",
     # YAML OpenAPI specs (JSON is stdlib); pure-data parser, no transport.
     "pyyaml>=6.0",
-    "pf-core[cli]~=0.11.0",
+    "pf-core[cli]~=0.13.0",
 ]
 
 [project.optional-dependencies]

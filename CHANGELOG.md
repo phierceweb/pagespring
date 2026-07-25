@@ -4,6 +4,34 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.7.0] — 2026-07-24
+
+### Changed
+
+- **`pagespring.http` is a shim over `pf_core.fetch`** — unchanged public names,
+  signatures, and defaults (`fetch_text`, `fetch_bytes`, `fetch_bytes_meta`,
+  `not_modified`, `Validators`, `polite_sleep`), with the `PAGESPRING_UA` identity
+  and the polite crawl delay still owned here. Raw `urllib` exceptions keep
+  propagating, so patterns still branch on `HTTPError.code`.
+- **Fetched URLs are SSRF-guarded** — private, loopback, link-local, and
+  unresolvable hosts are refused before any request goes out, on the initial URL
+  and on every redirect hop (redirects are now walked explicitly). A refused URL
+  raises `InvalidInputError` → CLI exit 2; `URL_FETCH_ALLOW_PRIVATE=1` opts out
+  for a deliberately internal source.
+- **`pagespring.images` is a shim over `pf_core.fetch.images`** —
+  `download_images` and `count_remote_images` keep their signatures, naming
+  scheme, and file-as-ledger resume; deliverable and image writes are now atomic.
+  Localizer log events are `doc_images_localized` / `image_localize_failed`.
+  Refs with a non-image extension (`.bmp`, `.tif`, `.tiff`) are no longer
+  localized, and no longer counted as remaining.
+- **pf-core pin raised to `~=0.13.0`** — for the fetch core and image localizer.
+
+### Fixed
+
+- **Image localization no longer rewrites bare image URLs in prose** — only
+  markdown `](…)` and `<img src=…>` refs are retargeted, so a doc that quotes or
+  links an image URL in its text keeps it intact.
+
 ## [0.6.0] — 2026-07-20
 
 ### Added

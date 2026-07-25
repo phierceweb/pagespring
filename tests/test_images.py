@@ -1,5 +1,8 @@
 """Optional image localizer — download + re-point refs (mocked fetch)."""
 
+import urllib.error
+from email.message import Message
+
 from pagespring import http, images
 
 _PNG = b"\x89PNG\r\n\x1a\n" + b"pngbody"
@@ -98,6 +101,40 @@ def test_checkpoints_progress_during_run(tmp_path, monkeypatch):
     images.download_images(doc, tmp_path / "images", checkpoint_every=1)
 
     assert "](images/1.png)" in doc_states[1]  # 1st image checkpointed before 2nd fetch
+
+
+def test_paces_between_images(tmp_path, monkeypatch):
+    """One polite delay per download — a localize of a big book is still a crawl."""
+    doc = tmp_path / "d.md"
+    doc.write_text("![a](https://x.com/1.png)\n![b](https://x.com/2.png)\n", encoding="utf-8")
+    paced: list[float] = []
+    monkeypatch.setattr(http, "fetch_bytes", lambda u, **k: (u, _PNG))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: paced.append(0.25))
+
+    images.download_images(doc, tmp_path / "images")
+
+    assert len(paced) == 2
+
+
+def test_failed_download_keeps_remote_ref(tmp_path, monkeypatch):
+    """An unfetchable image keeps its remote ref, so the doc still renders and the
+    remaining-count tells the caller to re-run."""
+    doc = tmp_path / "d.md"
+    doc.write_text("![a](https://x.com/gone.png)\n![b](https://x.com/ok.png)\n", encoding="utf-8")
+
+    def fetch(url, **kwargs):
+        if url.endswith("gone.png"):
+            raise urllib.error.HTTPError(url, 404, "gone", Message(), None)
+        return url, _PNG
+
+    monkeypatch.setattr(http, "fetch_bytes", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert images.download_images(doc, tmp_path / "images") == 1
+    text = doc.read_text(encoding="utf-8")
+    assert "](https://x.com/gone.png)" in text
+    assert "](images/ok.png)" in text
+    assert images.count_remote_images(doc) == 1
 
 
 def test_count_remote_images_ignores_localized(tmp_path):

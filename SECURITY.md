@@ -24,7 +24,10 @@ pagespring is a local CLI that fetches and parses remote documentation. It
 needs no credentials — there are no API keys or secrets to handle. The most
 security-relevant surfaces are:
 
-- **`pagespring.http`** — the fetch layer (stdlib `urllib`, plain GETs).
+- **`pagespring.http`** — the fetch layer (stdlib `urllib`, plain GETs) over
+  `pf_core.fetch`. URLs are SSRF-guarded on the initial request and every
+  redirect hop: private, loopback, link-local, and unresolvable hosts are
+  refused before a request goes out (`URL_FETCH_ALLOW_PRIVATE=1` opts out).
 - **Archive extraction** (`archive_download`) — zips extract via `zipfile`'s
   sanitized `extractall`; tars use the `data` extraction filter.
 - **Content parsing** — BeautifulSoup for HTML, `json`/`yaml.safe_load` for
