@@ -6,7 +6,9 @@ acquire fetches all articles; normalize merges them into one HTML doc. Image
 URLs in the bodies are absolute (Zendesk CDN) — pagespeak, or the optional
 ``--download-images``, handles them.
 
-Point it at the help center, e.g. ``https://support.gingerlabs.com/hc/en-us``.
+Point it at the help center, e.g. ``https://support.gingerlabs.com/hc/en-us``,
+or at one ``/sections/<id>-...`` / ``/categories/<id>-...`` to pull just that
+slice — the right form when one center covers several products.
 """
 
 from __future__ import annotations
@@ -18,15 +20,20 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from bs4 import BeautifulSoup
 from pf_core.log import get_logger
 from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
+from pagespring.patterns._site import absolutize_refs, strip_scripts
 
 log = get_logger(__name__)
 
 _MAX_PAGES = 100  # API pages (per_page=100) — safety cap
+
+
+_SCOPE_RE = re.compile(r"/(sections|categories)/(\d+)")
 
 
 def _api_base_and_locale(url: str) -> tuple[str, str]:
@@ -36,6 +43,20 @@ def _api_base_and_locale(url: str) -> tuple[str, str]:
     return origin, (m.group(1) if m else "en-us")
 
 
+def _articles_endpoint(url: str) -> str:
+    """Articles endpoint, narrowed when the URL names a section/category.
+
+    A bare ``/hc/<locale>`` pulls the whole help center — right for a
+    single-product vendor, wrong for one that ships many under one center.
+    """
+    origin, locale = _api_base_and_locale(url)
+    base = f"{origin}/api/v2/help_center/{locale}"
+    scope = _SCOPE_RE.search(urlparse(url).path)
+    if scope:
+        return f"{base}/{scope.group(1)}/{scope.group(2)}/articles.json?per_page=100"
+    return f"{base}/articles.json?per_page=100"
+
+
 def _slug(url: str) -> str:
     host = urlparse(url).netloc.lower().removeprefix("www.").removeprefix("support.")
     return slugify(host.split(".")[0]) or "help"
@@ -43,15 +64,22 @@ def _slug(url: str) -> str:
 
 class ZendeskHelpPattern:
     name = "zendesk_help"
-    convert_recipe = ["--split-sections"]
 
     def match(self, url: str) -> bool:
         p = urlparse(url)
         return p.netloc.lower().endswith(".zendesk.com") or "/hc/" in p.path
 
+    def _clean_body(self, body: str, page_url: str) -> str:
+        """Article bodies are author-supplied HTML — embeds, trackers and all."""
+        soup = BeautifulSoup(body, "html.parser")
+        strip_scripts(soup)
+        if page_url:
+            absolutize_refs(soup, page_url)
+        return str(soup)
+
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         origin, locale = _api_base_and_locale(url)
-        page_url: str | None = f"{origin}/api/v2/help_center/{locale}/articles.json?per_page=100"
+        page_url: str | None = _articles_endpoint(url)
 
         articles: list[dict[str, Any]] = []
         pages = 0
@@ -62,7 +90,8 @@ class ZendeskHelpPattern:
             page_url = data.get("next_page")
             pages += 1
             http.polite_sleep()
-        if page_url:
+        truncated = bool(page_url)
+        if truncated:
             log.warning("zendesk_help.capped", fetched=pages, cap=_MAX_PAGES)
 
         raw_dir = workdir / "raw"
@@ -70,7 +99,7 @@ class ZendeskHelpPattern:
         for i, art in enumerate(articles):
             title = _html.escape(art.get("title", ""))
             src = art.get("html_url", "")
-            body = art.get("body", "") or ""
+            body = self._clean_body(art.get("body", "") or "", src)
             (raw_dir / f"{i:04d}.html").write_text(
                 f"<!-- source: {src} -->\n<section>\n<h2>{title}</h2>\n{body}\n</section>\n",
                 encoding="utf-8",
@@ -80,7 +109,9 @@ class ZendeskHelpPattern:
         log.info(
             "zendesk_help.acquire", origin=origin, locale=locale, articles=len(articles), slug=slug
         )
-        return AcquireResult(raw_dir=raw_dir, kind="html", slug=slug, pages=len(articles))
+        return AcquireResult(
+            raw_dir=raw_dir, kind="html", slug=slug, pages=len(articles), truncated=truncated
+        )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         title = acq.slug.replace("-", " ").title()

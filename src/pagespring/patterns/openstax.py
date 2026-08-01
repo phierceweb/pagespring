@@ -122,7 +122,6 @@ def _walk_to_first(seed: str) -> tuple[str, str]:
 class OpenStaxPattern:
     name = "openstax"
     # Large multi-chapter books; pagespeak downloads the absolute image URLs.
-    convert_recipe = ["--split-sections"]
 
     def match(self, url: str) -> bool:
         p = urlparse(url)
@@ -176,8 +175,22 @@ class OpenStaxPattern:
 
         if truncated:
             log.warning("openstax.capped", saved=saved, cap=_MAX)
-        log.info("openstax.acquire", url=url, slug=slug, pages=saved, title=book_title)
-        return AcquireResult(raw_dir=raw_dir, kind="html", slug=slug, pages=saved, title=book_title)
+        log.info(
+            "openstax.acquire",
+            url=url,
+            slug=slug,
+            pages=saved,
+            title=book_title,
+            truncated=truncated,
+        )
+        return AcquireResult(
+            raw_dir=raw_dir,
+            kind="html",
+            slug=slug,
+            pages=saved,
+            title=book_title,
+            truncated=truncated,
+        )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         title = acq.title or acq.slug.replace("-", " ").title()

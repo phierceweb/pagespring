@@ -29,7 +29,7 @@ pagespring renormalize <slug># re-run normalize against kept raw/ — no re-craw
 pagespring refresh <slug>    # re-check a manual against its live source; --all sweeps the corpus
 pagespring audit <slug>      # $0 deterministic checks on staged deliverables; --all; --strict gates
 pagespring localize <slug>   # grab an already-ingested deliverable's images → images/ (resumable; --all)
-pagespring patterns          # list the registered source patterns + convert recipes
+pagespring patterns          # list the registered source patterns, in match order
 pagespring classify <url>    # show which pattern handles a URL — no fetch
 pagespring status            # list incoming/ deliverables (pattern, pages, size, date, source)
 pagespring --help            # the live, authoritative command + flag reference
@@ -60,7 +60,7 @@ A few flags worth knowing (run `--help` for the rest):
 
 **Duplicate detection.** Every ingest compares the new deliverable's `sha256` against every other slug's manifest; byte-identical content under a second name prints `warning : content identical to incoming/<other>/`. Still staged — a deliberate duplicate is allowed; the warning is the product (the same manual fetched from two vendor URLs is how duplicate chunks reach retrieval).
 
-**Re-ingesting replaces.** A second `ingest` of the same slug clears the slug dir first — no stale `raw/`, no orphaned files. The replace happens only once the new normalize succeeds, so a failed re-crawl never destroys a previous good deliverable.
+**Re-ingesting replaces, except the image cache.** A second `ingest` of the same slug clears the slug dir first — no stale `raw/`, no orphaned files — but keeps `images/` and `images.json`, so a re-ingest does not re-download images the source has not changed. The replace happens only once the new normalize succeeds, so a failed re-crawl never destroys a previous good deliverable. A re-ingest resets the manifest's `images` to 0 and restores absolute refs, so re-run `localize` afterwards; the sidecar makes that near-free.
 
 ## Ingesting API specs
 
@@ -74,7 +74,7 @@ pagespring ingest ./vendor-postman_collection.json        # Postman collection �
 
 Do hand it the **spec file itself**, not the rendered docs page. Most modern API portals (Swagger UI, ReDoc, ReadMe) render client-side from a spec `ingest` can fetch directly even when the page is an empty JS shell; when the spec sits behind a "Download" button, save it and ingest the local file. `ingest` reads the spec only — it never calls the API.
 
-The deliverable is markdown carrying the `--split-sections` recipe, so pagespeak chunks it per endpoint. `pages` reports the operation/request count — a spec that yields 0 is logged as a warning, the same coverage signal as a truncated crawl.
+The deliverable is markdown, one section per endpoint. `pages` reports the operation/request count — a spec that yields 0 is logged as a warning, the same coverage signal as a truncated crawl.
 
 ## Localizing images separately
 
@@ -125,8 +125,10 @@ The summary is the wrapper hook: grep the report for `: changed` to know which s
 
 `pagespring audit [<slug>|--all]` runs deterministic, $0 checks over staged deliverables — no network, no LLM, read-only. It catches what a glance at `status` can't:
 
-- **errors** (the deliverable can't be trusted): `manifest_missing`, `deliverable_missing`, `deliverable_empty`, and `sha_mismatch` — the on-disk file no longer hashes to the staged `sha256` (hand-edited or corrupted; only checked while un-localized, since `localize` legitimately rewrites refs).
-- **warnings** (real but survivable): `localize_incomplete` (localized images recorded but remote refs remain — re-run `localize`), `no_headings` (a multi-page crawl normalized to heading-less soup — the half-lost-crawl signature; it will split into nothing downstream).
+- **errors** (the deliverable can't be trusted): `manifest_missing`, `deliverable_missing`, `deliverable_empty`, `sha_mismatch` — the on-disk file no longer hashes to the staged `sha256` (hand-edited or corrupted; only checked while un-localized, since `localize` legitimately rewrites refs) — `crawl_truncated`, a crawl that hit its page cap or stalled, so the deliverable is partial — `single_page_crawl`, a crawl pattern that returned exactly one page (the too-specific-seed signature: point `llms_txt` at one doc page instead of the index and it fetches that page's `.md` twin, staging 1 page where the site has 170; PDF deliverables and `single_fetch` patterns are one file by design and never fire it) — and `duplicate_source_url`, two slugs staged from the same URL, which blocks the hand-off for both.
+- **warnings** (real but survivable): `localize_incomplete` (localized images recorded but remote refs remain — re-run `localize`), `no_headings` (a multi-page crawl normalized to heading-less soup — the half-lost-crawl signature; it will split into nothing downstream), `duplicate_content` (two slugs holding byte-identical deliverables — legitimate when a vendor mirrors one manual at two URLs).
+
+The last two are **corpus-level**: they compare slugs against each other, so they only appear under `--all`.
 
 Report-only by default (exit `0`). `--strict` exits `1` when any **error**-level finding exists, so a script can gate the pagespeak hand-off:
 
@@ -138,13 +140,13 @@ pagespring audit --all --strict && <hand off to pagespeak>
 
 ## Reading the result
 
-Each `incoming/<slug>/` holds the deliverable — one file per manual, `incoming/<slug>/<slug>.{html,md,pdf}` — plus a `manifest.json` recording its provenance (source URL, pattern, title, `convert_recipe`, page count, `sha256`, ingest time). The manifest makes the hand-off to pagespeak self-describing: the `convert_recipe` travels *with* the file instead of living only in `pagespring patterns`. **Verify a pattern by reading the deliverable file** — not by running pagespeak. `ingest` prints the page count and size so a half-lost crawl is obvious at a glance (a 187-page guide that returns 3 pages is a problem, not a result).
+Each `incoming/<slug>/` holds the deliverable — one file per manual, `incoming/<slug>/<slug>.{html,md,pdf}` — plus a `manifest.json` recording its provenance (source URL, pattern, title, page count, `sha256`, ingest time). The manifest makes the hand-off to pagespeak self-describing — it says what the source *is*, and pagespeak decides how to convert it. **Verify a pattern by reading the deliverable file** — not by running pagespeak. `ingest` prints the page count and size so a half-lost crawl is obvious at a glance (a 187-page guide that returns 3 pages is a problem, not a result).
 
 `pagespring status` lists every `incoming/<slug>/` from its manifest — pattern, pages, size, ingest date, and source host. (Legacy dirs from before the manifest fall back to the file's own name/size/date.) Whether a slug has been converted into the manuals corpus is pagespeak's concern, downstream and out of pagespring's view.
 
 ## When no pattern matches
 
-Any http(s) URL that no specific pattern claims classifies to `docs_probe` rather than going unmatched — `classify` prints `docs_probe`, meaning "will content-probe the site at acquire," not a confirmed source type. The actual routing happens during `ingest`: `docs_probe` fetches the base page and tries, in order, its `<meta name="generator">` tag, `_static/` assets, a `search/search_index.json`, and an `llms.txt`. A site none of these recognise exits `2`, printing exactly what was probed — that message is the guidance for authoring the source a new pattern (see [architecture.md](architecture.md#adding-a-new-pattern)).
+Any http(s) URL that no specific pattern claims classifies to `docs_probe` rather than going unmatched — `classify` prints `docs_probe`, meaning "will content-probe the site at acquire," not a confirmed source type. The actual routing happens during `ingest`: `docs_probe` fetches the base page and tries, in order: PDF magic bytes (a "docs" URL that serves a PDF), the ClickHelp and Paligo asset tells (neither emits a generator tag), then the `<meta name="generator">` tag, `_static/` assets, a `search/search_index.json`, and an `llms.txt`. A site none of these recognise exits `2`, printing exactly what was probed — that message is the guidance for authoring the source a new pattern (see [architecture.md](architecture.md#adding-a-new-pattern)).
 
 `classify` returns no pattern only for a non-web argument nothing claims — every http(s) URL is routed, since any URL the specific patterns decline falls through to `docs_probe`.
 
@@ -159,3 +161,5 @@ Any http(s) URL that no specific pattern claims classifies to `docs_probe` rathe
 - `4` — a network fetch died during acquire (nothing staged; `ingest` only — `renormalize` never touches the network).
 
 These rely on pf-core's `run_cli` propagating `typer.Exit` codes; without it a failed `ingest` would exit `0`.
+
+A malformed invocation — unknown option, missing argument — also exits `2`, with a usage message rather than a traceback. So `2` means "the command couldn't proceed with what it was given", whether that's the argv or the source.

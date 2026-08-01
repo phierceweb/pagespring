@@ -20,5 +20,11 @@ class PagespringConfig(AppConfig):
     # acquired+normalized file. A separate step (pagespeak) consumes these.
     INCOMING_DIR: str = "incoming"
 
+    # Idle seconds before a queue-driven crawl is treated as stalled and bails
+    # with its remaining queue (surfacing as `truncated`). A crawl can fetch
+    # healthily while producing nothing, which no socket timeout detects.
+    # 0 disables.
+    CRAWL_STALL_AFTER_S: int = 300
+
 
 cfg = PagespringConfig(env_file=_project_root / ".env")

@@ -45,7 +45,9 @@ def test_all_patterns_satisfy_protocol():
     for pattern in PATTERNS:
         assert isinstance(pattern, Pattern)
         assert pattern.name
-        assert isinstance(pattern.convert_recipe, list)
+        # A pattern describes acquisition only. Conversion flags belong to
+        # pagespeak, which can derive them from the source itself.
+        assert not hasattr(pattern, "convert_recipe")
 
 
 def test_docs_probe_is_last_and_claims_unmatched():

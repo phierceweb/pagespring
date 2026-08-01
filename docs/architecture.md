@@ -30,7 +30,7 @@ All work happens in a temp dir; only the final clean file (plus its `manifest.js
 
 **Refresh is a sweep of step-1-to-4 re-runs, driven by the manifests.** `pagespring refresh [<slug>|--all]` (→ `refresh.py`) re-ingests each slug from its manifest's `source_url` with `--if-changed` semantics, isolating per-slug failures so one dead source can't stop the sweep, preserving the kept-raw property, pinning the recorded slug (a retitled source or `--slug` override never mints a duplicate dir), and reporting each outcome (`changed`/`unchanged`/`failed`/`skipped`). Patterns that declare `single_fetch = True` (the deliverable derives from exactly the one recorded URL — `pdf_url`, `archive_download`) get a fast path first: their acquire captures the response's `ETag`/`Last-Modified` into the manifest, and refresh probes with one conditional GET (`http.not_modified`) — a definitive 304 reports `unchanged` with no re-download; anything else falls through to the full path. Crawl patterns never probe: an entry page's validators prove nothing about the rest of a site.
 
-**Renormalize is an offline replay of steps 3–4.** `pagespring renormalize <slug>` (→ `orchestrate.run_renormalize`) re-runs the pattern's **current** `normalize()` against the kept `incoming/<slug>/raw/` — no classify, no acquire, no network. The `AcquireResult` is reconstructed from the manifest (pattern by recorded name, kind/slug/pages/title), and raw is copied into a fresh workdir so a normalize that mutates its input can't corrupt the kept copy. Byte-identical output re-stages nothing and reports `unchanged` — the signal that a normalize refactor was behavior-preserving. Changed output replaces the deliverable, clears any stale `images/` (a re-localize would otherwise collide into suffixed names), and refreshes the manifest's content facts (`sha256`, `bytes`, `deliverable`, `convert_recipe`, `images` reset to 0 — refs are absolute again) while crawl provenance (`source_url`, `ingested_at`, `pages`) is untouched. Requires an ingest made with `--keep-raw`.
+**Renormalize is an offline replay of steps 3–4.** `pagespring renormalize <slug>` (→ `orchestrate.run_renormalize`) re-runs the pattern's **current** `normalize()` against the kept `incoming/<slug>/raw/` — no classify, no acquire, no network. The `AcquireResult` is reconstructed from the manifest (pattern by recorded name, kind/slug/pages/title), and raw is copied into a fresh workdir so a normalize that mutates its input can't corrupt the kept copy. Byte-identical output re-stages nothing and reports `unchanged` — the signal that a normalize refactor was behavior-preserving. Changed output replaces the deliverable, clears any stale `images/` (a re-localize would otherwise collide into suffixed names), and refreshes the manifest's content facts (`sha256`, `bytes`, `deliverable`, `images` reset to 0 — refs are absolute again) while crawl provenance (`source_url`, `ingested_at`, `pages`) is untouched. Requires an ingest made with `--keep-raw`.
 
 ## The manifest
 
@@ -38,8 +38,8 @@ Every staged deliverable gets a sibling `incoming/<slug>/manifest.json` (`manife
 
 ```json
 {
-  "schema_version": 2,
-  "pagespring_version": "0.1.0",
+  "schema_version": 5,
+  "pagespring_version": "0.8.0",
   "source_url": "https://docs.tableplus.com/",
   "pattern": "docs_probe",
   "slug": "tableplus",
@@ -47,8 +47,8 @@ Every staged deliverable gets a sibling `incoming/<slug>/manifest.json` (`manife
   "title": "TablePlus Documentation",
   "etag": null,
   "last_modified": null,
+  "truncated": false,
   "deliverable": "tableplus.md",
-  "convert_recipe": ["--split-sections"],
   "pages": 62,
   "bytes": 123456,
   "sha256": "…",
@@ -57,7 +57,9 @@ Every staged deliverable gets a sibling `incoming/<slug>/manifest.json` (`manife
 }
 ```
 
-Schema v2 added `title` (acquire's source title, feeding `renormalize` replays); v3 added `etag`/`last_modified` (response validators from single-fetch acquires, feeding `refresh`'s conditional-GET probe). Read the post-v1 keys with `.get` — older files lack them.
+Schema v2 added `title` (acquire's source title, feeding `renormalize` replays); v3 added `etag`/`last_modified` (response validators from single-fetch acquires, feeding `refresh`'s conditional-GET probe); v4 added `truncated`. Read the post-v1 keys with `.get` — older files lack them.
+
+**v5 dropped `convert_recipe`** — the sole non-additive change. Every remaining field states what the source *is*; none instructs the converter. Do not add a field that does: pagespring cannot see pagespeak's flags, so a hint staged here goes stale silently the moment pagespeak's evidence or CLI moves, and nothing fails loudly when it does. pagespeak derives conversion settings from `kind`, `pattern`, and the deliverable itself.
 
 `sha256` is the hash of the deliverable **as `normalize()` produced it** (before `--download-images` re-points any refs) — so on the default path it matches the on-disk file, and it stays stable as the content's identity regardless of image-localization.
 
@@ -65,10 +67,9 @@ That hash is what `ingest --if-changed` compares against: a re-crawl that normal
 
 ## The Pattern contract
 
-A pattern is one source type's knowledge, as a class implementing the `Pattern` protocol (`base.py`). Five members:
+A pattern is one source type's knowledge, as a class implementing the `Pattern` protocol (`base.py`). Four members:
 
 - `name` — the registry id (`apple_help`, `gitbook`, …).
-- `convert_recipe` — the extra `pagespeak convert` flags this source's output wants. **A hint for the downstream step; pagespring never runs it.**
 - `match(url)` — cheap host/path check, returns bool.
 - `acquire(url, workdir)` — download raw pages, return an `AcquireResult`.
 - `normalize(acq, workdir)` — merge/clean into one file, return its path.
@@ -100,10 +101,11 @@ Patterns log-and-skip individual page failures rather than aborting a whole craw
 
 ## Adding a new pattern
 
-1. Write `src/pagespring/patterns/<name>.py` implementing the five-member `Pattern` protocol.
+1. Write `src/pagespring/patterns/<name>.py` implementing the four-member `Pattern` protocol.
 2. Register the instance in `registry.py`, respecting the [classification order](#classification-order): host-specific first, extension/content next, then `gitbook` — and **before** `docs_probe`, which must stay last or its catch-all shadows every pattern registered after it.
 3. Keep all fetching in `pagespring.http`, and leave asset URLs **absolute** so pagespeak can pull them during convert.
-4. Set `AcquireResult.pages` to the count of source units fetched (pages / articles / files) — `ingest` surfaces it, which is how coverage gaps get caught.
+4. Set `AcquireResult.pages` to the count of source units the deliverable covers (crawl pages / articles / PDF pages) — `ingest` surfaces it, which is how coverage gaps get caught. Use `None` when it genuinely can't be determined; never substitute a placeholder like `1`, which reads as real and hides the gap. PDF patterns get theirs from `patterns/_pdf.page_count`.
 5. If the source caps or truncates a crawl, `log.warning` it — a silently truncated crawl reads as a complete one.
 6. Add `tests/test_<name>.py` mocking `pagespring.http`: assert both the `match()` routing and that `normalize()` produces the clean shape. Then verify against the real source by reading the `incoming/` file.
-7. Declare the pattern's intended pagespeak flags in `convert_recipe` (a hint; pagespring never runs them).
+
+Do **not** give the pattern an opinion about conversion. If the source needs unusual downstream handling, say so in pagespeak — pagespring's job ends at the clean file.

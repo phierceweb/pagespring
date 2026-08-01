@@ -15,6 +15,8 @@ def test_patterns_lists_registered():
     assert r.exit_code == 0
     assert "apple_help" in r.output
     assert "gitbook" in r.output
+    # Names only — pagespring has no opinion about downstream conversion.
+    assert "recipe" not in r.output.lower()
 
 
 def test_classify_routes_apple():
@@ -304,7 +306,14 @@ def test_localize_command_reports_done(monkeypatch):
     monkeypatch.setattr(
         climod,
         "localize_images",
-        lambda s: {"slug": s, "localized": 5, "remaining": 0, "images_total": 5},
+        lambda s: {
+            "slug": s,
+            "localized": 5,
+            "reused": 0,
+            "pruned": 0,
+            "remaining": 0,
+            "images_total": 5,
+        },
     )
     r = runner.invoke(app, ["localize", "biology-2e"])
     assert r.exit_code == 0
@@ -318,7 +327,14 @@ def test_localize_command_reports_remaining(monkeypatch):
     monkeypatch.setattr(
         climod,
         "localize_images",
-        lambda s: {"slug": s, "localized": 50, "remaining": 120, "images_total": 50},
+        lambda s: {
+            "slug": s,
+            "localized": 50,
+            "reused": 0,
+            "pruned": 0,
+            "remaining": 120,
+            "images_total": 50,
+        },
     )
     r = runner.invoke(app, ["localize", "biology-2e"])
     assert r.exit_code == 0
@@ -334,7 +350,14 @@ def test_localize_all_iterates_incoming(monkeypatch, tmp_path):
 
     def fake(slug):
         calls.append(slug)
-        return {"slug": slug, "localized": 1, "remaining": 0, "images_total": 1}
+        return {
+            "slug": slug,
+            "localized": 1,
+            "reused": 0,
+            "pruned": 0,
+            "remaining": 0,
+            "images_total": 1,
+        }
 
     monkeypatch.setattr(climod, "localize_images", fake)
     r = runner.invoke(app, ["localize", "--all"])
@@ -355,7 +378,6 @@ def _write_manifest(slug_dir, **over):
         "slug": slug_dir.name,
         "kind": "markdown",
         "deliverable": "docs-tableplus-com.md",
-        "convert_recipe": ["--split-sections"],
         "pages": 62,
         "size_bytes": 100,
         "sha256": "abc",

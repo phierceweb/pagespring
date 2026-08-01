@@ -103,7 +103,6 @@ def _sitemap_articles(product: str, locale: str) -> list[str]:
 
 class MicrosoftSupportPattern:
     name = "microsoft_support"
-    convert_recipe = ["--split-sections"]
 
     def match(self, url: str) -> bool:
         return urlparse(url).netloc.lower() == "support.microsoft.com"
@@ -122,7 +121,8 @@ class MicrosoftSupportPattern:
                     seen.add(full)
                     links.append(full)
 
-        if len(links) > _MAX:
+        truncated = len(links) > _MAX
+        if truncated:
             log.warning("microsoft_support.capped", found=len(links), cap=_MAX)
 
         raw_dir = workdir / "raw"
@@ -161,7 +161,9 @@ class MicrosoftSupportPattern:
             http.polite_sleep(1.0)  # gentle pace — the site quota-blocks bursts with 403s
 
         log.info("microsoft_support.acquire", url=url, mode=mode, articles=saved, slug=slug)
-        return AcquireResult(raw_dir=raw_dir, kind="html", slug=slug, pages=saved)
+        return AcquireResult(
+            raw_dir=raw_dir, kind="html", slug=slug, pages=saved, truncated=truncated
+        )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         title = acq.slug.replace("-", " ").title()

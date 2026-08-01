@@ -6,7 +6,8 @@ for a non-web argument — a local file path or ``file://`` URL — since
 ``docs_probe`` claims every remaining http(s) URL).
 
 Order matters — first match wins:
-  - host-specific patterns first (apple_help, llms_txt, readthedocs, github_markdown),
+  - host-specific patterns first (apple_help, llms_txt, readthedocs, github_markdown,
+    adobe_helpx),
   - then extension/content patterns (api_spec, pdf_url, archive_download) so a
     `.json`/`.yaml` spec or `.pdf` on a `docs.*` host routes correctly rather
     than falling through to the broader patterns below; api_spec also claims
@@ -14,7 +15,7 @@ Order matters — first match wins:
     token,
   - gitbook next, narrowed to `*.gitbook.io` (its own hosting, not custom domains),
   - docs_probe LAST — a content-probing catch-all that claims any remaining
-    http(s) URL and sniffs the generator (MkDocs/Docusaurus/Sphinx/GitBook-via-
+    http(s) URL and sniffs the generator (MkDocs/Docusaurus/Hugo/Sphinx/GitBook-via-
     llms.txt) at acquire time. It must stay last: everything above it is a
     cheaper, more specific match.
 """
@@ -22,6 +23,7 @@ Order matters — first match wins:
 from __future__ import annotations
 
 from pagespring.base import Pattern
+from pagespring.patterns.adobe_helpx import AdobeHelpxPattern
 from pagespring.patterns.api_spec import ApiSpecPattern
 from pagespring.patterns.apple_help import AppleHelpPattern
 from pagespring.patterns.archive_download import ArchiveDownloadPattern
@@ -42,6 +44,7 @@ PATTERNS: list[Pattern] = [
     GitHubMarkdownPattern(),
     ZendeskHelpPattern(),
     MicrosoftSupportPattern(),
+    AdobeHelpxPattern(),
     OpenStaxPattern(),
     ApiSpecPattern(),
     PdfUrlPattern(),

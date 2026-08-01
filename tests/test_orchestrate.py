@@ -24,7 +24,6 @@ def _incoming_in_tmp(tmp_path, monkeypatch):
 
 class _FakePattern:
     name = "fake"
-    convert_recipe = ["--split-sections"]
 
     def match(self, url):
         return True
@@ -70,8 +69,10 @@ def test_no_pattern_raises(monkeypatch):
 
 
 def test_reingest_replaces_stale_artifacts(tmp_path, monkeypatch):
-    """A re-run leaves only the fresh deliverable — no orphaned clean files,
-    no stale raw/ or images/ from a previous ingest."""
+    """A re-run leaves only the fresh deliverable — no orphaned clean files and a
+    fresh raw/. The image cache is the deliberate exception (see
+    test_reingest_preserves_images_and_sidecar): re-downloading every image on
+    every refresh costs far more than leaving unreferenced files on disk."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     slug_dir = tmp_path / "incoming" / "fakeapp"
     (slug_dir / "raw").mkdir(parents=True)
@@ -83,7 +84,7 @@ def test_reingest_replaces_stale_artifacts(tmp_path, monkeypatch):
     orchestrate.run_ingest("https://x", keep_raw=True)
 
     assert not (slug_dir / "fakeapp-old-name.html").exists()
-    assert not (slug_dir / "images").exists()
+    assert (slug_dir / "images" / "old.png").exists()  # image cache survives
     assert not (slug_dir / "raw" / "stale.html").exists()  # raw/ is fresh, not merged
     assert (slug_dir / "raw" / "welcome.html").exists()
     assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "<h1>Fake</h1>"
@@ -161,7 +162,7 @@ def test_zero_fragment_html_crawl_fails_and_preserves_previous(tmp_path, monkeyp
 
 def test_writes_manifest_beside_deliverable(tmp_path, monkeypatch):
     """Every ingest drops a manifest.json next to the clean file, carrying the
-    provenance + the downstream convert_recipe + a hash of the deliverable."""
+    provenance + a hash of the deliverable."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     res = orchestrate.run_ingest("https://docs.example.com/foo")
 
@@ -174,7 +175,6 @@ def test_writes_manifest_beside_deliverable(tmp_path, monkeypatch):
     assert m["slug"] == "fakeapp"
     assert m["kind"] == "html"
     assert m["deliverable"] == "fakeapp.html"
-    assert m["convert_recipe"] == ["--split-sections"]
     assert m["pages"] == 1
     assert m["bytes"] == len("<h1>Fake</h1>")
     assert m["images"] == 0
@@ -274,7 +274,6 @@ def _write_manifest(slug_dir, **over):
         "slug": slug_dir.name,
         "kind": "html",
         "deliverable": "bk.html",
-        "convert_recipe": ["--split-sections"],
         "pages": 1,
         "size_bytes": 10,
         "sha256": "x",
@@ -291,7 +290,11 @@ def test_localize_images_localizes_and_updates_manifest(tmp_path, monkeypatch):
     slug_dir = tmp_path / "incoming" / "bk"
     _write_manifest(slug_dir)
     (slug_dir / "bk.html").write_text('<img src="https://x.com/a.png">', encoding="utf-8")
-    monkeypatch.setattr(http, "fetch_bytes", lambda u, **k: (u, b"\x89PNG\r\n\x1a\nx"))
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda u, **k: (u, b"\x89PNG\r\n\x1a\nx", {"etag": None, "last_modified": None}),
+    )
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
     res = orchestrate.localize_images("bk")
@@ -419,10 +422,10 @@ def test_renormalize_unknown_pattern_raises(tmp_path, monkeypatch):
 
 
 def test_renormalize_updates_manifest_and_resets_image_count(tmp_path, monkeypatch):
-    """A changed replay refreshes the deliverable's facts (sha256, bytes,
-    convert_recipe from the CURRENT pattern) and resets the localized-image
-    count — the new file's refs are absolute again. Provenance of the crawl
-    (source_url, ingested_at, pattern, pages) is untouched."""
+    """A changed replay refreshes the deliverable's facts (sha256, bytes) and
+    resets the localized-image count — the new file's refs are absolute again.
+    Provenance of the crawl (source_url, ingested_at, pattern, pages) is
+    untouched."""
     p = _RawDrivenPattern(prefix="v1")
     monkeypatch.setattr(orchestrate, "classify", lambda url: p)
     orchestrate.run_ingest("https://docs.example.com/foo", keep_raw=True)
@@ -430,7 +433,6 @@ def test_renormalize_updates_manifest_and_resets_image_count(tmp_path, monkeypat
     before = manifest.read_manifest(slug_dir)
 
     p.prefix = "v2"
-    p.convert_recipe = ["--split-sections", "--normalize-headings"]
     monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: p)
     res = orchestrate.run_renormalize("fakeapp")
 
@@ -439,7 +441,6 @@ def test_renormalize_updates_manifest_and_resets_image_count(tmp_path, monkeypat
     assert after["sha256"] == manifest.sha256_file(slug_dir / "fakeapp.html")
     assert after["sha256"] != before["sha256"]
     assert after["bytes"] == len("v2:<html></html>")
-    assert after["convert_recipe"] == ["--split-sections", "--normalize-headings"]
     assert after["images"] == 0
     assert after["source_url"] == before["source_url"]
     assert after["ingested_at"] == before["ingested_at"]
@@ -596,3 +597,126 @@ def test_renormalize_replaces_deliverable_when_name_changes(tmp_path, monkeypatc
     assert not (slug_dir / "fakeapp.html").exists()
     assert (slug_dir / "fakeapp.md").read_text(encoding="utf-8") == "# now markdown"
     assert manifest.read_manifest(slug_dir)["deliverable"] == "fakeapp.md"
+
+
+def test_localize_images_reuses_unchanged_before_downloading(tmp_path, monkeypatch):
+    """On a refreshed deliverable the image URLs come back the same. An image the
+    sidecar already holds, and the server reports unchanged, must be re-pointed
+    locally instead of re-downloaded."""
+    from pagespring import images
+
+    slug_dir = tmp_path / "incoming" / "bk"
+    _write_manifest(slug_dir)
+    (slug_dir / "bk.html").write_text(
+        '<img src="https://x.com/a.png"><img src="https://x.com/new.png">', encoding="utf-8"
+    )
+    imgs = slug_dir / "images"
+    imgs.mkdir()
+    (imgs / "a.png").write_bytes(b"\x89PNG\r\n\x1a\nold")
+    images.write_sidecar(
+        slug_dir,
+        [
+            {
+                "local": "a.png",
+                "source_url": "https://x.com/a.png",
+                "etag": '"a"',
+                "last_modified": None,
+                "sha256": "unused",
+                "bytes": 11,
+            }
+        ],
+    )
+
+    fetched: list[str] = []
+
+    def fetch(url, **kwargs):
+        fetched.append(url)
+        return url, b"\x89PNG\r\n\x1a\nnew", {"etag": None, "last_modified": None}
+
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: u == "https://x.com/a.png")
+    monkeypatch.setattr(http, "fetch_bytes_meta", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    res = orchestrate.localize_images("bk")
+
+    assert res["reused"] == 1
+    assert fetched == ["https://x.com/new.png"]  # the unchanged image never re-downloaded
+    assert (imgs / "a.png").read_bytes() == b"\x89PNG\r\n\x1a\nold"  # original kept
+    assert res["remaining"] == 0
+
+
+def test_reingest_preserves_images_and_sidecar(tmp_path, monkeypatch):
+    """A re-ingest replaces the deliverable but must KEEP images/ and images.json.
+
+    Wiping them defeats the sidecar entirely: a refresh brings the same image
+    URLs back, and with no local files or validators every image is re-downloaded.
+    Stale clean files and raw/ are still cleared — only the image cache survives.
+    """
+    from pagespring import images
+
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://x")
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+
+    imgs = slug_dir / "images"
+    imgs.mkdir(exist_ok=True)
+    (imgs / "kept.png").write_bytes(b"\x89PNG\r\n\x1a\nx")
+    images.write_sidecar(
+        slug_dir,
+        [
+            {
+                "local": "kept.png",
+                "source_url": "https://x.com/kept.png",
+                "etag": '"k"',
+                "last_modified": None,
+                "sha256": "abc",
+                "bytes": 11,
+            }
+        ],
+    )
+    (slug_dir / "orphan-clean.html").write_text("stale", encoding="utf-8")
+
+    orchestrate.run_ingest("https://x")
+
+    assert (imgs / "kept.png").read_bytes() == b"\x89PNG\r\n\x1a\nx"
+    assert [r["source_url"] for r in images.read_sidecar(slug_dir)] == ["https://x.com/kept.png"]
+    assert not (slug_dir / "orphan-clean.html").exists()  # stale output still cleared
+
+
+def test_localize_prunes_orphans_once_fully_localized(tmp_path, monkeypatch):
+    """After a refresh drops an image, its file must not linger in images/."""
+    from pagespring import images
+
+    slug_dir = tmp_path / "incoming" / "bk"
+    _write_manifest(slug_dir)
+    (slug_dir / "bk.html").write_text('<img src="https://x.com/keep.png">', encoding="utf-8")
+    imgs = slug_dir / "images"
+    imgs.mkdir()
+    (imgs / "dropped.png").write_bytes(b"\x89PNG\r\n\x1a\nold")
+    images.write_sidecar(
+        slug_dir,
+        [
+            {
+                "local": "dropped.png",
+                "source_url": "https://x.com/dropped.png",
+                "etag": None,
+                "last_modified": None,
+                "sha256": "x",
+                "bytes": 3,
+            }
+        ],
+    )
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda u, **k: (u, b"\x89PNG\r\n\x1a\nnew", {"etag": None, "last_modified": None}),
+    )
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    res = orchestrate.localize_images("bk")
+
+    assert res["pruned"] == 1
+    assert sorted(p.name for p in imgs.glob("*")) == ["keep.png"]
+    assert res["images_total"] == 1  # manifest counts what survives, not orphans
+    assert manifest.read_manifest(slug_dir)["images"] == 1

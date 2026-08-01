@@ -72,3 +72,18 @@ def test_fetch_failure_and_missing_article_sleep_before_continuing(tmp_path, mon
     assert acq.pages == 2  # broken + no-article skipped, not saved
     # One polite sleep per crawled URL: intro, guide/setup, broken, no-article.
     assert len(sleeps) == 4
+
+
+def test_extract_drops_scripts_and_styles():
+    """Docusaurus ships hydration payloads and inline styles inside <article>."""
+    html = """<html><body><article>
+      <h1>Guide</h1><p>Real content.</p>
+      <script>window.__DOCUSAURUS_STATE__={};</script>
+      <style>.token{color:#abc}</style>
+      <noscript>Enable JS</noscript>
+    </article></body></html>"""
+    frag = _docusaurus._extract(html, "https://ex.org/docs/guide")
+    assert frag is not None
+    assert "Real content." in frag
+    assert "<script" not in frag and "<style" not in frag and "<noscript" not in frag
+    assert "__DOCUSAURUS_STATE__" not in frag

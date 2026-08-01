@@ -19,6 +19,7 @@ from pf_core.exceptions import InvalidInputError, PreconditionError
 from pf_core.log import get_logger
 from pf_core.utils.slugify import slugify
 
+from pagespring import images as images_mod
 from pagespring import manifest
 from pagespring.base import AcquireResult, SourceKind
 from pagespring.config import cfg
@@ -71,8 +72,8 @@ def run_ingest(
     """Acquire + normalize ``url`` into ``incoming/<slug>/`` and return stats.
 
     The result is one clean file (absolute asset URLs) under ``incoming/<slug>/``,
-    plus a ``manifest.json`` recording its provenance, the downstream
-    ``convert_recipe``, and a content hash. With ``download_images``, an
+    plus a ``manifest.json`` recording its provenance and a content hash.
+    With ``download_images``, an
     html/markdown source's remote images are pulled into ``incoming/<slug>/images/``
     and refs re-pointed there (PDF sources skip this). With ``keep_raw``, the raw
     crawl is kept alongside in ``raw/``.
@@ -136,11 +137,13 @@ def run_ingest(
                     "duplicate_of": duplicate_of,
                 }
 
-        # Re-ingest replaces: the slug dir holds exactly one ingest's output —
-        # no orphaned clean files, no stale raw/ or images/ merged from last time.
+        # Re-ingest replaces: the slug dir holds exactly one ingest's output — no
+        # orphaned clean files, no stale raw/. The image cache is the exception and
+        # is carried across: a refresh brings the same image URLs back, so wiping
+        # images/ and its sidecar would re-download every image every time.
         if incoming_dir.exists():
-            shutil.rmtree(incoming_dir)
-        incoming_dir.mkdir(parents=True)
+            _clear_except(incoming_dir, keep={"images", images_mod.SIDECAR_NAME})
+        incoming_dir.mkdir(parents=True, exist_ok=True)
         # Stage as <slug>.<ext> regardless of what normalize called the file —
         # patterns that name output at acquire time can't see a --slug override.
         staged = incoming_dir / f"{acq.slug}{clean.suffix}"
@@ -162,7 +165,6 @@ def run_ingest(
                 slug=acq.slug,
                 kind=acq.kind,
                 deliverable=staged.name,
-                convert_recipe=list(pattern.convert_recipe),
                 pages=acq.pages,
                 size_bytes=size_bytes,
                 sha256=sha256,
@@ -171,6 +173,7 @@ def run_ingest(
                 title=acq.title,
                 etag=acq.etag,
                 last_modified=acq.last_modified,
+                truncated=acq.truncated,
             ),
         )
 
@@ -274,7 +277,6 @@ def run_renormalize(slug: str) -> RenormalizeResult:
         shutil.rmtree(incoming_dir / "images", ignore_errors=True)
 
         m["deliverable"] = staged.name
-        m["convert_recipe"] = list(pattern.convert_recipe)
         m["bytes"] = size_bytes
         m["sha256"] = sha256
         m["images"] = 0  # refs are absolute again; re-run localize to re-point them
@@ -293,11 +295,24 @@ def run_renormalize(slug: str) -> RenormalizeResult:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def _clear_except(directory: Path, *, keep: set[str]) -> None:
+    """Empty ``directory`` of everything not named in ``keep``."""
+    for entry in directory.iterdir():
+        if entry.name in keep:
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
+
+
 class LocalizeResult(TypedDict):
     """Stats from one localize pass over an already-staged deliverable."""
 
     slug: str
     localized: int  # images downloaded THIS run
+    reused: int  # refs re-pointed from the sidecar without a download
+    pruned: int  # image files deleted because the deliverable no longer references them
     remaining: int  # remote refs still left (0 ⇒ fully localized)
     images_total: int  # images now in incoming/<slug>/images/
 
@@ -325,11 +340,31 @@ def localize_images(slug: str) -> LocalizeResult:
     from pagespring import images
 
     images_dir = incoming_dir / "images"
+    # On a refresh the deliverable comes back with the same image URLs; anything the
+    # sidecar holds and the server still calls unchanged is re-pointed, not re-fetched.
+    reused = images.reuse_unchanged(deliverable, incoming_dir)
     localized = images.download_images(deliverable, images_dir)
     remaining = images.count_remote_images(deliverable)
+    # Only safe once nothing is still remote — see prune_orphans.
+    pruned = images.prune_orphans(deliverable, incoming_dir)
     total = sum(1 for p in images_dir.iterdir() if p.is_file()) if images_dir.exists() else 0
 
     m["images"] = total
     manifest.write_manifest(incoming_dir, m)
-    log.info("localize.done", slug=slug, localized=localized, remaining=remaining, images=total)
-    return {"slug": slug, "localized": localized, "remaining": remaining, "images_total": total}
+    log.info(
+        "localize.done",
+        slug=slug,
+        localized=localized,
+        reused=reused,
+        pruned=pruned,
+        remaining=remaining,
+        images=total,
+    )
+    return {
+        "slug": slug,
+        "localized": localized,
+        "reused": reused,
+        "pruned": pruned,
+        "remaining": remaining,
+        "images_total": total,
+    }

@@ -41,7 +41,6 @@ class GitBookPattern:
 
     # GitBook .md is already well-leveled; captions on by default; pagespeak
     # downloads the absolute image URLs and splits.
-    convert_recipe = ["--split-sections"]
 
     def match(self, url: str) -> bool:
         # GitBook-hosted only. Custom domains (docs.<vendor>) are recognized by
@@ -71,6 +70,8 @@ class GitBookPattern:
                 log.warning("gitbook.fetch_error", url=page, error=str(exc))
                 continue
             stem = urlparse(page).path.rstrip("/").rsplit("/", 1)[-1] or "page.md"
+            if not stem.endswith(".md"):
+                stem += ".md"  # normalize globs *.md; a miss here is silent content loss
             (raw_dir / f"{i:04d}-{stem}").write_text(
                 f"<!-- source: {page} -->\n\n{clean}\n", encoding="utf-8"
             )

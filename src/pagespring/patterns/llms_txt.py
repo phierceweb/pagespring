@@ -56,7 +56,6 @@ def _slug(url: str, section: str | None) -> str:
 
 class LlmsTxtPattern:
     name = "llms_txt"
-    convert_recipe = ["--split-sections"]
 
     def match(self, url: str) -> bool:
         u = url.rstrip("/")
@@ -71,13 +70,18 @@ class LlmsTxtPattern:
         md_urls: list[str] = []
         seen: set[str] = set()
         for m in _MD_URL_RE.findall(index):
+            # The .md must be in the PATH — a fragment ending in .md is an
+            # in-page anchor to a page already listed, not a page of its own.
+            if not urlparse(m).path.endswith(".md"):
+                continue
             if section and not m.startswith(section):
                 continue
             if m not in seen:
                 seen.add(m)
                 md_urls.append(m)
 
-        if len(md_urls) > _MAX_PAGES:
+        truncated = len(md_urls) > _MAX_PAGES
+        if truncated:
             log.warning("llms_txt.truncated", found=len(md_urls), cap=_MAX_PAGES)
             md_urls = md_urls[:_MAX_PAGES]
 
@@ -91,6 +95,8 @@ class LlmsTxtPattern:
                 log.warning("llms_txt.fetch_error", url=mu, error=str(exc))
                 continue
             stem = urlparse(mu).path.rstrip("/").rsplit("/", 1)[-1] or "page.md"
+            if not stem.endswith(".md"):
+                stem += ".md"  # normalize globs *.md; a miss here is silent content loss
             (raw_dir / f"{i:04d}-{stem}").write_text(
                 f"<!-- source: {mu} -->\n\n{body}\n", encoding="utf-8"
             )
@@ -99,7 +105,9 @@ class LlmsTxtPattern:
 
         slug = _slug(url, section)
         log.info("llms_txt.acquire", llms=llms_url, section=section, pages=saved, slug=slug)
-        return AcquireResult(raw_dir=raw_dir, kind="markdown", slug=slug, pages=saved)
+        return AcquireResult(
+            raw_dir=raw_dir, kind="markdown", slug=slug, pages=saved, truncated=truncated
+        )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         # The numeric filename prefix preserves llms.txt order under sort().

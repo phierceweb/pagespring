@@ -65,3 +65,24 @@ def test_acquire_recursive_orders_by_toc_excludes_meta(tmp_path, monkeypatch):
     assert "# Deploy" in text  # nested subdir file picked up recursively
     assert "MIT License" not in text  # meta excluded
     assert "/docs/{{version}}/routing" not in text  # the TOC file itself not emitted
+
+
+def _acquire_two_file_repo(tmp_path, monkeypatch):
+    monkeypatch.setattr(http, "fetch_text", _fake_fetch_text)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    return GitHubMarkdownPattern().acquire("https://github.com/laravel/docs", tmp_path)
+
+
+def test_capped_file_list_marks_truncated(tmp_path, monkeypatch):
+    """A repo with more markdown than the cap yields a partial deliverable — the
+    manifest must say so, or audit sees a healthy-looking doc."""
+    from pagespring.patterns import github_markdown as mod
+
+    monkeypatch.setattr(mod, "_MAX_FILES", 1)
+    acq = _acquire_two_file_repo(tmp_path, monkeypatch)
+    assert acq.truncated is True
+
+
+def test_uncapped_file_list_is_not_truncated(tmp_path, monkeypatch):
+    acq = _acquire_two_file_repo(tmp_path, monkeypatch)
+    assert acq.truncated is False

@@ -24,7 +24,6 @@ def _sample() -> manifest.Manifest:
         slug="docs-tableplus-com",
         kind="markdown",
         deliverable="docs-tableplus-com.md",
-        convert_recipe=["--split-sections"],
         pages=62,
         size_bytes=123,
         sha256="deadbeef",
@@ -42,12 +41,17 @@ def test_build_manifest_carries_all_fields():
     assert m["slug"] == "docs-tableplus-com"
     assert m["kind"] == "markdown"
     assert m["deliverable"] == "docs-tableplus-com.md"
-    assert m["convert_recipe"] == ["--split-sections"]
     assert m["pages"] == 62
     assert m["bytes"] == 123
     assert m["sha256"] == "deadbeef"
     assert m["images"] == 0
     assert m["ingested_at"] == "2026-06-14T17:23:01Z"
+
+
+def test_manifest_carries_no_conversion_instructions():
+    """pagespring records what a source IS, never how to convert it — that
+    decision is pagespeak's, and a hint staged here silently goes stale."""
+    assert "convert_recipe" not in _sample()
 
 
 def test_write_then_read_round_trips(tmp_path):

@@ -1,10 +1,11 @@
 """The per-slug ``manifest.json`` — the provenance record written beside each
 ``incoming/<slug>/`` deliverable.
 
-It records where a manual came from, which pattern acquired it, the downstream
-pagespeak ``convert_recipe`` hint, and a content hash — so the hand-off to
-pagespeak is self-describing, and so ``ingest --if-changed`` can tell whether a
-re-fetch produced anything new. Pure stdlib; no network, no pattern machinery.
+It records where a manual came from, which pattern acquired it, and a content
+hash — so the hand-off to pagespeak is self-describing, and so ``ingest
+--if-changed`` can tell whether a re-fetch produced anything new. Every field
+is an *acquisition* fact; nothing here instructs the downstream converter.
+Pure stdlib; no network, no pattern machinery.
 """
 
 from __future__ import annotations
@@ -17,9 +18,8 @@ from typing import NotRequired, TypedDict
 from pagespring import __version__
 
 MANIFEST_NAME = "manifest.json"
-# v2 added `title`; v3 added `etag`/`last_modified`. Additive only — read the
-# post-v1 keys with .get.
-SCHEMA_VERSION = 3
+# Post-v1 keys are NotRequired — read them with .get, older files lack them.
+SCHEMA_VERSION = 5
 
 
 class Manifest(TypedDict):
@@ -34,8 +34,8 @@ class Manifest(TypedDict):
     title: NotRequired[str | None]  # acquire-time source title; read via .get (v1 files lack it)
     etag: NotRequired[str | None]  # response validators from single-fetch acquires
     last_modified: NotRequired[str | None]
+    truncated: NotRequired[bool]  # a page cap cut the crawl short — the deliverable is partial
     deliverable: str
-    convert_recipe: list[str]
     pages: int | None
     bytes: int
     sha256: str
@@ -55,7 +55,6 @@ def build_manifest(
     slug: str,
     kind: str,
     deliverable: str,
-    convert_recipe: list[str],
     pages: int | None,
     size_bytes: int,
     sha256: str,
@@ -64,6 +63,7 @@ def build_manifest(
     title: str | None = None,
     etag: str | None = None,
     last_modified: str | None = None,
+    truncated: bool = False,
 ) -> Manifest:
     """Assemble a manifest from one ingest's facts (stamps schema + version)."""
     return {
@@ -76,8 +76,8 @@ def build_manifest(
         "title": title,
         "etag": etag,
         "last_modified": last_modified,
+        "truncated": truncated,
         "deliverable": deliverable,
-        "convert_recipe": convert_recipe,
         "pages": pages,
         "bytes": size_bytes,
         "sha256": sha256,

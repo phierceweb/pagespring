@@ -39,10 +39,16 @@ _BANNER_RE = re.compile(
 
 
 def discover_pages(llms_txt: str) -> list[str]:
-    """Ordered, de-duped per-page .md URLs from the llms.txt index."""
+    """Ordered, de-duped per-page .md URLs from the llms.txt index.
+
+    The ``.md`` must be in the path: an index may list in-page anchors whose
+    fragment ends in ``.md``, and those are links into a page already listed.
+    """
     seen: set[str] = set()
     pages: list[str] = []
     for url in _MD_URL_RE.findall(llms_txt):
+        if not urllib.parse.urlparse(url).path.endswith(".md"):
+            continue
         if url not in seen:
             seen.add(url)
             pages.append(url)

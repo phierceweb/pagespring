@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pagespring"
-version = "0.7.0"
+version = "0.8.0"
 description = "Acquire and normalize online documentation into clean, convertible source files — the acquisition front-end to pagespeak."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -29,7 +29,10 @@ dependencies = [
     "beautifulsoup4>=4.12",
     # YAML OpenAPI specs (JSON is stdlib); pure-data parser, no transport.
     "pyyaml>=6.0",
-    "pf-core[cli]~=0.13.0",
+    # Page counts for PDF deliverables. pdfium decrypts internally, so encrypted
+    # manuals count without a separate crypto dependency.
+    "pypdfium2>=4.30",
+    "pf-core[cli]~=0.15.1",
 ]
 
 [project.optional-dependencies]

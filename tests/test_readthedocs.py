@@ -48,7 +48,7 @@ def test_acquire_downloads_pdf_build(tmp_path, monkeypatch):
     assert seen["url"] == "https://requests.readthedocs.io/_/downloads/en/stable/pdf/"
     assert acq.kind == "pdf"
     assert acq.slug == "requests"
-    assert acq.pages == 1
+    assert acq.pages is None  # stub bytes carry no page tree to count
     out = p.normalize(acq, tmp_path)
     assert out.read_bytes() == _PDF
 

@@ -18,7 +18,6 @@ class _BodyPattern:
     """Fake whose normalized content varies with ``body`` between ingests."""
 
     name = "fake"
-    convert_recipe = ["--split-sections"]
 
     def __init__(self, body: str = "v1"):
         self.body = body
@@ -153,7 +152,6 @@ def _seed_validator_manifest(tmp_path, slug="fakeapp"):
             slug=slug,
             kind="pdf",
             deliverable=f"{slug}.pdf",
-            convert_recipe=[],
             pages=None,
             size_bytes=4,
             sha256=manifest.sha256_file(d / f"{slug}.pdf"),
@@ -258,7 +256,6 @@ def test_refresh_all_sweeps_every_slug_and_isolates_failures(tmp_path, monkeypat
                 slug=slug,
                 kind="html",
                 deliverable=f"{slug}.html",
-                convert_recipe=[],
                 pages=1,
                 size_bytes=len(body),
                 sha256=manifest.sha256_file(d / f"{slug}.html"),

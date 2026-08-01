@@ -4,6 +4,64 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.8.0] — 2026-08-01
+
+### Added
+
+- **Four new source shapes** — `docs_probe` recognizes **Hugo**, **ClickHelp**, and
+  **Paligo** by content (none emit a generator tag), and a top-level
+  **`adobe_helpx`** pattern acquires helpx.adobe.com product guides from their
+  TOC index.
+- **Image sidecar** — `incoming/<slug>/images.json` records each localized
+  image's source URL, validators, and sha256. `localize` reuses unchanged images
+  via conditional GET, replaces changed ones, and prunes orphans once a document
+  is fully localized; the CLI reports reused/pruned counts.
+- **Re-ingest keeps the image cache** — `images/` and the sidecar survive
+  re-ingest and `refresh`, so unchanged images are not re-downloaded. A re-ingest
+  still resets `images` to 0 and restores absolute refs; re-run `localize`.
+- **Crawl liveness** — queue-driven crawls bail when no page lands for
+  `CRAWL_STALL_AFTER_S` (`0` disables) instead of hanging on a trickling server.
+  A stalled crawl is marked `truncated`.
+- **Real PDF page counts** — `pages` on a PDF deliverable is the document's page
+  count, not the file count. `None` when a PDF is unreadable.
+- **New audit checks** — `crawl_truncated`, `single_page_crawl`, and the
+  corpus-level `duplicate_content` / `duplicate_source_url`, which compare slugs
+  against each other and so require `--all`.
+- **`pdf_url` rejects non-PDF payloads** (magic bytes) — a "PDF" URL that
+  redirects to an HTML landing page exits 2 instead of staging a fake `.pdf`.
+- **`zendesk_help`** can scope a crawl to a section or category URL;
+  **`github_markdown`** detects truncated listings; **`apple_help`** dedups the
+  two URL forms of one topic.
+
+### Changed
+
+- **Manifest schema v5** — `truncated` added (v4); `convert_recipe` removed (v5,
+  the first non-additive change). pagespring records what a source is; pagespeak
+  decides how to convert it. `pagespring patterns` lists names only.
+- **Deliverables carry no scripts, styles, or site chrome** — normalizers strip
+  `<script>`/`<style>`/`<noscript>`, and the per-page furniture each source
+  appends: Adobe's feedback widget, pagination, social share, promo cards and CTA
+  footer; Apple's PDF download block; Hugo's sidebar nav; Zendesk's
+  author-supplied embeds.
+- **`docs_probe` routing** — PDF payloads hand off to `pdf_url`, and the
+  ClickHelp and Paligo content tells are checked before the generator sniff.
+- **`adobe_helpx` declines `.pdf` URLs** so helpx PDFs keep routing to `pdf_url`.
+- **pf-core pin raised to `~=0.15.1`**; new runtime dependency `pypdfium2`.
+
+### Fixed
+
+- **`_hugo` crawled `/categories/` and `/tags/`** — Hugo's generated taxonomy
+  list pages are indexes of a manual, not part of it, and each duplicated the
+  home page.
+- **`_mkdocs` emitted every page twice** — the search index's page-level record
+  repeats the text of each of its sections; only the lead prose is kept.
+- **`archive_download` produced invalid, mis-ordered output** — members were
+  concatenated as whole standalone documents in lexical filename order. Now one
+  document, in EPUB spine order where an OPF is present.
+- **`llms_txt` / `gitbook` silently dropped pages** — a URL whose `.md` sits in
+  the fragment is an in-page anchor, not a page; it was fetched and counted, then
+  skipped by normalize's `*.md` glob.
+
 ## [0.7.0] — 2026-07-24
 
 ### Changed

@@ -39,20 +39,43 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
         raise InvalidInputError(f"{idx_url} 'docs' is not a list of records")
 
     # Group section records (location has a #anchor) under their page.
-    bodies: dict[str, list[str]] = {}
+    pages: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for rec in records:
         loc = str(rec.get("location", ""))
         path, _, anchor = loc.partition("#")
-        if path not in bodies:
-            bodies[path] = []
+        if path not in pages:
+            pages[path] = {"title": "", "text": "", "sections": []}
             order.append(path)
-        heading = "##" if anchor else "#"
         rec_title = str(rec.get("title", "")).strip()
         text = str(rec.get("text", "")).strip()
-        block = f"{heading} {rec_title}\n\n{text}" if rec_title else text
-        if block.strip():
-            bodies[path].append(block)
+        if anchor:
+            pages[path]["sections"].append((rec_title, text))
+        else:
+            pages[path]["title"] = rec_title
+            pages[path]["text"] = text
+
+    bodies: dict[str, list[str]] = {}
+    for path, page in pages.items():
+        sections: list[tuple[str, str]] = page["sections"]
+        lead = page["text"]
+        # The page-level record holds the WHOLE page: lead prose plus every
+        # section's text again. Keep only the prose before the first section,
+        # or half the deliverable is a verbatim second copy of itself.
+        if sections and lead:
+            first = sections[0][1]
+            if first and first in lead:
+                lead = lead.split(first, 1)[0].strip()
+        blocks: list[str] = []
+        if page["title"]:
+            blocks.append(f"# {page['title']}" + (f"\n\n{lead}" if lead else ""))
+        elif lead:
+            blocks.append(lead)
+        for sec_title, sec_text in sections:
+            block = f"## {sec_title}\n\n{sec_text}" if sec_title else sec_text
+            if block.strip():
+                blocks.append(block)
+        bodies[path] = blocks
 
     raw_dir = workdir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)

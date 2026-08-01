@@ -58,3 +58,28 @@ def test_acquire_filters_to_section_and_concats(tmp_path, monkeypatch):
     # The platform's per-page "Documentation Index" banner is stripped.
     assert "Documentation Index" not in text
     assert "discover all available pages" not in text
+
+
+def test_anchor_links_ending_in_md_are_not_pages(tmp_path, monkeypatch):
+    """Same defect as gitbook: a `.md` in the fragment is an in-page anchor, not
+    a page, and its path-derived stem has no .md for normalize's glob to find."""
+    index = (
+        "- [A](https://ex.com/a.md)\n"
+        "- [Anchor](https://ex.com/a#section-one.md)\n"
+        "- [B](https://ex.com/b.md)\n"
+    )
+
+    def fake_fetch(url, **kw):
+        if url.endswith("llms.txt"):
+            return url, index
+        return url, f"# Page\n\nBody of {url}\n"
+
+    monkeypatch.setattr(http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    p = LlmsTxtPattern()
+    acq = p.acquire("https://ex.com/llms.txt", tmp_path)
+    out = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert acq.pages == 2, f"expected 2 real pages, got {acq.pages}"
+    assert out.count("<!-- source:") == acq.pages

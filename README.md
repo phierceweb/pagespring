@@ -12,7 +12,7 @@ HTML/markdown file with absolute asset URLs under `incoming/<slug>/`. That clean
 file is the deliverable; converting it into the finished RAG corpus is a separate
 step (pagespeak) that consumes `incoming/` on its own — pagespring never runs it.
 
-Lean by design: [`pf-core[cli]`](https://github.com/phierceweb/pf-core) ([PyPI](https://pypi.org/project/pf-core/)) + `beautifulsoup4`, stdlib fetch, no ML stack.
+Lean by design: [`pf-core[cli]`](https://github.com/phierceweb/pf-core) ([PyPI](https://pypi.org/project/pf-core/)) + `beautifulsoup4`, `pyyaml`, and `pypdfium2` for PDF page counts. Stdlib fetch, no ML stack.
 
 ## Intended use
 

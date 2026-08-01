@@ -135,3 +135,34 @@ def test_acquire_resolves_images_strips_footer_absolutizes(tmp_path, monkeypatch
     assert "(https://docs.x.com/setup)" in text
     # Both pages present, in llms.txt order.
     assert text.index("# Intro") < text.index("# Setup")
+
+
+def test_anchor_links_ending_in_md_are_not_pages(tmp_path, monkeypatch):
+    """Stripe's llms.txt carries anchors like
+    `/api/payment_intents/create#create_payment_intent-payment_method_types.md`.
+    The `.md` is in the FRAGMENT, not the path: it is a link into a page already
+    listed, and urlparse().path then yields a stem with no .md — so acquire
+    counted the file and normalize's *.md glob dropped it (473 staged, 471 shipped)."""
+    llms = (
+        "- [A](https://ex.com/a.md)\n"
+        "- [Anchor](https://ex.com/a#section-one.md)\n"
+        "- [B](https://ex.com/b.md)\n"
+    )
+
+    def fake_fetch(url, **kw):
+        if url.endswith("/llms.txt"):
+            return url, llms
+        return url, f"# Page\n\nBody of {url}\n"
+
+    monkeypatch.setattr(http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    p = GitBookPattern()
+    acq = p.acquire("https://ex.com", tmp_path)
+    out = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert "#section-one" not in out, "an in-page anchor was fetched as its own page"
+    assert acq.pages == 2, f"expected 2 real pages, got {acq.pages}"
+    assert out.count("<!-- source:") == acq.pages, (
+        f"manifest will claim {acq.pages} pages but {out.count('<!-- source:')} are in the file"
+    )

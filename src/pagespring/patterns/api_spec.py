@@ -91,7 +91,6 @@ def _title_slug(data: dict[str, Any], fmt: str, src: str) -> tuple[str, str]:
 
 class ApiSpecPattern:
     name = "api_spec"
-    convert_recipe = ["--split-sections"]
 
     def match(self, url: str) -> bool:
         seg = _last_segment(url)

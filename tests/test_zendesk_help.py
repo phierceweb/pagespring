@@ -37,6 +37,36 @@ def _fake_fetch_text(url, **kwargs):
     return url, _PAGE1
 
 
+def test_article_bodies_are_stripped_of_scripts(tmp_path, monkeypatch):
+    """Zendesk article bodies are author-supplied HTML — they carry embed and
+    tracking <script>, which is page furniture, not manual content."""
+    dirty = json.dumps(
+        {
+            "articles": [
+                {
+                    "title": "Embeds",
+                    "body": (
+                        '<p>Watch this.</p><script async="async" src="https://www.tiktok.com/embed.js">'
+                        "</script><style>.x{color:red}</style><p>Then read on.</p>"
+                    ),
+                    "html_url": "https://support.gingerlabs.com/hc/en-us/articles/9",
+                },
+            ],
+            "next_page": None,
+        }
+    )
+    monkeypatch.setattr(http, "fetch_text", lambda url, **kw: (url, dirty))
+    monkeypatch.setattr(http, "polite_sleep", lambda: None)
+
+    acq = ZendeskHelpPattern().acquire("https://support.gingerlabs.com/hc/en-us", tmp_path)
+    merged = "".join(p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*.html")))
+
+    assert "tiktok.com/embed.js" not in merged
+    assert "<script" not in merged
+    assert "<style" not in merged
+    assert "Watch this." in merged and "Then read on." in merged  # content survives
+
+
 def test_match():
     p = ZendeskHelpPattern()
     assert p.match("https://support.gingerlabs.com/hc/en-us")
@@ -69,6 +99,63 @@ def test_api_page_cap_warns(tmp_path, monkeypatch):
 
     assert acq.pages == 1  # only page 1's article fetched
     assert any(event == "zendesk_help.capped" for event, _ in spy.warnings)
+
+
+def _spy_fetch(seen):
+    def fetch(url, **kwargs):
+        seen.append(url)
+        return url, json.dumps(
+            {
+                "articles": [
+                    {
+                        "title": "Setting up VocAlign 6",
+                        "body": "<p>Insert the plug-in.</p>",
+                        "html_url": "https://synchroarts.zendesk.com/hc/en-us/articles/9",
+                    }
+                ],
+                "next_page": None,
+            }
+        )
+
+    return fetch
+
+
+def test_section_url_scopes_to_that_section(tmp_path, monkeypatch):
+    """A /sections/<id> URL pulls only that section, not the whole help center."""
+    seen: list[str] = []
+    monkeypatch.setattr(http, "fetch_text", _spy_fetch(seen))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = ZendeskHelpPattern().acquire(
+        "https://synchroarts.zendesk.com/hc/en-us/sections/23943152503959-VocAlign-6", tmp_path
+    )
+
+    assert "/api/v2/help_center/en-us/sections/23943152503959/articles.json" in seen[0]
+    assert acq.pages == 1
+
+
+def test_category_url_scopes_to_that_category(tmp_path, monkeypatch):
+    seen: list[str] = []
+    monkeypatch.setattr(http, "fetch_text", _spy_fetch(seen))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    ZendeskHelpPattern().acquire(
+        "https://synchroarts.zendesk.com/hc/en-us/categories/4408150081431-Products", tmp_path
+    )
+
+    assert "/api/v2/help_center/en-us/categories/4408150081431/articles.json" in seen[0]
+
+
+def test_unscoped_url_still_pulls_whole_help_center(tmp_path, monkeypatch):
+    """Regression: the bare /hc/<locale> form must keep using the global endpoint."""
+    seen: list[str] = []
+    monkeypatch.setattr(http, "fetch_text", _spy_fetch(seen))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    ZendeskHelpPattern().acquire("https://support.gingerlabs.com/hc/en-us", tmp_path)
+
+    assert "/api/v2/help_center/en-us/articles.json" in seen[0]
+    assert "/sections/" not in seen[0]
 
 
 def test_acquire_paginates_and_merges(tmp_path, monkeypatch):

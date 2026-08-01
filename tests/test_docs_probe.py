@@ -121,3 +121,79 @@ def test_normalize_html_escapes_title(tmp_path):
     out = DocsProbePattern().normalize(acq, tmp_path)
     text = out.read_text(encoding="utf-8")
     assert "<title>Tips &amp; &lt;Tricks&gt;</title>" in text
+
+
+def test_a_url_that_serves_a_pdf_is_handed_to_pdf_url(tmp_path, monkeypatch):
+    """Celemony serves the Melodyne manual as application/pdf from an
+    extensionless path (/M5/pdf/melodyneStudio5/en), so pdf_url.match declines
+    it and this catch-all receives it. docs_probe is the *content* prober — a
+    PDF body must route, not raise 'unrecognized docs site'."""
+    monkeypatch.setattr(http, "fetch_text", lambda u, **k: (u, "%PDF-1.7 body"))
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda u, **k: (u, b"%PDF-1.7 body", {"etag": None, "last_modified": None}),
+    )
+
+    probe = DocsProbePattern()
+    acq = probe.acquire("https://helpcenter.celemony.com/M5/pdf/melodyneStudio5/en", tmp_path)
+
+    assert acq.kind == "pdf"
+    assert next(acq.raw_dir.glob("*.pdf")).exists()
+
+    # normalize must pass the PDF through. Globbing *.html here finds nothing and
+    # writes a 0-byte file, which orchestrate rejects as EmptyOutputError.
+    out = probe.normalize(acq, tmp_path)
+    assert out.suffix == ".pdf"
+    assert out.read_bytes().startswith(b"%PDF-")
+
+
+def test_soft_404_search_index_is_not_mistaken_for_mkdocs(tmp_path, monkeypatch):
+    """The MkDocs probe must validate the index, not just that the URL fetched.
+
+    synchroarts.com returns 200 with HTML for arbitrary paths, so
+    `search/search_index.json` "existed" and docs_probe reported
+    `generator=mkdocs via=search_index` — then _mkdocs.acquire rejected it. A
+    site with a catch-all 200 gets misrouted and the real error is masked.
+    """
+    home = "<html><head><title>Manual</title></head><body><article>x</article></body></html>"
+
+    def fetch(url, **kwargs):
+        if url.endswith("search/search_index.json"):
+            return url, home  # soft 404: HTML, not an index
+        if url.endswith("/llms.txt"):
+            raise OSError("404")
+        return url, home
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+
+    with pytest.raises(InvalidInputError, match="unrecognized docs site"):
+        DocsProbePattern().acquire("https://www.synchroarts.com/manuals/x/welcome.html", tmp_path)
+
+
+def test_clickhelp_is_detected_without_a_generator_meta(tmp_path, monkeypatch):
+    """ClickHelp ships no <meta name="generator">, so the meta sniff can never
+    claim it — detection has to key on its own asset tells."""
+    from pagespring.patterns import _clickhelp
+
+    home = (
+        '<html><head><link href="../_webHelpStyles/CHWebHelp.css"></head>'
+        '<body class="WebHelp_body"><div id="pnlTopicContentContainer">x</div></body></html>'
+    )
+    monkeypatch.setattr(http, "fetch_text", lambda u, **k: (u, home))
+    called = {}
+
+    def spy(url, workdir, *, slug, title):
+        called["url"] = url
+        raw = workdir / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        return AcquireResult(raw_dir=raw, kind="html", slug=slug, pages=1, title=title)
+
+    monkeypatch.setattr(_clickhelp, "acquire", spy)
+
+    acq = DocsProbePattern().acquire(
+        "https://vendor.example/manuals/Widget/Manual/HTML/welcome.html", tmp_path
+    )
+
+    assert called["url"].endswith("/HTML/welcome.html")
+    assert acq.slug == "widget", "slug must come from the manual path, not the host"

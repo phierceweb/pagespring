@@ -12,13 +12,19 @@ import re
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from pf_core.exceptions import InvalidInputError
 from pf_core.log import get_logger
 from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
+from pagespring.patterns import _pdf
 
 log = get_logger(__name__)
+
+# Some servers prepend whitespace/BOM, so scan a window rather than the first byte.
+_PDF_MAGIC = b"%PDF-"
+_MAGIC_WINDOW = 1024
 
 
 def _slugify(name: str) -> str:
@@ -39,15 +45,6 @@ class PdfUrlPattern:
     name = "pdf_url"
     single_fetch = True  # one-URL source; refresh may probe its stored validators
 
-    # Vendor PDF manuals rarely carry a usable heading outline, so llm_full
-    # fixes levels; split for RAG.
-    convert_recipe = [
-        "--normalize-headings",
-        "--normalize-headings-mode",
-        "llm_full",
-        "--split-sections",
-    ]
-
     def match(self, url: str) -> bool:
         path = urlparse(url).path.lower().rstrip("/")
         return path.endswith(".pdf") or path.endswith("/pdf")  # .pdf or RTD /pdf/
@@ -57,13 +54,23 @@ class PdfUrlPattern:
         raw_dir.mkdir(parents=True, exist_ok=True)
         slug = _slug_from_url(url)
         _final, data, meta = http.fetch_bytes_meta(url)
-        (raw_dir / f"{slug}.pdf").write_bytes(data)
-        log.info("pdf_url.acquire", url=url, slug=slug, bytes=len(data))
+        # A vendor "PDF" URL that 301s to an HTML landing page still returns 200;
+        # staged unchecked it becomes a .pdf that isn't one, and nothing
+        # downstream looks inside a kind:pdf deliverable.
+        if _PDF_MAGIC not in data[:_MAGIC_WINDOW]:
+            raise InvalidInputError(
+                f"{url} returned {len(data)} bytes that are not a PDF "
+                f"(starts {data[:16]!r}) — the URL probably redirects to an HTML page."
+            )
+        pdf = raw_dir / f"{slug}.pdf"
+        pdf.write_bytes(data)
+        pages = _pdf.page_count(pdf)
+        log.info("pdf_url.acquire", url=url, slug=slug, bytes=len(data), pages=pages)
         return AcquireResult(
             raw_dir=raw_dir,
             kind="pdf",
             slug=slug,
-            pages=1,
+            pages=pages,
             etag=meta["etag"],
             last_modified=meta["last_modified"],
         )

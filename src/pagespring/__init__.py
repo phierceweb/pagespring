@@ -6,7 +6,8 @@ file with absolute asset URLs under ``incoming/<slug>/``. That clean file is the
 deliverable; *conversion* to RAG markdown is a separate concern (**pagespeak**)
 that consumes ``incoming/`` independently — this package neither runs nor imports it.
 
-This package stays dependency-light (pf-core[cli] + beautifulsoup4).
+This package stays dependency-light (pf-core[cli], beautifulsoup4, pyyaml,
+pypdfium2).
 """
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"

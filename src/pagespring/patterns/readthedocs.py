@@ -10,10 +10,6 @@ other fetch failure propagates (exit 4).
 
 Explicit download URLs (path ending ``.pdf``/``/pdf``, or any path under
 ``/_/downloads/``) are declined so they keep routing to pdf_url unchanged.
-
-**Note on convert_recipe:** The recipe is PDF-tuned (``--normalize-headings …
-llm_full``). The HTML fallback path tolerates this recipe without issues; both
-paths share the same downstream convert treatment.
 """
 
 from __future__ import annotations
@@ -28,7 +24,7 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns import _sphinx
+from pagespring.patterns import _pdf, _sphinx
 from pagespring.patterns.docs_probe import DocsProbePattern
 
 log = get_logger(__name__)
@@ -46,14 +42,6 @@ def _lang_version(path: str) -> tuple[str, str]:
 
 class ReadTheDocsPattern:
     name = "readthedocs"
-
-    # Same downstream treatment as pdf_url: PDF manuals need heading repair + split.
-    convert_recipe = [
-        "--normalize-headings",
-        "--normalize-headings-mode",
-        "llm_full",
-        "--split-sections",
-    ]
 
     def match(self, url: str) -> bool:
         p = urlparse(url)
@@ -83,9 +71,13 @@ class ReadTheDocsPattern:
             raise InvalidInputError(f"{dl} did not serve a PDF — unexpected RTD response")
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
-        (raw_dir / f"{slug}.pdf").write_bytes(data)
-        log.info("readthedocs.acquire", url=url, download=dl, slug=slug, bytes=len(data))
-        return AcquireResult(raw_dir=raw_dir, kind="pdf", slug=slug, pages=1)
+        pdf = raw_dir / f"{slug}.pdf"
+        pdf.write_bytes(data)
+        pages = _pdf.page_count(pdf)
+        log.info(
+            "readthedocs.acquire", url=url, download=dl, slug=slug, bytes=len(data), pages=pages
+        )
+        return AcquireResult(raw_dir=raw_dir, kind="pdf", slug=slug, pages=pages)
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         if acq.kind == "pdf":

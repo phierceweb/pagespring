@@ -48,8 +48,8 @@ def _default_branch(owner: str, repo: str) -> str:
     return str(json.loads(body).get("default_branch", "main"))
 
 
-def _list_md(owner: str, repo: str, branch: str, subdir: str) -> dict[str, str]:
-    """All .md blobs under subdir (recursive) -> {path: raw download URL}."""
+def _list_md(owner: str, repo: str, branch: str, subdir: str) -> tuple[dict[str, str], bool]:
+    """All .md blobs under subdir (recursive) -> ({path: raw download URL}, tree_truncated)."""
     _f, body = http.fetch_text(f"{_API}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1")
     data = json.loads(body)
     prefix = (subdir.rstrip("/") + "/") if subdir else ""
@@ -58,9 +58,12 @@ def _list_md(owner: str, repo: str, branch: str, subdir: str) -> dict[str, str]:
         path = node.get("path", "")
         if node.get("type") == "blob" and path.lower().endswith(".md") and path.startswith(prefix):
             out[path] = f"{_RAW}/{owner}/{repo}/{branch}/{path}"
-    if data.get("truncated"):
+    # GitHub's own signal: the tree listing itself was cut short, so files are
+    # missing before any cap of ours applies.
+    tree_truncated = bool(data.get("truncated"))
+    if tree_truncated:
         log.warning("github_markdown.tree_truncated", repo=f"{owner}/{repo}")
-    return out
+    return out, tree_truncated
 
 
 def _basename(path: str) -> str:
@@ -87,7 +90,6 @@ def _ordered_content(md: dict[str, str]) -> list[str]:
 
 class GitHubMarkdownPattern:
     name = "github_markdown"
-    convert_recipe = ["--split-sections"]
 
     def match(self, url: str) -> bool:
         p = urlparse(url)
@@ -98,8 +100,9 @@ class GitHubMarkdownPattern:
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         owner, repo, branch, subdir = _parse_repo(url)
         branch = branch or _default_branch(owner, repo)
-        md = _list_md(owner, repo, branch, subdir)
+        md, tree_truncated = _list_md(owner, repo, branch, subdir)
         order = _ordered_content(md)
+        truncated = len(order) > _MAX_FILES or tree_truncated
         if len(order) > _MAX_FILES:
             log.warning("github_markdown.capped", found=len(order), cap=_MAX_FILES)
             order = order[:_MAX_FILES]
@@ -123,9 +126,16 @@ class GitHubMarkdownPattern:
         slug_base = subdir.rstrip("/").split("/")[-1] if subdir else f"{owner}-{repo}"
         slug = slugify(slug_base) or "docs"
         log.info(
-            "github_markdown.acquire", repo=f"{owner}/{repo}", branch=branch, pages=saved, slug=slug
+            "github_markdown.acquire",
+            repo=f"{owner}/{repo}",
+            branch=branch,
+            pages=saved,
+            slug=slug,
+            truncated=truncated,
         )
-        return AcquireResult(raw_dir=raw_dir, kind="markdown", slug=slug, pages=saved)
+        return AcquireResult(
+            raw_dir=raw_dir, kind="markdown", slug=slug, pages=saved, truncated=truncated
+        )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         parts = [p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*.md"))]

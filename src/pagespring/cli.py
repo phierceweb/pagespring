@@ -184,7 +184,11 @@ def localize(
             typer.echo(f"skip {s}: {exc}", err=True)
             continue
         tail = "done" if r["remaining"] == 0 else f"{r['remaining']} remaining — re-run to continue"
-        typer.echo(f"{s}: +{r['localized']} images (total {r['images_total']}) — {tail}")
+        reused = f", {r['reused']} reused" if r["reused"] else ""
+        pruned = f", {r['pruned']} pruned" if r["pruned"] else ""
+        typer.echo(
+            f"{s}: +{r['localized']} images{reused}{pruned} (total {r['images_total']}) — {tail}"
+        )
 
 
 @app.command("audit")
@@ -270,10 +274,9 @@ def _refresh_summary(outcomes: list[RefreshOutcome]) -> str:
 
 @app.command()
 def patterns() -> None:
-    """List the registered source patterns and their convert recipes."""
+    """List the registered source patterns, in match order."""
     for p in PATTERNS:
-        recipe = " ".join(p.convert_recipe) or "(none)"
-        typer.echo(f"{p.name:12} convert-recipe: {recipe}")
+        typer.echo(p.name)
 
 
 @app.command("classify")

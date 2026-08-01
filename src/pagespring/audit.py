@@ -17,6 +17,7 @@ from pf_core.log import get_logger
 
 from pagespring import images, manifest
 from pagespring.config import cfg
+from pagespring.registry import pattern_by_name
 
 log = get_logger(__name__)
 
@@ -60,6 +61,37 @@ def audit_slug(slug: str) -> list[Finding]:
             _f("sha_mismatch", "error", "on-disk content differs from the staged sha256")
         )
 
+    # A page cap cut the crawl short, so the deliverable is partial. Nothing about
+    # the content shows it — when the source grew between versions, the truncated
+    # copy is still bigger than the last one and every other check passes.
+    if m.get("truncated"):
+        findings.append(
+            _f(
+                "crawl_truncated",
+                "error",
+                f"crawl hit its page cap at {m['pages']} pages — the deliverable is partial",
+            )
+        )
+
+    # A crawl pattern that returned one page collapsed: the seed named a single
+    # page rather than the index. Unknown pattern ⇒ unclassifiable, so stay quiet;
+    # a PDF deliverable is one file however it was fetched (readthedocs serves a
+    # PDF build), so kind rules it out before the pattern does.
+    pattern = pattern_by_name(m["pattern"])
+    if (
+        m["kind"] != "pdf"
+        and pattern is not None
+        and not getattr(pattern, "single_fetch", False)
+        and m["pages"] == 1
+    ):
+        findings.append(
+            _f(
+                "single_page_crawl",
+                "error",
+                f"{m['pattern']} yielded 1 page — seed URL likely names a page, not the index",
+            )
+        )
+
     if m["kind"] in ("markdown", "html"):
         if m["images"] > 0:
             remaining = images.count_remote_images(deliverable)
@@ -87,8 +119,45 @@ def audit_slug(slug: str) -> list[Finding]:
     return findings
 
 
+def _corpus_findings(slugs: list[str]) -> dict[str, list[Finding]]:
+    """Checks that need the WHOLE corpus, keyed by the slug they attach to.
+
+    The defect exists only in the relation between two slugs, so no per-slug
+    check can reach it. Derived fresh from the manifests rather than persisted: a duplicate may be
+    ingested *after* the slug it collides with, so nothing written at ingest
+    time can be trusted to still be complete.
+    """
+    incoming = Path(cfg.INCOMING_DIR)
+    by_sha: dict[str, list[str]] = {}
+    by_url: dict[str, list[str]] = {}
+    for slug in slugs:
+        m = manifest.read_manifest(incoming / slug)
+        if m is None:
+            continue
+        by_sha.setdefault(m["sha256"], []).append(slug)
+        by_url.setdefault(m["source_url"], []).append(slug)
+
+    out: dict[str, list[Finding]] = {}
+    # Same URL under two slugs is an error, not noise: pagespeak names its output
+    # after the source file, so the second claim deadlocks the hand-off and BOTH
+    # slugs get skipped. Same bytes from different URLs is only suspicious.
+    checks: tuple[tuple[dict[str, list[str]], str, Level, str], ...] = (
+        (by_sha, "duplicate_content", "warning", "byte-identical content"),
+        (by_url, "duplicate_source_url", "error", "the same source_url"),
+    )
+    for group, check, level, what in checks:
+        for members in group.values():
+            if len(members) < 2:
+                continue
+            for slug in members:
+                others = ", ".join(s for s in members if s != slug)
+                out.setdefault(slug, []).append(_f(check, level, f"{what} as: {others}"))
+    return out
+
+
 def audit_all() -> list[tuple[str, list[Finding]]]:
-    """Audit every ``incoming/<slug>/`` in sorted order."""
+    """Audit every ``incoming/<slug>/`` in sorted order, plus corpus-wide checks."""
     incoming = Path(cfg.INCOMING_DIR)
     slugs = sorted(p.name for p in incoming.glob("*") if p.is_dir()) if incoming.is_dir() else []
-    return [(s, audit_slug(s)) for s in slugs]
+    corpus = _corpus_findings(slugs)
+    return [(s, audit_slug(s) + corpus.get(s, [])) for s in slugs]

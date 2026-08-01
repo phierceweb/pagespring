@@ -48,3 +48,9 @@ def absolutize_refs(root: Tag, page_url: str) -> None:
                 and not val.startswith(("http://", "https://", "#", "mailto:", "data:"))
             ):
                 tag[attr] = urljoin(page_url, val)
+
+
+def strip_scripts(root: Tag) -> None:
+    """Drop <script>/<style>/<noscript> from an extracted fragment."""
+    for junk in root.find_all(["script", "style", "noscript"]):
+        junk.decompose()

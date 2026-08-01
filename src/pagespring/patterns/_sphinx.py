@@ -10,6 +10,7 @@ warns — a silently truncated crawl reads as a complete one.
 
 from __future__ import annotations
 
+import time
 from collections import deque
 from pathlib import Path
 from urllib.parse import urldefrag, urljoin, urlparse
@@ -20,7 +21,9 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs
+from pagespring.config import cfg
+from pagespring.liveness import ProgressWatchdog
+from pagespring.patterns._site import absolutize_refs, strip_scripts
 
 log = get_logger(__name__)
 
@@ -60,6 +63,7 @@ def _extract(html: str, page_url: str) -> str | None:
         return None
     for el in root.select("a.headerlink"):
         el.decompose()
+    strip_scripts(root)
     absolutize_refs(root, page_url)
     return str(root)
 
@@ -79,7 +83,13 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     seen: set[str] = {base}
     queue: deque[str] = deque([base])
     saved = 0
+    watchdog = ProgressWatchdog(stall_after_s=cfg.CRAWL_STALL_AFTER_S, now=time.monotonic)
     while queue and saved < _MAX_PAGES:
+        if watchdog.stalled():
+            log.warning(
+                "sphinx.stalled", saved=saved, idle_s=round(watchdog.idle_s()), queued=len(queue)
+            )
+            break
         url = queue.popleft()
         try:
             final, body = http.fetch_text(url)
@@ -95,6 +105,7 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
                 encoding="utf-8",
             )
             saved += 1
+            watchdog.progress()
         else:
             log.warning("sphinx.no_content_root", url=url)
         for a in BeautifulSoup(body, "html.parser").find_all("a"):
@@ -108,5 +119,8 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
         http.polite_sleep()
     if queue:
         log.warning("sphinx.capped", saved=saved, cap=_MAX_PAGES, queued=len(queue))
+    truncated = bool(queue)
     log.info("sphinx.acquire", base=base, pages=saved, slug=slug)
-    return AcquireResult(raw_dir=raw_dir, kind="html", slug=slug, pages=saved, title=title)
+    return AcquireResult(
+        raw_dir=raw_dir, kind="html", slug=slug, pages=saved, title=title, truncated=truncated
+    )

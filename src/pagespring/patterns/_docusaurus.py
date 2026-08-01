@@ -21,7 +21,7 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs
+from pagespring.patterns._site import absolutize_refs, strip_scripts
 
 log = get_logger(__name__)
 
@@ -49,6 +49,7 @@ def _extract(html: str, page_url: str) -> str | None:
         return None
     for el in article.select(_CHROME_CSS):
         el.decompose()
+    strip_scripts(article)
     absolutize_refs(article, page_url)
     return str(article)
 
@@ -63,7 +64,8 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     except ET.ParseError as exc:
         raise InvalidInputError(f"{origin}/sitemap.xml is not a valid sitemap") from exc
     urls = [u for u in locs if _keep(u, base)]
-    if len(urls) > _MAX_PAGES:
+    truncated = len(urls) > _MAX_PAGES
+    if truncated:
         log.warning("docusaurus.truncated", found=len(urls), cap=_MAX_PAGES)
         urls = urls[:_MAX_PAGES]
 
@@ -89,4 +91,6 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
         saved += 1
         http.polite_sleep()
     log.info("docusaurus.acquire", base=base, pages=saved, slug=slug)
-    return AcquireResult(raw_dir=raw_dir, kind="html", slug=slug, pages=saved, title=title)
+    return AcquireResult(
+        raw_dir=raw_dir, kind="html", slug=slug, pages=saved, title=title, truncated=truncated
+    )

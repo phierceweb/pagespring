@@ -132,3 +132,19 @@ def test_dotted_version_dir_start_url_stays_in_dir(tmp_path, monkeypatch):
     for f in sorted(acq.raw_dir.glob("*.html")):
         first_line = f.read_text(encoding="utf-8").splitlines()[0]
         assert first_line.startswith("<!-- source: https://docs.ex.org/3.11/")
+
+
+def test_extract_drops_scripts_and_styles():
+    """Sphinx themes inject analytics and inline theme CSS into the content root."""
+    html = """<html><body><div role="main">
+      <h1>Page</h1><p>Real content.</p>
+      <script src="https://analytics.example/track.js"></script>
+      <script>var readthedocs = 1;</script>
+      <style>.rst-content{color:red}</style>
+      <noscript>Enable JS</noscript>
+    </div></body></html>"""
+    frag = _sphinx._extract(html, "https://docs.ex.org/en/stable/page.html")
+    assert frag is not None
+    assert "Real content." in frag
+    assert "<script" not in frag and "<style" not in frag and "<noscript" not in frag
+    assert "analytics.example" not in frag

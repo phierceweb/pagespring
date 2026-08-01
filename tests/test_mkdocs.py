@@ -71,3 +71,33 @@ def test_acquire_uses_post_redirect_base_for_source_comments(tmp_path, monkeypat
     guide = sorted(acq.raw_dir.glob("*.md"))[1].read_text(encoding="utf-8")
     assert "source: https://x.example.com/en/latest/guide/" in guide
     assert "source: https://x.example.com/guide/" not in guide
+
+
+def test_page_record_text_is_not_repeated_under_its_sections(tmp_path, monkeypatch):
+    """MkDocs' index carries each page TWICE: one page-level record holding the
+    whole page's text, then one record per section holding the same text again.
+    Emitting both made half of the mkdocs deliverable a verbatim duplicate."""
+    index = json.dumps(
+        {
+            "docs": [
+                {
+                    "location": "guide/",
+                    "title": "Guide",
+                    "text": "Intro blurb. Install step. Config step.",
+                },
+                {"location": "guide/#install", "title": "Install", "text": "Install step."},
+                {"location": "guide/#config", "title": "Config", "text": "Config step."},
+            ]
+        }
+    )
+    monkeypatch.setattr(http, "fetch_text", lambda url, **kw: (url, index))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = _mkdocs.acquire("https://ex.org", tmp_path, slug="ex", title=None)
+    merged = "".join(p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*")))
+
+    assert "# Guide" in merged  # the page title still heads its section
+    assert "## Install" in merged and "## Config" in merged
+    assert merged.count("Install step.") == 1, "page blob duplicated its own sections"
+    assert merged.count("Config step.") == 1
+    assert "Intro blurb." in merged, "page-level prose before the first section is content"
