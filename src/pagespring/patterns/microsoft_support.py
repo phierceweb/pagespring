@@ -24,7 +24,7 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs
+from pagespring.patterns._site import absolutize_refs, flatten_responsive_images
 
 log = get_logger(__name__)
 
@@ -58,6 +58,7 @@ def _title_and_body(page_html: str, page_url: str) -> tuple[str | None, str | No
         junk.decompose()
     for junk in body.find_all(id=_CHROME_RE):
         junk.decompose()
+    flatten_responsive_images(body)
     absolutize_refs(body, page_url)  # articles serve relative media/ paths
     h1 = soup.find("h1")
     title = h1.get_text(" ", strip=True) if h1 else ""
@@ -76,9 +77,14 @@ def _locale(url: str) -> str:
     return m.group(1) if m else "en-us"
 
 
-def _sitemap_articles(product: str, locale: str) -> list[str]:
-    """Article URLs from the per-product sitemap pages (…_1.xml, _2.xml, …);
-    empty list when the product has no sitemap (caller falls back to the hub)."""
+def _sitemap_articles(product: str, locale: str) -> tuple[list[str], bool]:
+    """Article URLs from the per-product sitemap pages (…_1.xml, _2.xml, …), and
+    whether enumeration ended early; empty list when the product has no sitemap
+    (caller falls back to the hub).
+
+    The abort has to travel: the articles it cost were never discovered, so they
+    can't be counted one by one the way a failed page fetch can.
+    """
     links: list[str] = []
     n = 1
     while True:
@@ -92,13 +98,14 @@ def _sitemap_articles(product: str, locale: str) -> list[str]:
                 log.warning(
                     "microsoft_support.sitemap_error", url=url, status=exc.code, pages=n - 1
                 )
+                return links, True
             break
         except Exception as exc:  # network/timeout mid-crawl — truncation, not the end
             log.warning("microsoft_support.sitemap_error", url=url, error=str(exc), pages=n - 1)
-            break
+            return links, True
         links.extend(_LOC_RE.findall(xml))
         n += 1
-    return links
+    return links, False
 
 
 class MicrosoftSupportPattern:
@@ -109,7 +116,7 @@ class MicrosoftSupportPattern:
 
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         slug = _slug(url)
-        links = _sitemap_articles(slug, _locale(url))
+        links, sitemap_aborted = _sitemap_articles(slug, _locale(url))
         mode = "sitemap"
         if not links:
             mode = "hub"  # no per-product sitemap — scrape the hub's links
@@ -121,13 +128,14 @@ class MicrosoftSupportPattern:
                     seen.add(full)
                     links.append(full)
 
-        truncated = len(links) > _MAX
-        if truncated:
+        truncated = sitemap_aborted or len(links) > _MAX
+        if len(links) > _MAX:
             log.warning("microsoft_support.capped", found=len(links), cap=_MAX)
 
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
         saved = 0
+        lost = 0
         failed_cooldowns = 0  # consecutive cooldown-retries that still 403'd
         for i, link in enumerate(links[:_MAX]):
             try:
@@ -147,10 +155,15 @@ class MicrosoftSupportPattern:
                     failed_cooldowns = 0  # recovered — the block was a burst
                 title, body = _title_and_body(art, link)
             except Exception as exc:
+                lost += 1
                 log.warning("microsoft_support.fetch_error", url=link, error=str(exc))
                 continue
-            if body is None or (not title and len(body) < _MIN_BODY):
-                continue  # no content div, or a title-less chrome shell
+            if body is None:
+                lost += 1
+                log.warning("microsoft_support.no_content", url=link)
+                continue
+            if not title and len(body) < _MIN_BODY:
+                continue  # a title-less chrome shell scraped off the hub, not an article
             if not title:
                 title = link.rstrip("/").rsplit("/", 1)[-1].replace("-", " ").capitalize()
             (raw_dir / f"{i:04d}.html").write_text(
@@ -162,7 +175,12 @@ class MicrosoftSupportPattern:
 
         log.info("microsoft_support.acquire", url=url, mode=mode, articles=saved, slug=slug)
         return AcquireResult(
-            raw_dir=raw_dir, kind="html", slug=slug, pages=saved, truncated=truncated
+            raw_dir=raw_dir,
+            kind="html",
+            slug=slug,
+            pages=saved,
+            truncated=truncated,
+            lost=lost,
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:

@@ -138,6 +138,28 @@ def test_failed_download_keeps_remote_ref(tmp_path, monkeypatch):
     assert images.count_remote_images(doc) == 1
 
 
+def test_non_image_body_keeps_remote_ref(tmp_path, monkeypatch):
+    """A 200 carrying a login interstitial instead of image bytes must fail the ref,
+    not get saved under a guessed .png extension."""
+    doc = tmp_path / "d.md"
+    doc.write_text("![a](https://x.com/login.png)\n![b](https://x.com/ok.png)\n", encoding="utf-8")
+
+    def fetch(url, **kwargs):
+        if url.endswith("login.png"):
+            return url, b"<!DOCTYPE html><html><body>Sign in</body></html>", _meta()
+        return url, _PNG, _meta()
+
+    monkeypatch.setattr(http, "fetch_bytes_meta", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert images.download_images(doc, tmp_path / "images") == 1
+    assert [p.name for p in (tmp_path / "images").glob("*")] == ["ok.png"]
+    text = doc.read_text(encoding="utf-8")
+    assert "](https://x.com/login.png)" in text
+    assert "](images/ok.png)" in text
+    assert images.count_remote_images(doc) == 1
+
+
 def test_count_remote_images_ignores_localized(tmp_path):
     doc = tmp_path / "d.md"
     doc.write_text(
@@ -250,6 +272,87 @@ def test_reuse_unchanged_rewrites_refs_without_downloading(tmp_path, monkeypatch
     assert "](images/a.png)" in text
     assert "](https://x.com/new.png)" in text  # left for localize to fetch
     assert images.count_remote_images(doc) == 1
+
+
+def test_reuse_unchanged_does_not_corrupt_a_prefix_sibling_ref(tmp_path, monkeypatch):
+    """CDN sizing variants make one image URL a prefix of another; rewriting the
+    shorter ref with an unanchored replace mangles the longer one into a dangling
+    local ref."""
+    imgs = tmp_path / "images"
+    imgs.mkdir()
+    (imgs / "pic.png").write_bytes(_PNG)
+    (imgs / "pic-2.png").write_bytes(_JPG)
+    images.write_sidecar(
+        tmp_path,
+        [
+            {
+                "local": "pic.png",
+                "source_url": "https://cdn/pic.png",
+                "etag": '"p1"',
+                "last_modified": None,
+                "sha256": hashlib.sha256(_PNG).hexdigest(),
+                "bytes": len(_PNG),
+            },
+            {
+                "local": "pic-2.png",
+                "source_url": "https://cdn/pic.png?wid=1200",
+                "etag": '"p2"',
+                "last_modified": None,
+                "sha256": hashlib.sha256(_JPG).hexdigest(),
+                "bytes": len(_JPG),
+            },
+        ],
+    )
+    doc = tmp_path / "d.md"
+    doc.write_text(
+        '<img src="https://cdn/pic.png">\n<img src="https://cdn/pic.png?wid=1200">\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: True)
+
+    assert images.reuse_unchanged(doc, tmp_path) == 2
+
+    text = doc.read_text(encoding="utf-8")
+    assert 'src="images/pic.png"' in text
+    assert 'src="images/pic-2.png"' in text
+    assert "images/pic.png?wid=1200" not in text
+    assert images.count_remote_images(doc) == 0
+
+
+def test_reuse_unchanged_probes_the_decoded_url(tmp_path, monkeypatch):
+    """The sidecar is keyed by the decoded URL that was actually fetched, so probing
+    the document's `&amp;`-escaped form could never match the stored validators."""
+    imgs = tmp_path / "images"
+    imgs.mkdir()
+    (imgs / "i.png").write_bytes(_PNG)
+    images.write_sidecar(
+        tmp_path,
+        [
+            {
+                "local": "i.png",
+                "source_url": "https://cdn/i.png?a=1&wid=9",
+                "etag": '"i1"',
+                "last_modified": None,
+                "sha256": hashlib.sha256(_PNG).hexdigest(),
+                "bytes": len(_PNG),
+            }
+        ],
+    )
+    doc = tmp_path / "d.md"
+    doc.write_text('<img src="https://cdn/i.png?a=1&amp;wid=9">\n', encoding="utf-8")
+
+    probed = []
+
+    def not_modified(url, *, etag, last_modified):
+        probed.append(url)
+        return url == "https://cdn/i.png?a=1&wid=9"
+
+    monkeypatch.setattr(http, "not_modified", not_modified)
+
+    assert images.reuse_unchanged(doc, tmp_path) == 1
+    assert probed == ["https://cdn/i.png?a=1&wid=9"]
+    assert 'src="images/i.png"' in doc.read_text(encoding="utf-8")
+    assert images.count_remote_images(doc) == 0
 
 
 def test_reuse_unchanged_refetches_when_server_says_changed(tmp_path, monkeypatch):
@@ -414,3 +517,76 @@ def test_two_urls_with_identical_bytes_get_separate_records(tmp_path, monkeypatc
         "https://x.com/logo.png": "logo.png",
         "https://y.com/banner.png": "banner.png",
     }
+
+
+def test_entity_escaped_url_is_decoded_before_fetching(monkeypatch):
+    """The localizer finds refs by regex over raw HTML, so it hands back the
+    attribute verbatim — including `&amp;`. Fetched escaped, a CDN reads
+    `amp;wid=1199` as an unknown parameter and serves its small default: this is
+    why the Adobe manuals localized at 400px instead of the width they asked for.
+    """
+    seen: list[str] = []
+
+    def fake(url, **kwargs):
+        seen.append(url)
+        return url, b"\x89PNG\r\n\x1a\n", {"etag": None, "last_modified": None}
+
+    monkeypatch.setattr(http, "fetch_bytes_meta", fake)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    fetcher = images._PacedFetcher()
+    fetcher.get_bytes("https://s7.test/is/image/X/y?$png$&amp;jpegSize=200&amp;wid=1199")
+
+    assert seen == ["https://s7.test/is/image/X/y?$png$&jpegSize=200&wid=1199"]
+    assert "&amp;" not in fetcher.fetched[0][1]["source_url"]
+
+
+def test_local_names_are_case_stable():
+    """Two URLs differing only in case must land on the same base name.
+
+    macOS/APFS is case-insensitive, so `Export-for-screens.jpg` and
+    `export-for-screens.jpg` are one file on disk. Naming them differently made
+    the collision handler suffix one copy while the deliverable kept a ref to
+    the other — a ref pointing at a file that no longer exists.
+    """
+    assert images._legacy_name(
+        "https://x/Export-for-screens?$pjpeg$&wid=1920"
+    ) == images._legacy_name("https://x/export-for-screens?$pjpeg$&wid=1920")
+    assert images._legacy_name("https://x/Panel.PNG") == "panel.png"
+
+
+def test_existing_mixed_case_files_are_normalised_before_localize(tmp_path):
+    """Names became lowercase, so a cache written under the old rule is stale.
+
+    On a case-insensitive filesystem a new download lands on the SAME inode and
+    keeps the old capitalisation, then prune_orphans compares that name against
+    a deliverable holding the lowercase ref, finds no match, and deletes a file
+    the document still points at.
+    """
+    slug_dir = tmp_path / "s"
+    (slug_dir / "images").mkdir(parents=True)
+    doc = slug_dir / "s.md"
+    doc.write_text("![a](images/MG_0757.jpg)\n![b](images/keep.png)\n", encoding="utf-8")
+    (slug_dir / "images" / "MG_0757.jpg").write_bytes(b"jpg")
+    (slug_dir / "images" / "keep.png").write_bytes(b"png")
+    images.write_sidecar(
+        slug_dir,
+        [
+            {
+                "local": "MG_0757.jpg",
+                "source_url": "https://x/MG_0757.jpg",
+                "etag": None,
+                "last_modified": None,
+                "sha256": "d" * 64,
+                "bytes": 3,
+            }
+        ],
+    )
+
+    images.normalize_case(doc, slug_dir)
+
+    assert (slug_dir / "images" / "mg_0757.jpg").is_file()
+    assert "images/mg_0757.jpg" in doc.read_text(encoding="utf-8")
+    assert "images/MG_0757.jpg" not in doc.read_text(encoding="utf-8")
+    assert images.read_sidecar(slug_dir)[0]["local"] == "mg_0757.jpg"
+    assert (slug_dir / "images" / "keep.png").is_file()  # untouched

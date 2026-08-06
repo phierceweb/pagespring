@@ -21,7 +21,7 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs, strip_scripts
+from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
 
 log = get_logger(__name__)
 
@@ -82,6 +82,7 @@ class AdobeHelpxPattern:
         for el in node.select(_CHROME_CSS):
             el.decompose()
         strip_scripts(node)
+        flatten_responsive_images(node)
         absolutize_refs(node, page_url)
         return str(node)
 
@@ -103,15 +104,18 @@ class AdobeHelpxPattern:
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
         saved = 0
+        lost = 0
         for i, topic in enumerate(topics):
             try:
                 final, body = http.fetch_text(topic)
             except Exception as exc:
+                lost += 1
                 log.warning("adobe_helpx.fetch_error", url=topic, error=str(exc))
                 http.polite_sleep()
                 continue
             fragment = self._extract(body, final)
             if fragment is None:
+                lost += 1
                 log.warning("adobe_helpx.no_content", url=topic)
                 http.polite_sleep()
                 continue
@@ -124,7 +128,12 @@ class AdobeHelpxPattern:
 
         log.info("adobe_helpx.acquire", product=product, found=len(topics), pages=saved)
         return AcquireResult(
-            raw_dir=raw_dir, kind="html", slug=product, pages=saved, truncated=truncated
+            raw_dir=raw_dir,
+            kind="html",
+            slug=product,
+            pages=saved,
+            truncated=truncated,
+            lost=lost,
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:

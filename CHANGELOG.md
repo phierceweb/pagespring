@@ -4,6 +4,113 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.9.0] — 2026-08-05
+
+### Added
+
+- **Three new source shapes** — `docs_probe` recognizes **SCHEMA ST4** (Quanos)
+  HTML manuals by content tells, walking `js/treedata.json` and fetching only
+  the tree's leaves; **WordPress** by generator meta or the `wp-json` link its
+  head declares, acquiring one post through that endpoint; and **Asciidoctor**
+  by generator meta, taking either a single self-contained file or a crawl of
+  the sibling `.html` pages sharing the entry page's directory.
+- **Every fetch carries a size cap**, with separate budgets for text fetches
+  (HTML, sitemaps) and binary downloads (PDFs, archives, images). The cap bounds
+  the decoded body as well as the wire read, so an oversized or compressed
+  response fails the acquire rather than exhausting memory as it inflates.
+  `PAGESPRING_MAX_TEXT_BYTES` and `PAGESPRING_MAX_DOWNLOAD_BYTES` override the
+  defaults — see `.env.example`.
+- **`bin/check-framework`** refuses code that hand-rolls what pf-core provides —
+  banned imports, builtin raises in library code, `os.environ` reads, non-atomic
+  JSON writes. Runs in `bin/lint`, pre-commit and CI; each failure names its
+  replacement, and an exemption is per file with a stated reason.
+
+### Changed
+
+- **Manifest schema v6** — adds `single_document` (the source is one article
+  rather than a crawled index, so `audit`'s `single_page_crawl` check treats a
+  `pages: 1` deliverable as correct), `kept_raw` (`raw/` was staged, so
+  `renormalize` can replay offline), `lost` (pages discovered but never staged),
+  and `localized_sha256` (the deliverable's hash after an image pass re-pointed
+  its refs). `kept_raw` is read from the staged directory, not the flag.
+  `status` marks those slugs `raw`. All additive; read them with `.get`.
+- **`--keep-raw` is ignored for PDF deliverables.** `pdf_url.normalize` returns
+  the downloaded file unchanged, so a kept `raw/` would duplicate the staged
+  PDF without enabling anything.
+- **pf-core pin raised to `~=0.18.1`.** TLS verification is now pinned on per
+  `Fetcher`, so pf-core's process-wide `PF_VERIFY_TLS` (legacy
+  `URL_CHECK_VERIFY_TLS`) can no longer disable certificate checks for an
+  ingest. `ClientError` — raised for a malformed, truncated, or over-cap body —
+  is reported as an acquire failure rather than a traceback. 0.18 also stops the
+  localizer skipping an extensionless CDN ref whose basename carries a dot.
+
+### Fixed
+
+- **Responsive images reach the localizer.** Normalize reduces every
+  `<picture>`, `srcset`/`data-srcset`, and `data-src` to a plain `<img src>`
+  before absolutizing. A base64 spacer in `src` yields to the real image in
+  `data-src`; a `<source media="(not all)">` variant yields to the rendered
+  `<img>`, dropping the `originalimagename` build attribute with it. An `<img>`
+  with no usable reference is dropped rather than staged empty.
+- **The widest available rendition is downloaded.** Candidates are ranked by
+  declared width — a `srcset` `w`/`x` descriptor or a CDN sizing parameter
+  (`wid=`, `width=`). An already-localized ref is never swapped back to remote.
+- **Image URLs are unescaped before fetching**, so a ref carrying `&amp;`
+  resolves with its CDN sizing parameter intact.
+- **`localize` is an explicit no-op for PDF deliverables** — a PDF carries its
+  images inline. `localize --all` no longer aborts on the first PDF slug.
+- **`audit --all` and `refresh --all` over an empty or missing `incoming/` exit
+  `2`**, with a message naming the path they looked in.
+- **The Asciidoctor crawl honours `CRAWL_STALL_AFTER_S`** like the other
+  queue-driven crawls; a stalled crawl is marked `truncated`.
+- **`manifest.json` and the image sidecar are written atomically.** The manifest
+  is written before the image pass and kept through a re-ingest's clear, so an
+  interrupted run still leaves provenance.
+- **Every slug-taking command folds its argument** through one resolver
+  (`pagespring.paths.slug_dir`) — `renormalize`, `localize`, `refresh` and
+  `audit` included. A slug that folds to nothing exits `2`.
+- **`ProgressWatchdog` raises `InvalidInputError`** on a negative window, not
+  `ValueError`.
+- **Every derived slug is folded, not just a `--slug` override.** A
+  pattern-derived slug is passed through `slugify`; one that folds to nothing
+  exits `2`. The slug names the directory an ingest clears, so a
+  remote-controlled `..` is refused. A slug staged unfolded renames its
+  directory on re-ingest.
+- **Pages lost mid-crawl are recorded and audited.** Crawl patterns count pages
+  discovered but never staged into `lost`, the manifest carries it, and `audit`
+  reports `pages_lost` as an error. A page that fetches but yields no content
+  container counts too. Losses nothing can enumerate set `truncated` instead: a
+  Microsoft Support sitemap that 403s mid-pagination, an unreadable Hugo child
+  sitemap, and OpenStax's next-link chain, where a dead link strands every page
+  after it.
+- **`ingest --download-images` is idempotent** — it shares one image pass with
+  `localize`, including the sidecar-reuse probe and the orphan sweep.
+- **A localized deliverable is integrity-checked.** `audit` checks
+  `localized_sha256` once `images > 0`. `localize_incomplete` is gated on
+  `images/` existing rather than on a non-zero count, and counts remote refs
+  itself rather than through the localizer's matcher, so a ref the localizer
+  declines to download is still reported.
+- **Reusing a cached image rewrites only whole refs**, so a URL containing
+  another image's URL as a prefix is left alone. The conditional-GET probe sends
+  the decoded URL the stored validators describe, so a ref carrying `&amp;` can
+  304.
+- **`docs_probe` requires a real Sphinx tell** — a `_static/` asset path
+  anywhere in the document no longer routes a site to the Sphinx crawler.
+- **Raw filenames are flattened in `_st4` and `_clickhelp`** — path separators
+  are dropped from the remote-controlled id the filename is built from.
+- **GitBook logs a failed rendered-page fetch** — the page's text still
+  converts, but its image refs stay unresolved.
+- **Local image names are case-stable** — two URLs differing only in case
+  resolve to one file, as they do on a case-insensitive filesystem.
+- **New audit check `broken_image_ref`** — an `images/<name>` ref whose file is
+  missing, which the remote-ref count cannot see.
+- **`zendesk_help` declines article attachments.** `/hc/…/article_attachments/`
+  URLs are binary files; they fall through to `docs_probe`, which routes them by
+  content.
+- **A Zendesk article URL scopes to that article** instead of paging the whole
+  help center. Single-article ingests slug as `<host>-<article>` and set
+  `single_document`.
+
 ## [0.8.0] — 2026-08-01
 
 ### Added

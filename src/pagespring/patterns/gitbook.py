@@ -58,15 +58,20 @@ class GitBookPattern:
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
         saved = 0
+        lost = 0
         for i, page in enumerate(pages):
             try:
                 _m, md = http.fetch_text(page)
                 try:
                     _h, html = http.fetch_text(page[:-3])  # rendered page (drop ".md")
-                except Exception:
-                    html = ""  # text still converts; only images would be missed
+                except Exception as exc:
+                    # Not a lost page — the markdown carries the text. Only the
+                    # image refs stay unresolved at their /files/<id> form.
+                    log.warning("gitbook.render_fetch_error", url=page[:-3], error=str(exc))
+                    html = ""
                 clean = _gitbook.process_page(md, html, origin)
             except Exception as exc:
+                lost += 1
                 log.warning("gitbook.fetch_error", url=page, error=str(exc))
                 continue
             stem = urlparse(page).path.rstrip("/").rsplit("/", 1)[-1] or "page.md"
@@ -79,8 +84,8 @@ class GitBookPattern:
             http.polite_sleep()
 
         slug = _slug(url)
-        log.info("gitbook.acquire", base=base, pages=saved, slug=slug)
-        return AcquireResult(raw_dir=raw_dir, kind="markdown", slug=slug, pages=saved)
+        log.info("gitbook.acquire", base=base, pages=saved, slug=slug, lost=lost)
+        return AcquireResult(raw_dir=raw_dir, kind="markdown", slug=slug, pages=saved, lost=lost)
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         parts = [p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*.md"))]

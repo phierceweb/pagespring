@@ -13,6 +13,8 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
+from pf_core.exceptions import InvalidInputError
+
 
 class ProgressWatchdog:
     """Tracks time since the last real progress; ``stalled()`` when it exceeds
@@ -28,7 +30,7 @@ class ProgressWatchdog:
 
     def __init__(self, *, stall_after_s: float, now: Callable[[], float] = time.monotonic) -> None:
         if stall_after_s < 0:
-            raise ValueError(f"stall_after_s must be >= 0 (0 disables), got {stall_after_s}")
+            raise InvalidInputError(f"stall_after_s must be >= 0 (0 disables), got {stall_after_s}")
         self._window = stall_after_s
         self._now = now
         self._last = now()

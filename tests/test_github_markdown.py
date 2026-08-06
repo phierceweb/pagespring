@@ -86,3 +86,22 @@ def test_capped_file_list_marks_truncated(tmp_path, monkeypatch):
 def test_uncapped_file_list_is_not_truncated(tmp_path, monkeypatch):
     acq = _acquire_two_file_repo(tmp_path, monkeypatch)
     assert acq.truncated is False
+
+
+def test_files_lost_to_fetch_errors_are_counted(tmp_path, monkeypatch):
+    """A raw.githubusercontent failure drops one listed file; uncounted, the
+    manifest reports a complete crawl and audit sees nothing missing."""
+
+    def fake(url, **kwargs):
+        if url.endswith("/routing.md"):
+            raise OSError("503 throttled")
+        return _fake_fetch_text(url, **kwargs)
+
+    monkeypatch.setattr(http, "fetch_text", fake)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = GitHubMarkdownPattern().acquire("https://github.com/laravel/docs", tmp_path)
+
+    assert acq.pages == 2
+    assert acq.lost == 1
+    assert acq.truncated is False

@@ -19,16 +19,12 @@ import urllib.parse
 _MD_URL_RE = re.compile(r"https?://[^\s)]+\.md")
 _FILES_RE = re.compile(r"/files/[A-Za-z0-9_-]+")
 _IMG_PROXY_RE = re.compile(r"""~gitbook/image\?url=([^&"'\s]+)""")
-# GitBook's appended footer, both shapes seen in the wild: the pre-2026 single
-# combined heading, and the current standalone "# Agent Instructions" heading
-# (exact heading line — a doc's own section would have more words after it).
+# GitBook's appended footer, in either heading form. Anchored on the whole
+# heading line — a doc's own section would carry more words after it.
 _FOOTER_RE = re.compile(r"\n#{1,6}\s+Agent Instructions(?::\s+Querying This Documentation)?\s*\n")
-# GitBook's per-page leading banner pointing agents at llms.txt, both shapes
-# seen in the wild: the "> ## Documentation Index" block (multi-line), and the
-# 2026 single-paragraph "> For the complete documentation index, …" form. The
-# 2026 form is exactly one blockquote line — matching only that line keeps a
-# legit content blockquote that directly abuts it (no blank line) from being
-# swallowed. The legacy form is an intrinsically multi-line block.
+# GitBook's llms.txt banner, in either form. The one-line form must match only
+# its own line: consuming the blockquote greedily swallows a content blockquote
+# that abuts it with no blank line between.
 _BANNER_RE = re.compile(
     r"^(?:"
     r"> ## Documentation Index[^\n]*\n(?:>[^\n]*\n?)*"

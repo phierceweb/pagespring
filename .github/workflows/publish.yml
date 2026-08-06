@@ -3,13 +3,40 @@ on:
   push:
     tags: ["v*"]
 jobs:
+  gates:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: ruff format --check src tests
+      - run: mypy src
+      - run: python -m pf_core.guards
+      - run: python bin/check-framework
+      - run: pytest
   build:
+    needs: gates
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      # The tag is what triggers the publish, so it — not the source tree — is
+      # what would ship under the wrong version.
+      - name: Tag matches the packaged version
+        run: |
+          packaged="v$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          if [ "${GITHUB_REF_NAME}" != "$packaged" ]; then
+            echo "tag ${GITHUB_REF_NAME} != packaged $packaged" >&2
+            exit 1
+          fi
       - run: pip install build twine
       - run: python -m build
       - run: twine check dist/*

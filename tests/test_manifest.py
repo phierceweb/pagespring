@@ -7,6 +7,8 @@ compares against.
 
 import hashlib
 
+import pytest
+
 from pagespring import __version__, manifest
 
 
@@ -62,6 +64,19 @@ def test_write_then_read_round_trips(tmp_path):
     assert manifest.read_manifest(tmp_path) == m
 
 
+def test_localized_sha256_defaults_to_none_and_round_trips(tmp_path):
+    """The deliverable's hash after localize re-pointed its refs: None until an
+    image pass runs, and preserved through write→read — audit reads it back as
+    the localized file's integrity record."""
+    assert _sample()["localized_sha256"] is None
+
+    m = _sample()
+    m["localized_sha256"] = "b" * 64
+    manifest.write_manifest(tmp_path, m)
+
+    assert manifest.read_manifest(tmp_path)["localized_sha256"] == "b" * 64
+
+
 def test_read_manifest_missing_returns_none(tmp_path):
     assert manifest.read_manifest(tmp_path) is None
 
@@ -69,3 +84,28 @@ def test_read_manifest_missing_returns_none(tmp_path):
 def test_read_manifest_corrupt_returns_none(tmp_path):
     (tmp_path / manifest.MANIFEST_NAME).write_text("{not valid json", encoding="utf-8")
     assert manifest.read_manifest(tmp_path) is None
+
+
+def test_a_failed_write_leaves_the_previous_manifest_intact(tmp_path, monkeypatch):
+    """The write is atomic. A bare `write_text` truncates the target first, so a
+    kill during ingest's image pass would strand the slug with no provenance —
+    a whole-corpus `manifest_missing` from one interrupted run.
+    """
+    import pf_core.utils.io as io_mod
+
+    original = _sample()
+    manifest.write_manifest(tmp_path, original)
+
+    def boom(src, dst):
+        raise OSError("killed mid-write")
+
+    monkeypatch.setattr(io_mod.os, "replace", boom)
+
+    updated = _sample()
+    updated["sha256"] = "f" * 64
+    with pytest.raises(OSError):
+        manifest.write_manifest(tmp_path, updated)
+
+    assert manifest.read_manifest(tmp_path) == original, "the old manifest was destroyed"
+    strays = list(tmp_path.glob(f".{manifest.MANIFEST_NAME}.*"))
+    assert not strays, f"temp file left behind: {strays}"

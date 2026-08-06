@@ -23,15 +23,38 @@ from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.config import cfg
 from pagespring.liveness import ProgressWatchdog
-from pagespring.patterns._site import absolutize_refs, strip_scripts
+from pagespring.patterns._site import (
+    absolutize_refs,
+    flatten_responsive_images,
+    generator_meta,
+    strip_scripts,
+)
 
 log = get_logger(__name__)
+
+# Sphinx's OWN assets, shipped by the `basic` theme every stock theme inherits.
+# A bare "_static/" is any site's asset directory and claims sites that are not
+# Sphinx at all — and _extract's ladder ends at <main>, so the mis-route succeeds.
+_TELLS = ("_static/documentation_options.js", "_static/doctools.js", "_static/pygments.css")
 
 _MAX_PAGES = 1000
 # Sphinx utility trees (whole path segments) and utility pages (filename stems)
 # that a same-prefix crawl must skip.
 _SKIP_DIRS = {"_static", "_sources", "_modules", "_images", "_downloads"}
 _SKIP_PAGES = {"genindex", "genindex-all", "search", "py-modindex"}
+
+
+def is_sphinx(html: str) -> bool:
+    """Generator meta, or one of Sphinx's own ``_static/`` assets.
+
+    The docutils-plus-``_static/`` conjunction is the backstop for a theme that
+    ships none of the named assets."""
+    gen = generator_meta(html)
+    if "sphinx" in gen:
+        return True
+    if any(tell in html for tell in _TELLS):
+        return True
+    return "docutils" in gen and "_static/" in html
 
 
 def _prefix(base: str) -> str:
@@ -64,6 +87,7 @@ def _extract(html: str, page_url: str) -> str | None:
     for el in root.select("a.headerlink"):
         el.decompose()
     strip_scripts(root)
+    flatten_responsive_images(root)
     absolutize_refs(root, page_url)
     return str(root)
 
@@ -83,6 +107,7 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     seen: set[str] = {base}
     queue: deque[str] = deque([base])
     saved = 0
+    lost = 0
     watchdog = ProgressWatchdog(stall_after_s=cfg.CRAWL_STALL_AFTER_S, now=time.monotonic)
     while queue and saved < _MAX_PAGES:
         if watchdog.stalled():
@@ -94,6 +119,7 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
         try:
             final, body = http.fetch_text(url)
         except Exception as exc:
+            lost += 1
             log.warning("sphinx.fetch_error", url=url, error=str(exc))
             http.polite_sleep()
             continue
@@ -107,6 +133,7 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
             saved += 1
             watchdog.progress()
         else:
+            lost += 1
             log.warning("sphinx.no_content_root", url=url)
         for a in BeautifulSoup(body, "html.parser").find_all("a"):
             href = a.get("href")
@@ -122,5 +149,11 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     truncated = bool(queue)
     log.info("sphinx.acquire", base=base, pages=saved, slug=slug)
     return AcquireResult(
-        raw_dir=raw_dir, kind="html", slug=slug, pages=saved, title=title, truncated=truncated
+        raw_dir=raw_dir,
+        kind="html",
+        slug=slug,
+        pages=saved,
+        title=title,
+        truncated=truncated,
+        lost=lost,
     )

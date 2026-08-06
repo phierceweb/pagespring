@@ -28,6 +28,12 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: framework-first
+        name: framework-first (pf-core)
+        entry: .venv/bin/python bin/check-framework
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: pytest-fast
         name: pytest
         entry: .venv/bin/pytest

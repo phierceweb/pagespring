@@ -178,3 +178,51 @@ def test_book_title_comes_from_page_title_not_slug(tmp_path, monkeypatch):
     html = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
     assert "<h1>Anatomy and Physiology 2e</h1>" in html
     assert "<title>Anatomy and Physiology 2e</title>" in html
+
+
+def _shell(prev: str, nxt: str) -> str:
+    """A REX page that serves 200 and navigates on, but has no content container."""
+    return (
+        "<!DOCTYPE html><html><head><title>Shell | OpenStax</title></head>"
+        '<body><div id="root"><nav class="PrevNextBar__Wrapper">'
+        f'<a aria-label="Previous Page" href="{prev}">Previous</a>'
+        f'<a aria-label="Next Page" href="{nxt}">Next</a>'
+        "</nav></div></body></html>"
+    )
+
+
+def test_page_without_content_container_counts_as_lost(tmp_path, monkeypatch):
+    """A 200 that renders no <main class="page-content"> is a page discovered and
+    never staged; uncounted it leaves a hole audit reads as a complete crawl."""
+    table = dict(_TABLE)
+    table[f"{_PAGES}/1-introduction"] = _shell(
+        prev="preface", nxt="1-1-overview-of-anatomy-and-physiology"
+    )
+
+    monkeypatch.setattr(http, "fetch_text", lambda url, **kw: (url, table[url]))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = OpenStaxPattern().acquire(_BASE, tmp_path)
+
+    assert acq.pages == 2
+    assert acq.lost == 1
+    assert acq.truncated is False
+
+
+def test_midchain_fetch_failure_truncates_rather_than_losing_one_page(tmp_path, monkeypatch):
+    """The Next chain is the only way forward, so a dead link strands every page
+    after it — a partial deliverable, not a single missing page."""
+
+    def fake(url, **kwargs):
+        if url.endswith("/1-introduction"):
+            raise OSError("503 throttled")
+        return url, _TABLE[url]
+
+    monkeypatch.setattr(http, "fetch_text", fake)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = OpenStaxPattern().acquire(_BASE, tmp_path)
+
+    assert acq.pages == 1
+    assert acq.truncated is True
+    assert acq.lost == 0

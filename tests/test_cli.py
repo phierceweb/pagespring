@@ -1,5 +1,6 @@
 """CLI commands (patterns / classify / ingest / status), via Typer's runner."""
 
+import pytest
 from typer.testing import CliRunner
 
 import pagespring.cli as climod
@@ -416,3 +417,109 @@ def test_status_reads_manifest(monkeypatch, tmp_path):
     assert "docs.tableplus.com" in line  # source host
     assert "2026-06-14" in line  # ingested date from manifest
     assert "manifest.json" not in r.output  # never the deliverable
+
+
+def test_status_flags_slugs_that_kept_raw(monkeypatch, tmp_path):
+    """Which slugs replay offline is otherwise invisible — you would have to
+    stat every directory to plan a normalize change."""
+    monkeypatch.setattr(climod.cfg, "INCOMING_DIR", str(tmp_path / "incoming"))
+    for slug, kept in (("withraw", True), ("noraw", False)):
+        d = tmp_path / "incoming" / slug
+        d.mkdir(parents=True)
+        f = d / f"{slug}.html"
+        f.write_text("<h1>x</h1>", encoding="utf-8")
+        manifest.write_manifest(
+            d,
+            manifest.build_manifest(
+                source_url=f"https://x/{slug}",
+                pattern="docs_probe",
+                slug=slug,
+                kind="html",
+                deliverable=f.name,
+                pages=2,
+                size_bytes=f.stat().st_size,
+                sha256=manifest.sha256_file(f),
+                images=0,
+                ingested_at="2026-08-02T00:00:00Z",
+                kept_raw=kept,
+            ),
+        )
+
+    r = runner.invoke(app, ["status"])
+
+    assert r.exit_code == 0
+    with_raw = next(line for line in r.output.splitlines() if "withraw" in line)
+    without = next(line for line in r.output.splitlines() if line.startswith("noraw"))
+    assert "raw" in with_raw
+    assert "raw" not in without.replace("noraw", "")
+
+
+def test_audit_all_on_an_empty_corpus_is_not_success(monkeypatch):
+    """`audit_all()` returns [] when `incoming/` is missing or empty."""
+    monkeypatch.setattr(climod, "audit_all", lambda: [])
+    r = runner.invoke(app, ["audit", "--all"])
+    assert r.exit_code == 2, f"empty corpus reported success: {r.output!r}"
+    assert "all ok" not in r.output, f"misleading summary: {r.output!r}"
+
+
+def test_audit_all_strict_on_an_empty_corpus_fails(monkeypatch):
+    """The gate case: --strict must never certify an empty corpus."""
+    monkeypatch.setattr(climod, "audit_all", lambda: [])
+    r = runner.invoke(app, ["audit", "--all", "--strict"])
+    assert r.exit_code != 0, f"--strict certified an empty corpus: {r.output!r}"
+
+
+def test_audit_all_message_names_the_cause(monkeypatch):
+    monkeypatch.setattr(climod, "audit_all", lambda: [])
+    r = runner.invoke(app, ["audit", "--all"])
+    assert "incoming" in r.output.lower(), (
+        f"the message should say where nothing was found: {r.output!r}"
+    )
+
+
+def test_audit_all_with_slugs_still_reports_ok(monkeypatch):
+    """The empty guard must not fire on a genuinely clean corpus."""
+    monkeypatch.setattr(climod, "audit_all", lambda: [("aaa", []), ("bbb", [])])
+    r = runner.invoke(app, ["audit", "--all", "--strict"])
+    assert r.exit_code == 0
+    assert "2 audited, all ok" in r.output
+
+
+def test_refresh_all_on_an_empty_corpus_is_not_a_clean_sweep(monkeypatch):
+    """`refresh_all()` returns [] when `incoming/` is missing or empty. Exit 0
+    there tells a wrapper the sweep was clean when nothing was swept."""
+    monkeypatch.setattr(climod, "refresh_all", lambda: [])
+    r = runner.invoke(app, ["refresh", "--all"])
+    assert r.exit_code == 2, f"empty corpus reported a clean sweep: {r.output!r}"
+
+
+def test_refresh_all_empty_message_names_the_cause(monkeypatch):
+    monkeypatch.setattr(climod, "refresh_all", lambda: [])
+    r = runner.invoke(app, ["refresh", "--all"])
+    assert "incoming" in r.output.lower(), (
+        f"the message should say where nothing was found: {r.output!r}"
+    )
+
+
+def test_refresh_all_with_slugs_still_exits_clean(monkeypatch):
+    """The empty guard must not fire on a genuinely clean sweep."""
+    monkeypatch.setattr(
+        climod,
+        "refresh_all",
+        lambda: [
+            {"slug": "aaa", "status": "unchanged", "detail": ""},
+            {"slug": "bbb", "status": "changed", "detail": ""},
+        ],
+    )
+    r = runner.invoke(app, ["refresh", "--all"])
+    assert r.exit_code == 0
+    assert "1 changed" in r.output and "1 unchanged" in r.output
+
+
+@pytest.mark.parametrize("cmd", [["audit"], ["refresh"], ["localize"], ["renormalize"]])
+def test_a_slug_that_folds_to_nothing_exits_2(cmd, monkeypatch, tmp_path):
+    """`2` means "could not proceed with what it was given" — the same code a
+    folds-to-nothing `--slug` gets at ingest, not `1` ("ran, found problems")."""
+    monkeypatch.setattr(climod.cfg, "INCOMING_DIR", str(tmp_path))
+    r = runner.invoke(app, [*cmd, ".."])
+    assert r.exit_code == 2, f"{cmd[0]} '..' exited {r.exit_code}: {r.output!r}"

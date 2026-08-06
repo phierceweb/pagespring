@@ -19,6 +19,7 @@ from pf_core.log import get_logger
 from pagespring import http, manifest
 from pagespring.config import cfg
 from pagespring.orchestrate import AcquireError, EmptyOutputError, NoPatternError, run_ingest
+from pagespring.paths import slug_dir
 from pagespring.registry import pattern_by_name
 
 log = get_logger(__name__)
@@ -36,7 +37,7 @@ class RefreshOutcome(TypedDict):
 
 def refresh_slug(slug: str) -> RefreshOutcome:
     """Re-ingest ``slug`` from its manifest's source_url; report what happened."""
-    incoming_dir = Path(cfg.INCOMING_DIR) / slug
+    incoming_dir = slug_dir(slug)
     m = manifest.read_manifest(incoming_dir)
     if m is None:
         return {"slug": slug, "status": "skipped", "detail": "no manifest — ingest it first"}

@@ -133,3 +133,37 @@ def test_toc_without_topics_is_an_input_error(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "fetch_text", _fetch(toc="window['x']=1;"))
     with pytest.raises(InvalidInputError, match="no topics"):
         _clickhelp.acquire(ENTRY, tmp_path, slug="widget", title=None)
+
+
+def test_a_topic_without_the_content_container_counts_as_lost(tmp_path, monkeypatch):
+    """A 200 topic whose container is absent was dropped silently — only fetch
+    errors counted, so a theme change audited clean while shipping short."""
+    no_container = "<html><body class='WebHelp_body'><div>theme changed</div></body></html>"
+
+    def fetch(url, **kwargs):
+        if url.endswith("toc_nav.js"):
+            return url, _TOC
+        if url.endswith("/setup.html"):
+            return url, no_container
+        return url, _PAGE
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+
+    acq = _clickhelp.acquire(ENTRY, tmp_path, slug="widget", title=None)
+
+    assert acq.pages == 2
+    assert acq.lost == 1
+    assert not any("setup" in p.name for p in acq.raw_dir.glob("*.html"))
+
+
+def test_a_topic_id_holding_a_path_separator_is_flattened_into_the_filename(tmp_path, monkeypatch):
+    """The tid is remote-controlled; one holding "/" named a directory that was
+    never created, so the whole acquire died with FileNotFoundError."""
+    seen: list[str] = []
+    toc = """window['tocTree']=new CHTree('pnlToc',[{"e":"guide/setup","t":"Setup"}]);"""
+    monkeypatch.setattr(http, "fetch_text", _fetch(seen, toc=toc))
+
+    acq = _clickhelp.acquire(ENTRY, tmp_path, slug="widget", title=None)
+
+    assert [p.name for p in acq.raw_dir.glob("*.html")] == ["0000-guide-setup.html"]
+    assert f"{ROOT}/HTML/guide/setup.html" in seen  # the URL keeps the id verbatim

@@ -7,7 +7,7 @@ trusted; warning-level = real but survivable RAG noise.
 
 import pytest
 
-from pagespring import audit, manifest, orchestrate
+from pagespring import audit, images, manifest, orchestrate
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +24,7 @@ def _stage(
     pages=2,
     images=0,
     pattern="fake",
+    single_document=False,
 ):
     """Stage a slug the way a real ingest would: deliverable + matching manifest."""
     d = tmp_path / "incoming" / slug
@@ -44,6 +45,7 @@ def _stage(
             sha256=manifest.sha256_file(f),
             images=images,
             ingested_at="2026-07-01T00:00:00Z",
+            single_document=single_document,
         ),
     )
     return d
@@ -256,3 +258,112 @@ def test_corpus_findings_are_added_not_substituted(tmp_path):
     checks = _checks(dict(audit.audit_all())["dup-b"])
 
     assert ("sha_mismatch", "error") in checks
+
+
+def test_single_document_source_does_not_fire_single_page_crawl(tmp_path):
+    """A WordPress post is one page by construction. Firing here would make
+    `audit --all --strict` exit 1 on a perfectly good deliverable."""
+    _stage(tmp_path, "post", pattern="docs_probe", kind="html", pages=1, single_document=True)
+
+    assert ("single_page_crawl", "error") not in _checks(audit.audit_slug("post"))
+
+
+def test_dangling_local_image_ref_is_an_error(tmp_path):
+    """A ref to images/<name> whose file is absent renders as a broken image and
+    is invisible to every existing check: count_remote_images only counts REMOTE
+    refs, so a fully-localized deliverable with a dead local ref audits clean.
+    """
+    d = _stage(tmp_path, body="![a](images/gone.png)\n\n# T\n", images=1)
+    (d / "images").mkdir()
+    (d / "images" / "kept.png").write_bytes(b"png")
+
+    assert ("broken_image_ref", "error") in _checks(audit.audit_slug("fakeapp"))
+
+
+def test_resolved_local_image_refs_are_fine(tmp_path):
+    d = _stage(tmp_path, body="![a](images/kept.png)\n\n# T\n", images=1)
+    (d / "images").mkdir()
+    (d / "images" / "kept.png").write_bytes(b"png")
+
+    assert ("broken_image_ref", "error") not in _checks(audit.audit_slug("fakeapp"))
+
+
+def test_pages_lost_is_an_error(tmp_path):
+    """A crawl that discovers 100 pages and fetches 40 is 60% missing, but the
+    deliverable looks healthy: headings exist, no remote refs remain, and
+    `truncated` stays False because no page CAP was hit. This is the project's
+    self-declared characteristic failure — silent partial acquisition.
+    """
+    d = _stage(tmp_path, pattern="apple_help", pages=40)
+    m = manifest.read_manifest(d)
+    m["lost"] = 60
+    manifest.write_manifest(d, m)
+
+    assert ("pages_lost", "error") in _checks(audit.audit_slug("fakeapp"))
+
+
+def test_no_pages_lost_is_fine(tmp_path):
+    _stage(tmp_path, pattern="apple_help", pages=40)
+    assert ("pages_lost", "error") not in _checks(audit.audit_slug("fakeapp"))
+
+
+def test_tampering_after_localize_is_an_error(tmp_path):
+    """`localized_sha256` is a localized deliverable's integrity record — with
+    the sha check gated on images==0, the most-processed files had none, so a
+    hand-edit or a truncated write was invisible."""
+    d = _stage(tmp_path, body="![a](images/a.png)\n\n# T\n", images=1)
+    (d / "images").mkdir()
+    (d / "images" / "a.png").write_bytes(b"png")
+    f = d / "fakeapp.md"
+    m = manifest.read_manifest(d)
+    m["localized_sha256"] = manifest.sha256_file(f)
+    manifest.write_manifest(d, m)
+    assert audit.audit_slug("fakeapp") == []
+
+    f.write_text(f.read_text(encoding="utf-8") + "x", encoding="utf-8")
+
+    assert ("sha_mismatch", "error") in _checks(audit.audit_slug("fakeapp"))
+
+
+def test_failed_localize_with_empty_images_dir_is_a_warning(tmp_path):
+    """Every download failed, so images stayed 0 while remote refs remain — the
+    run that most needs the check is exactly the one images>0 turned it off for.
+    images/ existing is what says a pass ran."""
+    d = _stage(tmp_path, body="![b](https://x/b.png)\n\n# T\n", images=0)
+    (d / "images").mkdir()
+
+    assert ("localize_incomplete", "warning") in _checks(audit.audit_slug("fakeapp"))
+
+
+def test_remote_ref_the_localizer_skipped_is_still_flagged(tmp_path, monkeypatch):
+    """The audit must not share the localizer's idea of what an image ref is.
+
+    A ref the localizer declines to claim is never downloaded and never counted,
+    so asking it how many remain answers zero on exactly the deliverable that is
+    still remote. Pinned by stubbing that count to 0: the audit has to reach the
+    finding by reading the file itself.
+    """
+    skipped = "https://cdn.example.com/is/image/Prod/whats-new-gemini-3.1-nano-banana"
+    d = _stage(tmp_path, body=f'![a](images/a.png)\n<img src="{skipped}">\n\n# T\n', images=1)
+    (d / "images").mkdir()
+    (d / "images" / "a.png").write_bytes(b"png")
+    monkeypatch.setattr(images, "count_remote_images", lambda _doc: 0)
+
+    assert ("localize_incomplete", "warning") in _checks(audit.audit_slug("fakeapp"))
+
+
+def test_remote_non_image_refs_are_not_localize_findings(tmp_path):
+    """Only image refs count. Deliverables keep their ordinary hyperlinks and
+    their video/iframe embeds, and none of those are the localizer's to fetch."""
+    body = (
+        "![a](images/a.png)\n"
+        "[Code Preview](https://docs.example.com/gui-tools/preview)\n"
+        '<iframe src="https://www.youtube.com/embed/abc123"></iframe>\n'
+        '<video><source src="https://cdn.example.com/clip.mp4"></video>\n'
+        "\n# T\n"
+    )
+    d = _stage(tmp_path, body=body, images=1)
+    (d / "images").mkdir()
+    (d / "images" / "a.png").write_bytes(b"png")
+
+    assert "localize_incomplete" not in [c for c, _l in _checks(audit.audit_slug("fakeapp"))]

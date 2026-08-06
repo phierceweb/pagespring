@@ -3,12 +3,14 @@
 Retries, backoff, redirect walking, charset resolution, and validator handling
 belong to ``pf_core.fetch`` and are pinned by its test_fetch.py. Pinned here is
 what pagespring adds: the PAGESPRING_UA identity, the ``timeout=`` keyword it
-translates, the raw exceptions its patterns branch on, and the polite delay.
-Requests are intercepted at the fetch core's ``_open`` seam.
+translates, the raw exceptions its patterns branch on, TLS verification no env
+var can switch off, and the polite delay. Requests are intercepted at the fetch
+core's ``_open`` seam.
 """
 
 from __future__ import annotations
 
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -17,21 +19,28 @@ from email.message import Message
 import pytest
 from pf_core.exceptions import InvalidInputError
 from pf_core.fetch import Fetcher
+from pf_core.utils.http_tls import verify_tls
 
 from pagespring import http
 
 URL = "https://docs.example.com/manual"
 _ETAG = '"abc123"'
 _LAST_MODIFIED = "Sat, 18 Jul 2026 10:00:00 GMT"
+_TLS_OFF_ENV_VARS = ["PF_VERIFY_TLS", "URL_CHECK_VERIFY_TLS"]
 
 
 @pytest.fixture(autouse=True)
 def _hermetic_env(monkeypatch):
     """These hosts never resolve, so skip the SSRF address check (the scheme check
-    still runs; TestSsrfGuard exercises the guard itself). UA vars start unset."""
+    still runs; TestSsrfGuard exercises the guard itself). Tunable vars start unset."""
     monkeypatch.setenv("URL_FETCH_ALLOW_PRIVATE", "1")
-    monkeypatch.delenv("PAGESPRING_UA", raising=False)
-    monkeypatch.delenv("PF_FETCH_UA", raising=False)
+    for var in (
+        "PAGESPRING_UA",
+        "PF_FETCH_UA",
+        "PAGESPRING_MAX_TEXT_BYTES",
+        "PAGESPRING_MAX_DOWNLOAD_BYTES",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
 
 def _message(items: dict[str, str] | None = None) -> Message:
@@ -67,6 +76,7 @@ class _Seam:
     def __init__(self) -> None:
         self.calls: list[tuple[urllib.request.Request, float]] = []
         self.queue: list[object] = []
+        self.fetchers: list[Fetcher] = []
 
     def headers_sent(self, index: int = 0) -> dict[str, str]:
         return {key.lower(): value for key, value in self.calls[index][0].header_items()}
@@ -80,7 +90,8 @@ def seam(monkeypatch) -> _Seam:
     """Intercept every request at ``Fetcher._open``; unqueued calls get a 200."""
     recorder = _Seam()
 
-    def fake_open(_self, request, timeout_s):
+    def fake_open(fetcher, request, timeout_s):
+        recorder.fetchers.append(fetcher)
         recorder.calls.append((request, timeout_s))
         item = recorder.queue.pop(0) if recorder.queue else _Resp()
         if isinstance(item, Exception):
@@ -178,6 +189,49 @@ class TestSsrfGuard:
             http.fetch_text("http://127.0.0.1:9/manual")
         assert seam.calls == []
 
+    def test_allow_private_opts_the_process_out(self, seam, monkeypatch):
+        """The guard is defeasible, unlike TLS verification. Pinned so the module
+        docstring can't drift back into calling it unconditional."""
+        monkeypatch.setenv("URL_FETCH_ALLOW_PRIVATE", "1")
+        http.fetch_text("http://127.0.0.1:9/manual")
+        assert len(seam.calls) == 1, "the opt-out did not let the request through"
+
+    def test_non_http_scheme_blocked_even_with_allow_private(self, seam, monkeypatch):
+        """Scheme enforcement survives the opt-out — file:// is never fetchable."""
+        monkeypatch.setenv("URL_FETCH_ALLOW_PRIVATE", "1")
+        with pytest.raises(InvalidInputError):
+            http.fetch_text("file:///etc/passwd")
+        assert seam.calls == []
+
+
+def _tls_context(fetcher: Fetcher) -> ssl.SSLContext:
+    """The context frozen into the fetcher's opener when it was built."""
+    handler = next(
+        h for h in fetcher._opener.handlers if isinstance(h, urllib.request.HTTPSHandler)
+    )
+    return handler._context
+
+
+class TestTlsVerification:
+    @pytest.mark.parametrize("env_var", _TLS_OFF_ENV_VARS)
+    def test_off_switch_is_really_honored_by_the_framework(self, env_var, monkeypatch):
+        """Sanity check on the knob itself, so immunity can't be an artifact of an
+        env var that does nothing."""
+        monkeypatch.setenv(env_var, "0")
+        assert verify_tls() is False
+
+    @pytest.mark.parametrize("env_var", _TLS_OFF_ENV_VARS)
+    def test_off_switch_cannot_disable_certificate_verification(self, seam, env_var, monkeypatch):
+        """The fetch core's TLS switch is process-wide, so one set for another
+        consumer used to turn verification off for every pagespring fetch."""
+        monkeypatch.setenv(env_var, "0")
+        http.fetch_text(URL)
+        http.fetch_bytes(URL)
+        assert len(seam.fetchers) == 2
+        for context in map(_tls_context, seam.fetchers):
+            assert context.verify_mode == ssl.CERT_REQUIRED
+            assert context.check_hostname is True
+
 
 class TestPoliteSleep:
     def test_sleeps_the_default_then_the_asked_interval(self, monkeypatch):
@@ -186,3 +240,42 @@ class TestPoliteSleep:
         http.polite_sleep()
         http.polite_sleep(1.0)
         assert slept == [0.25, 1.0]
+
+
+class TestFetchSizeCaps:
+    """Every helper caps the fetcher it builds.
+
+    pf-core's default is unlimited and every URL here is one pagespring does not
+    control. Asserted through the public helpers: a cap a helper never passes is
+    the bug, and a hand-built fetcher would not show it.
+    """
+
+    def test_every_helper_caps_the_fetcher_it_builds(self, seam):
+        seam.queue.extend([_Resp(), _Resp(), _Resp(), _http_error(304)])  # 304 lands on the last
+        http.fetch_text(URL)
+        http.fetch_bytes(URL)
+        http.fetch_bytes_meta(URL)
+        http.not_modified(URL, etag=_ETAG, last_modified=None)
+        caps = [fetcher._max_bytes for fetcher in seam.fetchers]
+        assert len(caps) == 4, f"a helper made no request: {caps}"
+        assert all(cap is not None and cap > 0 for cap in caps), f"unbounded fetcher: {caps}"
+
+    def test_binary_downloads_get_more_room_than_text(self, seam):
+        http.fetch_text(URL)
+        http.fetch_bytes(URL)
+        text_cap, binary_cap = (fetcher._max_bytes for fetcher in seam.fetchers)
+        assert binary_cap > text_cap
+
+    def test_caps_are_env_tunable(self, seam, monkeypatch):
+        monkeypatch.setenv("PAGESPRING_MAX_TEXT_BYTES", "1234")
+        monkeypatch.setenv("PAGESPRING_MAX_DOWNLOAD_BYTES", "5678")
+        http.fetch_text(URL)
+        http.fetch_bytes(URL)
+        assert [fetcher._max_bytes for fetcher in seam.fetchers] == [1234, 5678]
+
+    @pytest.mark.parametrize("value", ["not-a-number", "", "0", "-1"])
+    def test_unusable_env_value_falls_back_to_the_default(self, seam, monkeypatch, value):
+        """A malformed or non-positive override must not uncap the fetch."""
+        monkeypatch.setenv("PAGESPRING_MAX_TEXT_BYTES", value)
+        http.fetch_text(URL)
+        assert seam.fetchers[0]._max_bytes == http._TEXT_MAX_BYTES_DEFAULT

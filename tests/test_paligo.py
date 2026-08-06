@@ -48,6 +48,10 @@ _TOPIC = """<html><head><meta name="generator" content="Paligo"><title>T</title>
 <a id="header-navigation-next" href="equalizer.html">Next</a>
 </body></html>"""
 
+_TOPIC_NO_CONTENT = """<html><head><meta name="generator" content="Paligo"><title>T</title></head>
+<body><main><article id="search-result-wrapper" class="search-results"></article></main>
+</body></html>"""
+
 
 def _fetch(seen=None, *, fuzzy=_FUZZY, fuzzy_ok=True):
     def fetch(url, **kwargs):
@@ -118,6 +122,42 @@ def test_absolutizes_asset_refs(tmp_path, monkeypatch):
 
     assert f"{ROOT}/images/ui.png" in joined
     assert "../images" not in joined
+
+
+def test_an_unfetchable_page_counts_as_lost(tmp_path, monkeypatch):
+    """A page listed in fuzzydata whose fetch raises is counted, not silently skipped."""
+    ok = _fetch()
+
+    def fetch(url, **kwargs):
+        if url.endswith("/equalizer.html"):
+            raise OSError("503")
+        return ok(url, **kwargs)
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+
+    acq = _paligo.acquire(f"{ROOT}/index.html", tmp_path, slug="widget5", title=None)
+
+    assert acq.lost == 1
+    assert acq.pages == 1
+    assert not any("equalizer" in p.name for p in acq.raw_dir.glob("*.html"))
+
+
+def test_a_page_without_the_content_article_counts_as_lost(tmp_path, monkeypatch):
+    """A 200 page carrying only the search shell is counted lost, not dropped silently."""
+    ok = _fetch()
+
+    def fetch(url, **kwargs):
+        if url.endswith("/equalizer.html"):
+            return url, _TOPIC_NO_CONTENT
+        return ok(url, **kwargs)
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+
+    acq = _paligo.acquire(f"{ROOT}/index.html", tmp_path, slug="widget5", title=None)
+
+    assert acq.lost == 1
+    assert acq.pages == 1
+    assert not any("equalizer" in p.name for p in acq.raw_dir.glob("*.html"))
 
 
 def test_missing_index_is_an_input_error(tmp_path, monkeypatch):

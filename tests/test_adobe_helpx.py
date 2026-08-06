@@ -110,6 +110,45 @@ def test_empty_toc_is_an_input_error(tmp_path, monkeypatch):
         AdobeHelpxPattern().acquire(ENTRY, tmp_path)
 
 
+def test_a_topic_that_fails_to_fetch_counts_as_lost(tmp_path, monkeypatch):
+    """A topic the TOC listed but the fetch raised on is reported as lost, not skipped."""
+
+    def fetch(url, **kwargs):
+        if "user-guide" in url or url.endswith("/desktop.html"):
+            return url, _GUIDE
+        if url.endswith("/tools.html"):
+            raise OSError("connection reset")
+        return url, _TOPIC
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+
+    acq = AdobeHelpxPattern().acquire(ENTRY, tmp_path)
+
+    assert acq.lost == 1
+    assert acq.pages == 1
+    assert not any("tools" in p.name for p in acq.raw_dir.glob("*.html"))
+
+
+def test_a_topic_without_main_counts_as_lost(tmp_path, monkeypatch):
+    """A 200 topic whose <main> is absent is reported as lost, not silently dropped."""
+    no_main = "<html><body><div class='content'>layout changed</div></body></html>"
+
+    def fetch(url, **kwargs):
+        if "user-guide" in url or url.endswith("/desktop.html"):
+            return url, _GUIDE
+        if url.endswith("/tools.html"):
+            return url, no_main
+        return url, _TOPIC
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+
+    acq = AdobeHelpxPattern().acquire(ENTRY, tmp_path)
+
+    assert acq.lost == 1
+    assert acq.pages == 1
+    assert not any("tools" in p.name for p in acq.raw_dir.glob("*.html"))
+
+
 def test_normalize_merges_pages(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "fetch_text", _fetch())
     p = AdobeHelpxPattern()

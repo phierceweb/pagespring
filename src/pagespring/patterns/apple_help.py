@@ -40,7 +40,7 @@ def _parse_apple_url(url: str) -> tuple[str, str]:
     return slug, platform
 
 
-def _crawl(start_url: str, slug: str, platform: str, outdir: Path) -> tuple[int, bool]:
+def _crawl(start_url: str, slug: str, platform: str, outdir: Path) -> tuple[int, bool, int]:
     """BFS every topic page under /guide/<slug>/ for the platform into outdir.
 
     Apple embeds the full TOC as JSON in every page, so topic paths are
@@ -62,6 +62,7 @@ def _crawl(start_url: str, slug: str, platform: str, outdir: Path) -> tuple[int,
 
     seen_ids: set[str] = {"welcome"}
     saved = 0
+    lost = 0
     queue: deque[str] = deque([start_url])
     watchdog = ProgressWatchdog(stall_after_s=cfg.CRAWL_STALL_AFTER_S, now=time.monotonic)
     while queue and saved < _MAX_PAGES:
@@ -77,6 +78,7 @@ def _crawl(start_url: str, slug: str, platform: str, outdir: Path) -> tuple[int,
         try:
             final_url, body = http.fetch_text(url)
         except Exception as exc:
+            lost += 1
             log.warning("apple_help.fetch_error", url=url, error=str(exc))
             continue
         # Mark the post-redirect identity seen too: a short-form URL lands on the
@@ -96,7 +98,7 @@ def _crawl(start_url: str, slug: str, platform: str, outdir: Path) -> tuple[int,
         http.polite_sleep()
     if queue:
         log.warning("apple_help.capped", saved=saved, cap=_MAX_PAGES, queued=len(queue))
-    return saved, bool(queue)
+    return saved, bool(queue), lost
 
 
 class AppleHelpPattern:
@@ -111,12 +113,17 @@ class AppleHelpPattern:
         slug, platform = _parse_apple_url(url)
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
-        pages, truncated = _crawl(url, slug, platform, raw_dir)
+        pages, truncated, lost = _crawl(url, slug, platform, raw_dir)
         log.info(
             "apple_help.acquire", slug=slug, platform=platform, pages=pages, truncated=truncated
         )
         return AcquireResult(
-            raw_dir=raw_dir, kind="html", slug=slug, pages=pages, truncated=truncated
+            raw_dir=raw_dir,
+            kind="html",
+            slug=slug,
+            pages=pages,
+            truncated=truncated,
+            lost=lost,
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:

@@ -74,6 +74,18 @@ def test_fetch_failure_and_missing_article_sleep_before_continuing(tmp_path, mon
     assert len(sleeps) == 4
 
 
+def test_a_page_without_an_article_counts_as_lost(tmp_path, monkeypatch):
+    """A 200 page whose <article> is absent was dropped silently — only fetch
+    errors counted, so a theme change audited clean while shipping short."""
+    monkeypatch.setattr(http, "fetch_text", _fake_fetch_text)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    acq = _docusaurus.acquire("https://ex.io/docs", tmp_path, slug="ex", title="Ex Docs")
+
+    assert acq.lost == 2  # /broken (fetch error) + /no-article (missing container)
+    assert acq.pages == 2
+    assert not any("no-article" in p.name for p in acq.raw_dir.glob("*.html"))
+
+
 def test_extract_drops_scripts_and_styles():
     """Docusaurus ships hydration payloads and inline styles inside <article>."""
     html = """<html><body><article>

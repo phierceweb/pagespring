@@ -16,12 +16,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from html import unescape
 from pathlib import Path
 from typing import TypedDict
 from urllib.parse import urlparse
 
 from pf_core.fetch import images as _core
 from pf_core.log import get_logger
+from pf_core.utils.io import atomic_write_text
 
 from pagespring import http
 
@@ -68,7 +70,11 @@ class _PacedFetcher:
 
     def get_bytes(self, url: str, *, timeout_s: float | None = None) -> tuple[str, bytes]:
         """Ignores the localizer's suggested timeout — an image download rides
-        ``fetch_bytes``' long binary budget (tens of MB on slow CDNs)."""
+        ``fetch_bytes``' long binary budget (tens of MB on slow CDNs).
+
+        The ref arrives HTML-escaped; fetched that way a CDN reads ``amp;wid``
+        as an unknown parameter and serves its default rendition."""
+        url = unescape(url)
         final_url, data, meta = http.fetch_bytes_meta(url)
         self.fetched.append(
             (
@@ -109,8 +115,10 @@ def read_sidecar(slug_dir: Path) -> list[ImageRecord]:
 
 
 def write_sidecar(slug_dir: Path, records: list[ImageRecord]) -> None:
+    """Atomic: a torn sidecar orphans every image it failed to record."""
     slug_dir.mkdir(parents=True, exist_ok=True)
-    (slug_dir / SIDECAR_NAME).write_text(
+    atomic_write_text(
+        slug_dir / SIDECAR_NAME,
         json.dumps({"schema_version": _SIDECAR_SCHEMA, "images": records}, indent=2) + "\n",
         encoding="utf-8",
     )
@@ -121,6 +129,39 @@ def _merge(old: list[ImageRecord], new: list[ImageRecord]) -> list[ImageRecord]:
     merged = {r["source_url"]: r for r in old}
     merged.update({r["source_url"]: r for r in new})
     return sorted(merged.values(), key=lambda r: r["source_url"])
+
+
+def normalize_case(doc_path: Path, slug_dir: Path) -> int:
+    """Lowercase any image filename left over from the old naming rule.
+
+    Names are lowercase by construction now (see ``_legacy_name``). A cache
+    written under the previous rule is stale, and on a case-insensitive
+    filesystem a fresh download lands on the same inode while keeping the old
+    capitalisation — after which ``prune_orphans`` compares that name against a
+    lowercase ref, sees no match, and deletes a file the deliverable needs.
+    """
+    images_dir = slug_dir / "images"
+    if not images_dir.is_dir():
+        return 0
+    stale = [p for p in sorted(images_dir.iterdir()) if p.is_file() and p.name != p.name.lower()]
+    if not stale:
+        return 0
+    text = doc_path.read_text(encoding="utf-8")
+    records = {r["local"]: r for r in read_sidecar(slug_dir)}
+    for old in stale:
+        target = images_dir / old.name.lower()
+        if target.exists() and not target.samefile(old):
+            continue  # a distinct file already owns the lowercase name
+        old.rename(target)
+        text = text.replace(f"images/{old.name}", f"images/{target.name}")
+        rec = records.pop(old.name, None)
+        if rec is not None:
+            rec["local"] = target.name
+            records[target.name] = rec
+    doc_path.write_text(text, encoding="utf-8")
+    write_sidecar(slug_dir, sorted(records.values(), key=lambda r: r["source_url"]))
+    log.info("images.case_normalized", slug=slug_dir.name, renamed=len(stale))
+    return len(stale)
 
 
 def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
@@ -143,15 +184,23 @@ def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
     reused = 0
     superseded: list[str] = []
     for url in remote_image_urls(doc_path):
-        rec = records.get(url)
+        # sidecar keys and the probe are the decoded URL actually fetched — a ref
+        # carrying `&amp;` probed as-is is a different URL than the one the stored
+        # validators describe, so it could never 304. The document still holds the
+        # escaped form, which is what the rewrite below must match.
+        decoded = unescape(url)
+        rec = records.get(decoded)
         if rec is None or not (images_dir / rec["local"]).is_file():
             continue
-        if http.not_modified(url, etag=rec["etag"], last_modified=rec["last_modified"]):
-            text = text.replace(url, f"images/{rec['local']}")
+        if http.not_modified(decoded, etag=rec["etag"], last_modified=rec["last_modified"]):
+            # The localizer's own anchored rewriter, never a bare replace: CDN
+            # sizing variants make one image URL a prefix of another, and an
+            # unanchored replace corrupts the longer ref into a dangling local one.
+            text = _core._retarget(text, url, f"images/{rec['local']}")
             reused += 1
         else:
             (images_dir / rec["local"]).unlink(missing_ok=True)
-            superseded.append(url)
+            superseded.append(decoded)
     if reused:
         doc_path.write_text(text, encoding="utf-8")
     if superseded:
@@ -195,10 +244,13 @@ def prune_orphans(doc_path: Path, slug_dir: Path) -> int:
 
 def _legacy_name(url: str) -> str:
     """Local name for a remote image: sanitized basename stem, plus the URL's
-    image extension when it has one (else the localizer sniffs it from the bytes)."""
+    image extension when it has one (else the localizer sniffs it from the bytes).
+
+    Lowercased so the name does not depend on filesystem case-sensitivity.
+    """
     path = urlparse(url).path
     stem = re.sub(r"\.[A-Za-z0-9]+$", "", Path(path).name)  # drop ext; we set our own
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-") or "image"
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-").lower() or "image"
     suffix = Path(path).suffix.lower()
     ext = ".jpg" if suffix == ".jpeg" else (suffix if suffix in _IMAGE_EXTS else "")
     return f"{stem}{ext}"

@@ -31,6 +31,10 @@ _RESEARCH = """<html><body>
 </div>
 </body></html>"""
 
+_NO_CONTENT_ROOT = """<html><body>
+<div id="wrapper"><h1>Research</h1><p>Research body.</p></div>
+</body></html>"""
+
 
 def _fake_fetch_text(url, **kwargs):
     if url == "https://docs.ex.org/en/stable/broken.html":
@@ -79,6 +83,36 @@ def test_fetch_failure_sleeps_before_continuing(tmp_path, monkeypatch):
     assert acq.pages == 3  # broken.html failed to fetch — not saved
     # One polite sleep per dequeued URL: index, usage, research, and the broken fetch.
     assert len(sleeps) == 4
+
+
+def test_fetch_error_counts_as_lost(tmp_path, monkeypatch):
+    """A discovered page whose fetch raises is reported as lost, not silently dropped."""
+    monkeypatch.setattr(http, "fetch_text", _fake_fetch_text)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    acq = _sphinx.acquire("https://docs.ex.org/en/stable/", tmp_path, slug="ex", title=None)
+    assert acq.lost == 1  # broken.html
+    assert acq.pages == 3
+    assert not any("broken" in f.name for f in acq.raw_dir.glob("*.html"))
+
+
+def test_page_without_content_root_counts_as_lost(tmp_path, monkeypatch):
+    """A 200 page whose content root is absent is reported as lost, same as a fetch error."""
+
+    def fake_fetch(url, **kwargs):
+        table = {
+            "https://docs.ex.org/en/stable/": _INDEX,
+            "https://docs.ex.org/en/stable/usage.html": _USAGE,
+            "https://docs.ex.org/en/stable/research.html": _NO_CONTENT_ROOT,
+            "https://docs.ex.org/en/stable/broken.html": _RESEARCH,
+        }
+        return url, table[url]
+
+    monkeypatch.setattr(http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    acq = _sphinx.acquire("https://docs.ex.org/en/stable/", tmp_path, slug="ex", title=None)
+    assert acq.lost == 1  # research.html; every other page fetches and extracts
+    assert acq.pages == 3
+    assert not any("research" in f.name for f in acq.raw_dir.glob("*.html"))
 
 
 def test_file_suffixed_start_url_crawls_its_directory(tmp_path, monkeypatch):

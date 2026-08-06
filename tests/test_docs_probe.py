@@ -15,7 +15,13 @@ _DOCUSAURUS_HOME = (
     '<html><head><meta name="generator" content="Docusaurus v3.8.1"><title>D</title></head></html>'
 )
 _SPHINX_HOME = (
-    '<html><head><title>S</title><link href="_static/style.css"></head><body></body></html>'
+    "<html><head><title>S</title>"
+    '<script src="_static/documentation_options.js"></script></head><body></body></html>'
+)
+# A generic asset dir that happens to be named _static/ — not Sphinx.
+_STATIC_ONLY_HOME = (
+    '<html><head><title>X</title><link href="/assets/_static/theme.css"></head>'
+    "<body><main>hi</main></body></html>"
 )
 _PLAIN_HOME = "<html><head><title>plain</title></head><body>nothing here</body></html>"
 
@@ -71,6 +77,20 @@ def test_probe_unrecognized_raises_invalid_input(tmp_path, monkeypatch):
     with pytest.raises(InvalidInputError) as exc_info:
         DocsProbePattern().acquire("https://plain.example.com", tmp_path)
     assert "probed" in str(exc_info.value)
+
+
+def test_generic_static_dir_does_not_route_to_sphinx(tmp_path, monkeypatch):
+    """A bare "_static/" anywhere in the body used to claim the site for Sphinx,
+    whose extractor ends at <main> — so the mis-route succeeded silently."""
+
+    def fake_fetch(url, **kwargs):
+        if url.endswith(("search/search_index.json", "llms.txt")):
+            raise RuntimeError("404")
+        return url, _STATIC_ONLY_HOME
+
+    monkeypatch.setattr(http, "fetch_text", fake_fetch)
+    with pytest.raises(InvalidInputError):
+        DocsProbePattern().acquire("https://docs.ex.org", tmp_path)
 
 
 def test_normalize_markdown_concats_and_strips_banner(tmp_path):

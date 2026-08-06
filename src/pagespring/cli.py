@@ -132,7 +132,7 @@ def renormalize(
     --keep-raw. Byte-identical output re-stages nothing and reports unchanged."""
     try:
         result = run_renormalize(slug)
-    except PreconditionError as exc:
+    except (InvalidInputError, PreconditionError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from None
     except EmptyOutputError:
@@ -180,6 +180,9 @@ def localize(
     for s in targets:
         try:
             r = localize_images(s)
+        except InvalidInputError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(2) from None
         except PreconditionError as exc:
             typer.echo(f"skip {s}: {exc}", err=True)
             continue
@@ -204,8 +207,21 @@ def audit_cmd(
     exit 1 so a script can gate the pagespeak hand-off."""
     if all_slugs:
         results = audit_all()
+        if not results:
+            # Auditing nothing is not a pass. Exit 2 ("could not do what you
+            # asked") keeps 1 for "found errors".
+            typer.echo(
+                f"Nothing to audit — no slugs under {cfg.INCOMING_DIR}. "
+                f"Run `ingest` first, or check the path.",
+                err=True,
+            )
+            raise typer.Exit(2)
     elif slug:
-        results = [(slug, audit_slug(slug))]
+        try:
+            results = [(slug, audit_slug(slug))]
+        except InvalidInputError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(2) from None
     else:
         typer.echo("Give a slug or --all.", err=True)
         raise typer.Exit(2)
@@ -247,8 +263,21 @@ def refresh(
     degraded one."""
     if all_slugs:
         outcomes = refresh_all()
+        if not outcomes:
+            # Sweeping nothing is not a clean sweep. Exit 2 ("could not do what
+            # you asked") keeps 1 for "a source failed".
+            typer.echo(
+                f"Nothing to refresh — no slugs under {cfg.INCOMING_DIR}. "
+                f"Run `ingest` first, or check the path.",
+                err=True,
+            )
+            raise typer.Exit(2)
     elif slug:
-        outcomes = [refresh_slug(slug)]
+        try:
+            outcomes = [refresh_slug(slug)]
+        except InvalidInputError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(2) from None
     else:
         typer.echo("Give a slug or --all.", err=True)
         raise typer.Exit(2)
@@ -321,9 +350,10 @@ def _status_row(slug_dir: Path) -> str:
         size = deliverable.stat().st_size if deliverable.exists() else m["bytes"]
         pages = str(m["pages"]) if m["pages"] is not None else "-"
         host = urlsplit(m["source_url"]).netloc or "-"
+        raw = "raw" if m.get("kept_raw") else ""  # replays offline via renormalize
         return (
             f"{slug_dir.name:24} {m['deliverable']:32} {m['pattern']:14} "
-            f"{pages:>5} {_human_size(size):>9}  {m['ingested_at'][:10]}  {host}"
+            f"{pages:>5} {_human_size(size):>9} {raw:>4}  {m['ingested_at'][:10]}  {host}"
         )
     files = sorted(
         p for p in slug_dir.iterdir() if p.is_file() and p.name != manifest.MANIFEST_NAME

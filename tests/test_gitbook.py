@@ -166,3 +166,54 @@ def test_anchor_links_ending_in_md_are_not_pages(tmp_path, monkeypatch):
     assert out.count("<!-- source:") == acq.pages, (
         f"manifest will claim {acq.pages} pages but {out.count('<!-- source:')} are in the file"
     )
+
+
+class _LogSpy:
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, event, **kw):
+        self.warnings.append((event, kw))
+
+    def info(self, *a, **kw):
+        pass
+
+
+def test_pages_lost_to_md_fetch_errors_are_counted(tmp_path, monkeypatch):
+    """Throttling drops pages one at a time; uncounted, the manifest reports a
+    complete crawl and audit sees nothing missing."""
+
+    def fake(url, **kwargs):
+        if url == "https://docs.x.com/setup.md":
+            raise OSError("503 throttled")
+        return _fake_fetch_text(url, **kwargs)
+
+    monkeypatch.setattr(http, "fetch_text", fake)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = GitBookPattern().acquire("https://docs.x.com", tmp_path)
+
+    assert acq.pages == 1
+    assert acq.lost == 1
+
+
+def test_rendered_page_failure_loses_images_not_the_page(tmp_path, monkeypatch):
+    """The .md carries the text, so a failed rendered-page fetch costs only the
+    image resolution — the page still ships, and the loss is logged not swallowed."""
+    from pagespring.patterns import gitbook as mod
+
+    def fake(url, **kwargs):
+        if url == "https://docs.x.com/intro":
+            raise OSError("500")
+        return _fake_fetch_text(url, **kwargs)
+
+    monkeypatch.setattr(http, "fetch_text", fake)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    spy = _LogSpy()
+    monkeypatch.setattr(mod, "log", spy)
+
+    acq = GitBookPattern().acquire("https://docs.x.com", tmp_path)
+
+    assert acq.pages == 2
+    assert acq.lost == 0
+    assert any(event == "gitbook.render_fetch_error" for event, _ in spy.warnings)

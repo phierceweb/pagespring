@@ -181,6 +181,36 @@ def test_same_topic_under_short_and_long_url_is_fetched_once(tmp_path, monkeypat
     assert "aaf-files-lgcp6f2262ba.html" in [p.name for p in acq.raw_dir.glob("*.html")]
 
 
+def test_a_topic_whose_fetch_raises_counts_as_lost(tmp_path, monkeypatch):
+    """A discovered topic that never staged is reported as lost, and the crawl continues."""
+    welcome = (
+        "<html><body>"
+        '<a href="/guide/numbers/topic-ok/14.0/mac/14.0">ok</a>'
+        '<a href="/guide/numbers/topic-dead/14.0/mac/14.0">dead</a>'
+        "</body></html>"
+    )
+
+    def fetch(url, **kwargs):
+        if "topic-dead" in url:
+            raise OSError("503 from Apple")
+        if "topic-ok" in url:
+            return url, "<html><body>topic</body></html>"
+        return url, welcome
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = AppleHelpPattern().acquire(
+        "https://support.apple.com/guide/numbers/welcome/mac", tmp_path
+    )
+
+    assert acq.lost == 1
+    assert acq.pages == 2  # welcome + the topic that did stage
+    names = [p.name for p in acq.raw_dir.glob("*.html")]
+    assert "topic-ok.html" in names
+    assert "topic-dead.html" not in names
+
+
 def test_stalled_crawl_stops_and_reports_truncated(tmp_path, monkeypatch):
     """A crawl that keeps fetching but stops producing pages must bail, not spin.
 

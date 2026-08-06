@@ -3,7 +3,7 @@
 import json
 
 from pagespring import http
-from pagespring.patterns.zendesk_help import ZendeskHelpPattern
+from pagespring.patterns.zendesk_help import ZendeskHelpPattern, _slug
 
 _PAGE1 = json.dumps(
     {
@@ -175,3 +175,82 @@ def test_acquire_paginates_and_merges(tmp_path, monkeypatch):
     assert "<h2>Handwriting</h2>" in html  # page 2 (pagination followed)
     assert "Write with a pencil." in html
     assert "source: https://support.gingerlabs.com/hc/en-us/articles/2" in html
+
+
+def test_attachment_url_is_not_claimed():
+    """`/hc/.../article_attachments/<id>` is a binary file, not an article.
+
+    Claiming it made a lone PDF acquire the whole help center; declining lets
+    docs_probe's %PDF- sniff route it to pdf_url."""
+    url = "https://northstarwater.zendesk.com/hc/en-us/article_attachments/37651641721111"
+
+    assert not ZendeskHelpPattern().match(url)
+
+
+def test_help_center_urls_are_still_claimed():
+    p = ZendeskHelpPattern()
+
+    assert p.match("https://support.gingerlabs.com/hc/en-us")
+    assert p.match("https://synchroarts.zendesk.com/hc/en-us/articles/9-Setting-up")
+
+
+def test_article_url_scopes_to_that_article(tmp_path, monkeypatch):
+    """An article URL matched neither sections nor categories, so it fell through
+    to the unscoped endpoint and paged the whole center — up to 10,000 articles."""
+    seen: list[str] = []
+    monkeypatch.setattr(http, "fetch_text", _spy_fetch(seen))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    ZendeskHelpPattern().acquire(
+        "https://northstarwater.zendesk.com/hc/en-us/articles/1500012369841-NSC42-Manual", tmp_path
+    )
+
+    assert "/api/v2/help_center/en-us/articles/1500012369841" in seen[0]
+
+
+def test_article_slug_does_not_collide_with_the_whole_center(tmp_path, monkeypatch):
+    """The slug was host-only, so a single-article ingest and a whole-center
+    ingest of the same vendor would overwrite each other in one incoming/ dir."""
+    monkeypatch.setattr(http, "fetch_text", _spy_fetch([]))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    p = ZendeskHelpPattern()
+
+    article = p.acquire(
+        "https://synchroarts.zendesk.com/hc/en-us/articles/9-Setting-up-VocAlign-6", tmp_path
+    )
+    center = p.acquire("https://synchroarts.zendesk.com/hc/en-us", tmp_path)
+
+    assert article.slug != center.slug
+
+
+def test_article_ingest_marks_itself_a_single_document(tmp_path, monkeypatch):
+    """One article IS the deliverable. Without this, audit's single_page_crawl
+    fires on a healthy slug and `audit --all --strict` exits 1."""
+    monkeypatch.setattr(http, "fetch_text", _spy_fetch([]))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = ZendeskHelpPattern().acquire(
+        "https://synchroarts.zendesk.com/hc/en-us/articles/9-Setting-up", tmp_path
+    )
+
+    assert acq.single_document is True
+
+
+def test_whole_center_ingest_is_not_a_single_document(tmp_path, monkeypatch):
+    monkeypatch.setattr(http, "fetch_text", _spy_fetch([]))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = ZendeskHelpPattern().acquire("https://support.gingerlabs.com/hc/en-us", tmp_path)
+
+    assert acq.single_document is False
+
+
+def test_article_slug_keeps_the_vendor_host():
+    """Two vendors both publish a "Getting Started" article. A title-only slug
+    collides, and ingest clears the dir first — so the second silently destroys
+    the first, with no duplicate_* finding to catch it (contents differ)."""
+    one = _slug("https://support.a.com/hc/en-us/articles/111-Getting-Started")
+    two = _slug("https://support.b.com/hc/en-us/articles/222-Getting-Started")
+
+    assert one != two
+    assert "getting-started" in one

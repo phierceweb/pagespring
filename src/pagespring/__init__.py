@@ -10,4 +10,4 @@ This package stays dependency-light (pf-core[cli], beautifulsoup4, pyyaml,
 pypdfium2).
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"

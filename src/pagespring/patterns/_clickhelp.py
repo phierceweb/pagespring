@@ -26,7 +26,7 @@ from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs, strip_scripts
+from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
 
 log = get_logger(__name__)
 
@@ -88,6 +88,7 @@ def _extract(page_html: str, page_url: str) -> str | None:
     for el in node.select(_INNER_CHROME_CSS):
         el.decompose()
     strip_scripts(node)
+    flatten_responsive_images(node)
     absolutize_refs(node, page_url)
     return str(node)
 
@@ -114,20 +115,26 @@ def acquire(url: str, workdir: Path, *, slug: str, title: str | None) -> Acquire
     raw_dir = workdir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
+    lost = 0
     for i, tid in enumerate(ids):
         page_url = f"{root}/HTML/{tid}.html"
         try:
             final, body = http.fetch_text(page_url)
         except Exception as exc:
+            lost += 1
             log.warning("clickhelp.fetch_error", url=page_url, error=str(exc))
             http.polite_sleep()
             continue
         fragment = _extract(body, final)
         if fragment is None:
+            lost += 1
             log.warning("clickhelp.no_container", url=page_url)
             http.polite_sleep()
             continue
-        (raw_dir / f"{i:04d}-{tid}.html").write_text(
+        # tid is remote-controlled (toc_nav.js); flatten only here — the URL above
+        # needs it verbatim.
+        stem = tid.strip("/").replace("/", "-") or "topic"
+        (raw_dir / f"{i:04d}-{stem}.html").write_text(
             f"<!-- source: {page_url} -->\n<section>\n{fragment}\n</section>\n", encoding="utf-8"
         )
         saved += 1
@@ -135,5 +142,11 @@ def acquire(url: str, workdir: Path, *, slug: str, title: str | None) -> Acquire
 
     log.info("clickhelp.acquire", root=root, topics=len(ids), pages=saved, slug=slug)
     return AcquireResult(
-        raw_dir=raw_dir, kind="html", slug=slug, pages=saved, title=title, truncated=truncated
+        raw_dir=raw_dir,
+        kind="html",
+        slug=slug,
+        pages=saved,
+        title=title,
+        truncated=truncated,
+        lost=lost,
     )

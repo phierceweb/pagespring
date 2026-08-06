@@ -25,6 +25,7 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
+from pagespring.patterns._site import flatten_responsive_images
 
 log = get_logger(__name__)
 
@@ -86,6 +87,7 @@ def _extract(soup: BeautifulSoup, page_url: str) -> str | None:
         node = main
     for junk in node.find_all(["script", "style"]):
         junk.decompose()
+    flatten_responsive_images(node)
     for img in node.find_all("img"):
         src = img.get("src")
         if isinstance(src, str) and src:
@@ -140,6 +142,7 @@ class OpenStaxPattern:
         cur: str | None = first_url
         visited: set[str] = set()
         saved = 0
+        lost = 0
         i = 0
         truncated = False
         book_title: str | None = None
@@ -153,7 +156,10 @@ class OpenStaxPattern:
             if i > 0:  # the first page's html is already in hand from the Prev-walk
                 try:
                     _f, html = http.fetch_text(cur)
-                except Exception as exc:  # chain dead-ends without the next link
+                except Exception as exc:
+                    # The chain is the only way forward, so a dead link strands
+                    # every page after it — partial, not merely one page lost.
+                    truncated = True
                     log.warning("openstax.fetch_error", url=cur, error=str(exc))
                     break
             soup = BeautifulSoup(html, _PARSER)
@@ -166,6 +172,9 @@ class OpenStaxPattern:
                     encoding="utf-8",
                 )
                 saved += 1
+            else:
+                lost += 1
+                log.warning("openstax.no_content", url=cur)
             i += 1
             nxt = _nav_href(soup, "Next Page")
             if nxt is None:
@@ -182,6 +191,7 @@ class OpenStaxPattern:
             pages=saved,
             title=book_title,
             truncated=truncated,
+            lost=lost,
         )
         return AcquireResult(
             raw_dir=raw_dir,
@@ -190,6 +200,7 @@ class OpenStaxPattern:
             pages=saved,
             title=book_title,
             truncated=truncated,
+            lost=lost,
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:

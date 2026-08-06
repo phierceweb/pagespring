@@ -24,7 +24,7 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs, strip_scripts
+from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
 
 log = get_logger(__name__)
 
@@ -75,6 +75,7 @@ def _extract(page_html: str, page_url: str) -> str | None:
     if not isinstance(node, Tag):
         return None
     strip_scripts(node)
+    flatten_responsive_images(node)
     absolutize_refs(node, page_url)
     return str(node)
 
@@ -102,16 +103,19 @@ def acquire(url: str, workdir: Path, *, slug: str, title: str | None) -> Acquire
     raw_dir = workdir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
+    lost = 0
     for i, name in enumerate(pages):
         page_url = f"{base}/{name}"
         try:
             final, body = http.fetch_text(page_url)
         except Exception as exc:
+            lost += 1
             log.warning("paligo.fetch_error", url=page_url, error=str(exc))
             http.polite_sleep()
             continue
         fragment = _extract(body, final)
         if fragment is None:
+            lost += 1
             log.warning("paligo.no_content", url=page_url)
             http.polite_sleep()
             continue
@@ -124,5 +128,11 @@ def acquire(url: str, workdir: Path, *, slug: str, title: str | None) -> Acquire
 
     log.info("paligo.acquire", base=base, found=len(pages), pages=saved, slug=slug)
     return AcquireResult(
-        raw_dir=raw_dir, kind="html", slug=slug, pages=saved, title=title, truncated=truncated
+        raw_dir=raw_dir,
+        kind="html",
+        slug=slug,
+        pages=saved,
+        title=title,
+        truncated=truncated,
+        lost=lost,
     )

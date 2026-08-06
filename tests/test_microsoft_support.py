@@ -226,6 +226,80 @@ def test_sitemap_404_end_is_silent(tmp_path, monkeypatch):
     assert not any(event == "microsoft_support.sitemap_error" for event, _ in spy.warnings)
 
 
+def test_a_throttled_sitemap_page_truncates_the_result(tmp_path, monkeypatch):
+    """A 403 mid-pagination cuts the catalog: the articles on the pages never
+    reached cannot be counted one by one, so truncated has to carry it."""
+
+    def fake_fetch(url, **kwargs):
+        if url.endswith("_sitemaps/excel_en-us_1.xml"):
+            return url, _SITEMAP
+        if "_sitemaps/" in url:  # _2.xml throttled — NOT a genuine end-of-pages 404
+            raise urllib.error.HTTPError(url, 403, "Forbidden", None, None)
+        if "create-a-pivottable" in url:
+            return url, _ART1
+        if "chrome-shell" in url:
+            return url, _SHELL
+        return url, _ART2
+
+    monkeypatch.setattr(http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = MicrosoftSupportPattern().acquire("https://support.microsoft.com/en-us/excel", tmp_path)
+
+    assert acq.truncated is True
+    assert acq.pages == 2  # articles from _1.xml still acquired
+
+
+def test_the_terminal_sitemap_404_does_not_truncate(tmp_path, monkeypatch):
+    """Running off the end of the sitemap pages is the normal stop — flagging it
+    would mark every healthy sitemap crawl truncated."""
+    monkeypatch.setattr(http, "fetch_text", _fake_fetch_sitemap_mode)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = MicrosoftSupportPattern().acquire("https://support.microsoft.com/en-us/excel", tmp_path)
+
+    assert acq.truncated is False
+
+
+def test_article_without_a_content_div_counts_as_lost(tmp_path, monkeypatch):
+    """An article the extractor cannot open was dropped silently — a client-rendered
+    or retemplated article is a real loss, not a chrome shell."""
+    no_content = (
+        "<html><body><h1>Create a PivotTable</h1><p>Rendered client-side.</p></body></html>"
+    )
+
+    def fake_fetch(url, **kwargs):
+        if url.endswith("_sitemaps/excel_en-us_1.xml"):
+            return url, _SITEMAP
+        if "_sitemaps/" in url:
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+        if "create-a-pivottable" in url:
+            return url, no_content
+        if "chrome-shell" in url:
+            return url, _SHELL
+        return url, _ART2
+
+    monkeypatch.setattr(http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = MicrosoftSupportPattern().acquire("https://support.microsoft.com/en-us/excel", tmp_path)
+
+    assert acq.pages == 1
+    assert acq.lost == 1
+
+
+def test_title_less_chrome_shell_is_not_counted_as_lost(tmp_path, monkeypatch):
+    """The shell HAS a content div, just nothing in it — it is not an article, so
+    counting it fires pages_lost on every healthy crawl."""
+    monkeypatch.setattr(http, "fetch_text", _fake_fetch_sitemap_mode)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = MicrosoftSupportPattern().acquire("https://support.microsoft.com/en-us/excel", tmp_path)
+
+    assert acq.pages == 2  # the shell was skipped
+    assert acq.lost == 0
+
+
 def test_relative_image_src_is_absolutized(tmp_path, monkeypatch):
     """Articles served with relative media/ image paths (Sway, Publisher, …) must be
     absolutized against the article URL — the deliverable promises absolute assets.

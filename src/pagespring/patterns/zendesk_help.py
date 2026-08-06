@@ -26,7 +26,11 @@ from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs, strip_scripts
+from pagespring.patterns._site import (
+    absolutize_refs,
+    flatten_responsive_images,
+    strip_scripts,
+)
 
 log = get_logger(__name__)
 
@@ -34,6 +38,9 @@ _MAX_PAGES = 100  # API pages (per_page=100) — safety cap
 
 
 _SCOPE_RE = re.compile(r"/(sections|categories)/(\d+)")
+_ARTICLE_RE = re.compile(r"/articles/(\d+)(?:-([^/?#]+))?")
+# Binary uploads served from the same /hc/ path space — a file, not an article.
+_ATTACHMENT_SEG = "/article_attachments/"
 
 
 def _api_base_and_locale(url: str) -> tuple[str, str]:
@@ -44,22 +51,34 @@ def _api_base_and_locale(url: str) -> tuple[str, str]:
 
 
 def _articles_endpoint(url: str) -> str:
-    """Articles endpoint, narrowed when the URL names a section/category.
+    """Articles endpoint, narrowed when the URL names an article/section/category.
 
     A bare ``/hc/<locale>`` pulls the whole help center — right for a
     single-product vendor, wrong for one that ships many under one center.
     """
     origin, locale = _api_base_and_locale(url)
     base = f"{origin}/api/v2/help_center/{locale}"
-    scope = _SCOPE_RE.search(urlparse(url).path)
+    path = urlparse(url).path
+    article = _ARTICLE_RE.search(path)
+    if article:
+        return f"{base}/articles/{article.group(1)}.json"
+    scope = _SCOPE_RE.search(path)
     if scope:
         return f"{base}/{scope.group(1)}/{scope.group(2)}/articles.json?per_page=100"
     return f"{base}/articles.json?per_page=100"
 
 
 def _slug(url: str) -> str:
+    """Host id, plus the article's own name when the URL names one.
+
+    Both halves are load-bearing: a host-only slug collides across articles, an
+    article-only slug collides across vendors."""
+    article = _ARTICLE_RE.search(urlparse(url).path)
     host = urlparse(url).netloc.lower().removeprefix("www.").removeprefix("support.")
-    return slugify(host.split(".")[0]) or "help"
+    host_slug = slugify(host.split(".")[0]) or "help"
+    if article:
+        return slugify(f"{host_slug}-{article.group(2) or article.group(1)}")
+    return host_slug
 
 
 class ZendeskHelpPattern:
@@ -67,12 +86,15 @@ class ZendeskHelpPattern:
 
     def match(self, url: str) -> bool:
         p = urlparse(url)
+        if _ATTACHMENT_SEG in p.path:
+            return False  # a file — docs_probe sniffs it and routes by content
         return p.netloc.lower().endswith(".zendesk.com") or "/hc/" in p.path
 
     def _clean_body(self, body: str, page_url: str) -> str:
         """Article bodies are author-supplied HTML — embeds, trackers and all."""
         soup = BeautifulSoup(body, "html.parser")
         strip_scripts(soup)
+        flatten_responsive_images(soup)
         if page_url:
             absolutize_refs(soup, page_url)
         return str(soup)
@@ -86,7 +108,9 @@ class ZendeskHelpPattern:
         while page_url and pages < _MAX_PAGES:
             _f, body = http.fetch_text(page_url)
             data = json.loads(body)
-            articles.extend(data.get("articles", []))
+            # The single-article endpoint returns one "article"; the list ones "articles".
+            single = data.get("article")
+            articles.extend(data.get("articles") or ([single] if single else []))
             page_url = data.get("next_page")
             pages += 1
             http.polite_sleep()
@@ -106,11 +130,19 @@ class ZendeskHelpPattern:
             )
 
         slug = _slug(url)
+        # One article IS the deliverable, so pages=1 is correct here — not the
+        # collapsed crawl audit's single_page_crawl check exists to catch.
+        is_article = bool(_ARTICLE_RE.search(urlparse(url).path))
         log.info(
             "zendesk_help.acquire", origin=origin, locale=locale, articles=len(articles), slug=slug
         )
         return AcquireResult(
-            raw_dir=raw_dir, kind="html", slug=slug, pages=len(articles), truncated=truncated
+            raw_dir=raw_dir,
+            kind="html",
+            slug=slug,
+            pages=len(articles),
+            truncated=truncated,
+            single_document=is_article,
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:

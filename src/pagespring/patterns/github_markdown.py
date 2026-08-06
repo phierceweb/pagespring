@@ -110,10 +110,12 @@ class GitHubMarkdownPattern:
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
         saved = 0
+        lost = 0
         for i, path in enumerate(order):
             try:
                 _f, body = http.fetch_text(md[path])
             except Exception as exc:
+                lost += 1
                 log.warning("github_markdown.fetch_error", file=path, error=str(exc))
                 continue
             flat = path.replace("/", "__")
@@ -132,9 +134,15 @@ class GitHubMarkdownPattern:
             pages=saved,
             slug=slug,
             truncated=truncated,
+            lost=lost,
         )
         return AcquireResult(
-            raw_dir=raw_dir, kind="markdown", slug=slug, pages=saved, truncated=truncated
+            raw_dir=raw_dir,
+            kind="markdown",
+            slug=slug,
+            pages=saved,
+            truncated=truncated,
+            lost=lost,
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:

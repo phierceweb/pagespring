@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pagespring"
-version = "0.8.0"
+version = "0.9.0"
 description = "Acquire and normalize online documentation into clean, convertible source files — the acquisition front-end to pagespeak."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,7 +32,7 @@ dependencies = [
     # Page counts for PDF deliverables. pdfium decrypts internally, so encrypted
     # manuals count without a separate crypto dependency.
     "pypdfium2>=4.30",
-    "pf-core[cli]~=0.15.1",
+    "pf-core[cli]~=0.18.1",
 ]
 
 [project.optional-dependencies]

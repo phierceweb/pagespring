@@ -88,10 +88,12 @@ class LlmsTxtPattern:
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
         saved = 0
+        lost = 0
         for i, mu in enumerate(md_urls):
             try:
                 _f, body = http.fetch_text(mu)
             except Exception as exc:
+                lost += 1
                 log.warning("llms_txt.fetch_error", url=mu, error=str(exc))
                 continue
             stem = urlparse(mu).path.rstrip("/").rsplit("/", 1)[-1] or "page.md"
@@ -104,9 +106,16 @@ class LlmsTxtPattern:
             http.polite_sleep()
 
         slug = _slug(url, section)
-        log.info("llms_txt.acquire", llms=llms_url, section=section, pages=saved, slug=slug)
+        log.info(
+            "llms_txt.acquire", llms=llms_url, section=section, pages=saved, slug=slug, lost=lost
+        )
         return AcquireResult(
-            raw_dir=raw_dir, kind="markdown", slug=slug, pages=saved, truncated=truncated
+            raw_dir=raw_dir,
+            kind="markdown",
+            slug=slug,
+            pages=saved,
+            truncated=truncated,
+            lost=lost,
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:

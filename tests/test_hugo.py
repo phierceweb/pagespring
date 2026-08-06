@@ -198,6 +198,54 @@ def test_taxonomy_list_pages_are_excluded():
     assert kept == ["https://d.ex.com/ozone/", "https://d.ex.com/ozone/eq/"]
 
 
+def test_a_page_without_main_counts_as_lost(tmp_path, monkeypatch):
+    """A 200 page whose <main> is absent was dropped silently — only fetch errors counted."""
+    no_main = "<html><body><div id='content'>theme changed</div></body></html>"
+
+    def fetch(url, **kwargs):
+        if url.endswith("sitemap.xml"):
+            if url != "https://docs.example.com/prod/en/sitemap.xml":
+                raise OSError(f"404 {url}")
+            return url, _SITEMAP
+        if url.endswith("/alm/index.html"):
+            return url, no_main
+        return url, _PAGE
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+
+    acq = _hugo.acquire(
+        "https://docs.example.com/prod/en/index.html", tmp_path, slug="prod", title=None
+    )
+
+    assert acq.lost == 1
+    assert acq.pages == 1
+    assert not any("alm" in p.name for p in acq.raw_dir.glob("*.html"))
+
+
+def test_an_unreadable_child_sitemap_truncates_the_result(tmp_path, monkeypatch):
+    """Pages behind a failed child sitemap are never discovered, so `lost` cannot
+    count them one by one — only truncated can carry the loss."""
+
+    def fetch(url, **kwargs):
+        if url == "https://docs.example.com/prod/sitemap.xml":
+            return url, _SITEMAP_INDEX
+        if url == "https://docs.example.com/prod/en/sitemap.xml":
+            return url, _CHILD_EN
+        if url == "https://docs.example.com/prod/de/sitemap.xml":
+            raise OSError("503 throttled")
+        if url.endswith("sitemap.xml"):
+            raise OSError(f"404 {url}")
+        return url, _PAGE
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+
+    acq = _hugo.acquire("https://docs.example.com/prod/", tmp_path, slug="prod", title=None)
+
+    assert acq.pages == 2  # only the en child was readable
+    assert acq.truncated is True
+    assert acq.lost == 0
+
+
 def test_extract_drops_the_sidebar_nav_drawer():
     """Hugo doc themes render the whole chapter list into every page. It is not
     a <nav>, so the generic chrome selector misses it."""

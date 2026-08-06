@@ -15,11 +15,13 @@ import json
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
+from pf_core.utils.io import atomic_write_text
+
 from pagespring import __version__
 
 MANIFEST_NAME = "manifest.json"
 # Post-v1 keys are NotRequired — read them with .get, older files lack them.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class Manifest(TypedDict):
@@ -35,6 +37,15 @@ class Manifest(TypedDict):
     etag: NotRequired[str | None]  # response validators from single-fetch acquires
     last_modified: NotRequired[str | None]
     truncated: NotRequired[bool]  # a page cap cut the crawl short — the deliverable is partial
+    # the source is one document, not a crawled index — a 1-page deliverable is correct
+    single_document: NotRequired[bool]
+    # raw/ was staged beside the deliverable, so renormalize can replay offline
+    kept_raw: NotRequired[bool]
+    # pages discovered but never staged — silent partial acquisition
+    lost: NotRequired[int]
+    # the deliverable's hash AFTER localize re-pointed its refs; None when no
+    # image pass ran, in which case `sha256` still describes the file on disk
+    localized_sha256: NotRequired[str | None]
     deliverable: str
     pages: int | None
     bytes: int
@@ -64,6 +75,10 @@ def build_manifest(
     etag: str | None = None,
     last_modified: str | None = None,
     truncated: bool = False,
+    single_document: bool = False,
+    kept_raw: bool = False,
+    lost: int = 0,
+    localized_sha256: str | None = None,
 ) -> Manifest:
     """Assemble a manifest from one ingest's facts (stamps schema + version)."""
     return {
@@ -77,6 +92,10 @@ def build_manifest(
         "etag": etag,
         "last_modified": last_modified,
         "truncated": truncated,
+        "single_document": single_document,
+        "kept_raw": kept_raw,
+        "lost": lost,
+        "localized_sha256": localized_sha256,
         "deliverable": deliverable,
         "pages": pages,
         "bytes": size_bytes,
@@ -87,9 +106,13 @@ def build_manifest(
 
 
 def write_manifest(slug_dir: Path, manifest: Manifest) -> Path:
-    """Write ``manifest`` as pretty JSON to ``slug_dir/manifest.json``; return it."""
+    """Write ``manifest`` as pretty JSON to ``slug_dir/manifest.json``; return it.
+
+    Atomic: a kill mid-write leaves the previous manifest intact rather than a
+    truncated one, which reads as a corpus-wide `manifest_missing`.
+    """
     path = slug_dir / MANIFEST_NAME
-    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return path
 
 

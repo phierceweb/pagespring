@@ -23,7 +23,7 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs, strip_scripts
+from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
 
 log = get_logger(__name__)
 
@@ -92,24 +92,28 @@ def _extract(page_html: str, page_url: str) -> str | None:
     for el in main.select(_CHROME_CSS):
         el.decompose()
     strip_scripts(main)
+    flatten_responsive_images(main)
     absolutize_refs(main, page_url)
     return str(main)
 
 
-def _page_locs(sitemap_url: str, sitemap: str) -> list[str]:
-    """Page URLs from a sitemap, expanding a sitemapindex into its children.
+def _page_locs(sitemap_url: str, sitemap: str) -> tuple[list[str], bool]:
+    """Page URLs from a sitemap, and whether any child sitemap was unreadable.
 
     A multilingual Hugo site publishes an index whose ``<loc>``s are child
-    *sitemaps*, not pages — crawling those directly collects nothing.
+    *sitemaps*, not pages — crawling those directly collects nothing. An
+    unreadable child takes its whole page block with it, and those pages are
+    never discovered, so only ``truncated`` can carry the loss.
     """
     try:
         root = ET.fromstring(sitemap)
     except ET.ParseError as exc:
         raise InvalidInputError(f"{sitemap_url} is not a valid sitemap") from exc
     if root.find(_SITEMAP_EL) is None:
-        return [el.text.strip() for el in root.iter(_LOC) if el.text]
+        return [el.text.strip() for el in root.iter(_LOC) if el.text], False
 
     locs: list[str] = []
+    child_failed = False
     for child in root.iter(_SITEMAP_EL):
         el = child.find(_LOC)
         if el is None or not el.text:
@@ -119,34 +123,38 @@ def _page_locs(sitemap_url: str, sitemap: str) -> list[str]:
             _f, body = http.fetch_text(child_url)
             locs.extend(x.text.strip() for x in ET.fromstring(body).iter(_LOC) if x.text)
         except (OSError, ET.ParseError) as exc:
+            child_failed = True
             log.warning("hugo.child_sitemap_error", url=child_url, error=str(exc))
         http.polite_sleep()
-    return locs
+    return locs, child_failed
 
 
 def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> AcquireResult:
     base = _base_dir(base_url)
     sitemap_url, sitemap = _find_sitemap(base)
-    locs = _page_locs(sitemap_url, sitemap)
+    locs, child_failed = _page_locs(sitemap_url, sitemap)
 
     pages = [u for u in locs if _is_content_page(u, base)]
-    truncated = len(pages) > _MAX_PAGES
-    if truncated:
+    truncated = child_failed or len(pages) > _MAX_PAGES
+    if len(pages) > _MAX_PAGES:
         log.warning("hugo.capped", found=len(pages), cap=_MAX_PAGES)
         pages = pages[:_MAX_PAGES]
 
     raw_dir = workdir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
+    lost = 0
     for i, page in enumerate(pages):
         try:
             final, body = http.fetch_text(page)
         except Exception as exc:
+            lost += 1
             log.warning("hugo.fetch_error", url=page, error=str(exc))
             http.polite_sleep()
             continue
         fragment = _extract(body, final)
         if fragment is None:
+            lost += 1
             log.warning("hugo.no_main", url=page)
             http.polite_sleep()
             continue
@@ -166,5 +174,11 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
         truncated=truncated,
     )
     return AcquireResult(
-        raw_dir=raw_dir, kind="html", slug=slug, pages=saved, title=title, truncated=truncated
+        raw_dir=raw_dir,
+        kind="html",
+        slug=slug,
+        pages=saved,
+        title=title,
+        truncated=truncated,
+        lost=lost,
     )

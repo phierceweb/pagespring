@@ -58,7 +58,7 @@ Deliverables land in `./incoming/<slug>/` under the directory you run from.
 ```bash
 bin/setup   # clone → venv + editable install with dev extras
 bin/test    # pytest
-bin/lint    # ruff check + ruff format --check + mypy (strict)
+bin/lint    # ruff check + ruff format --check + mypy (strict) + structural gate + framework-first
 ```
 
 See [docs/usage.md](https://github.com/phierceweb/pagespring/blob/main/docs/usage.md) for the full command set and

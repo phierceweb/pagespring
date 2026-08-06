@@ -5,19 +5,16 @@ accepts the URL, or None when no pattern recognizes the source (only reachable
 for a non-web argument — a local file path or ``file://`` URL — since
 ``docs_probe`` claims every remaining http(s) URL).
 
-Order matters — first match wins:
-  - host-specific patterns first (apple_help, llms_txt, readthedocs, github_markdown,
-    adobe_helpx),
-  - then extension/content patterns (api_spec, pdf_url, archive_download) so a
-    `.json`/`.yaml` spec or `.pdf` on a `docs.*` host routes correctly rather
-    than falling through to the broader patterns below; api_spec also claims
-    URLs whose last segment contains an ``openapi``/``swagger``/``postman``
-    token,
+Order matters — first match wins (PATTERNS below is the list):
+  - host-specific patterns first,
+  - then extension/content patterns so a `.json`/`.yaml` spec or `.pdf` on a
+    `docs.*` host routes correctly rather than falling through to the broader
+    patterns below; api_spec also claims URLs whose last segment contains an
+    ``openapi``/``swagger``/``postman`` token,
   - gitbook next, narrowed to `*.gitbook.io` (its own hosting, not custom domains),
   - docs_probe LAST — a content-probing catch-all that claims any remaining
-    http(s) URL and sniffs the generator (MkDocs/Docusaurus/Hugo/Sphinx/GitBook-via-
-    llms.txt) at acquire time. It must stay last: everything above it is a
-    cheaper, more specific match.
+    http(s) URL and sniffs the generator at acquire time. It must stay last:
+    everything above it is a cheaper, more specific match.
 """
 
 from __future__ import annotations

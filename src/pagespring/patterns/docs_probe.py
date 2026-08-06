@@ -1,14 +1,14 @@
 """docs_probe — content-probing last resort for generator-built docs sites.
 
-MkDocs, Docusaurus, Hugo, and Sphinx sites carry no URL tell on custom domains,
-so ``match`` cannot route them. This pattern registers LAST, claims any http(s)
-URL the specific patterns declined, and sniffs the generator at acquire time
-(the api_spec precedent — cheap match, content sniff in acquire): the base
-page's ``<meta name="generator">`` first, then fallback tells — ``_static/``
-assets (Sphinx), a ``search/search_index.json`` (MkDocs), an ``llms.txt``
-with per-page .md links (GitBook-style sites on custom domains, handled by
-the gitbook machinery so image proxies still resolve). Unrecognized sites
-raise ``InvalidInputError`` (exit 2) naming what was probed.
+Generator-built docs sites carry no URL tell on custom domains, so ``match``
+cannot route them. This pattern registers LAST, claims any http(s) URL the
+specific patterns declined, and probes the base page at acquire time (the
+api_spec precedent — cheap match, content sniff in acquire).
+
+The ladder runs strongest evidence first: content type, then the asset tells of
+tools that emit no generator tag, then ``<meta name="generator">``, then the
+weaker fallback tells. ``acquire`` is the live list — don't restate it here.
+Unrecognized sites raise ``InvalidInputError`` (exit 2) naming what was probed.
 
 ``classify`` reporting ``docs_probe`` therefore means "will content-probe at
 acquire", not a confirmed source type.
@@ -27,6 +27,7 @@ from pf_core.log import get_logger
 from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.patterns import (
+    _asciidoctor,
     _clickhelp,
     _docusaurus,
     _gitbook,
@@ -34,6 +35,8 @@ from pagespring.patterns import (
     _mkdocs,
     _paligo,
     _sphinx,
+    _st4,
+    _wordpress,
 )
 from pagespring.patterns._site import generator_meta, page_title, slug_from_host
 from pagespring.patterns.gitbook import GitBookPattern
@@ -57,9 +60,8 @@ def _fetch_or_none(url: str) -> str | None:
 def _is_mkdocs_index(body: str | None) -> bool:
     """A real MkDocs search index, not just a URL that answered.
 
-    Sites that serve 200 for unknown paths make "the file exists" meaningless —
-    one returned HTML here and got routed to mkdocs, whose acquire then rejected
-    it, masking the actual reason the source was unsupported.
+    A site that serves 200 for unknown paths makes "the file exists" meaningless,
+    so the body must parse as a search index.
     """
     if body is None:
         return False
@@ -104,6 +106,12 @@ class DocsProbePattern:
             log.info("docs_probe.detected", generator="paligo", base=base, via="portal_tells")
             return _paligo.acquire(base, workdir, slug=slug, title=title)
 
+        # Same two-faces problem: an ST4 entry page advertises only the
+        # publisher's stylesheet, never "ST4" — the topic pages carry that.
+        if _st4.is_st4(home):
+            log.info("docs_probe.detected", generator="st4", base=base, via="entry_tells")
+            return _st4.acquire(base, workdir, slug=slug, title=title)
+
         gen = generator_meta(home)
         if "mkdocs" in gen:
             log.info("docs_probe.detected", generator="mkdocs", base=base, via="meta")
@@ -114,8 +122,14 @@ class DocsProbePattern:
         if "hugo" in gen:
             log.info("docs_probe.detected", generator="hugo", base=base, via="meta")
             return _hugo.acquire(base, workdir, slug=slug, title=title)
-        if "sphinx" in gen or "_static/" in home:
-            log.info("docs_probe.detected", generator="sphinx", base=base, via="meta/_static")
+        if "asciidoctor" in gen:
+            log.info("docs_probe.detected", generator="asciidoctor", base=base, via="meta")
+            return _asciidoctor.acquire(base, workdir, slug=slug, title=title)
+        if _wordpress.is_wordpress(home):
+            log.info("docs_probe.detected", generator="wordpress", base=base, via="meta")
+            return _wordpress.acquire(base, workdir, slug=slug, title=title)
+        if _sphinx.is_sphinx(home):
+            log.info("docs_probe.detected", generator="sphinx", base=base, via="tells")
             return _sphinx.acquire(base, workdir, slug=slug, title=title)
         if _is_mkdocs_index(_fetch_or_none(f"{base}/search/search_index.json")):
             log.info("docs_probe.detected", generator="mkdocs", base=base, via="search_index")
@@ -126,9 +140,9 @@ class DocsProbePattern:
             return GitBookPattern().acquire(origin, workdir)
         raise InvalidInputError(
             f"unrecognized docs site: {base} — probed the generator meta tag "
-            "(MkDocs/Docusaurus/Hugo/Sphinx), ClickHelp + Paligo tells, _static/ assets (Sphinx), "
-            "search/search_index.json (MkDocs), and /llms.txt; none matched. "
-            "The source needs its own pattern "
+            "(MkDocs/Docusaurus/Hugo/Asciidoctor/WordPress/Sphinx), ClickHelp + Paligo + SCHEMA ST4 tells, "
+            "_static/ assets (Sphinx), search/search_index.json (MkDocs), and /llms.txt; "
+            "none matched. The source needs its own pattern "
             "(see docs/architecture.md, 'Adding a new pattern')."
         )
 

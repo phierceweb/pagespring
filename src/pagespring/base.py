@@ -34,6 +34,12 @@ class AcquireResult:
     # A page cap cut this crawl short. Travels to the manifest so audit can fail it:
     # a truncated crawl looks healthy on every content check when the source grew.
     truncated: bool = False
+    # The source IS one document, not a crawled index — tells audit that a
+    # 1-page deliverable is correct. Suppresses a check, so set it deliberately.
+    single_document: bool = False
+    # Pages discovered but never staged (fetch error, no content). A page cap is
+    # loud via `truncated`; losing pages one at a time to throttling is not.
+    lost: int = 0
     # Cache validators from single-fetch acquires — refresh probes with them.
     etag: str | None = None
     last_modified: str | None = None

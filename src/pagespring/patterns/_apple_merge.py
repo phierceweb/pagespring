@@ -23,7 +23,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup, Tag
 
-from pagespring.patterns._site import strip_scripts
+from pagespring.patterns._site import flatten_responsive_images, strip_scripts
 
 _PARSER = "html.parser"
 _SLUG_RE = re.compile(r"/guide/[^/]+/([^/]+)/")
@@ -131,6 +131,7 @@ def extract_body(page_html: str, target_level: int) -> str | None:
     for dl in root.select("div.LinkDownload"):
         dl.decompose()
     strip_scripts(root)
+    flatten_responsive_images(root)
     shift = target_level - 1
     for h in root.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
         level = int(h.name[1])

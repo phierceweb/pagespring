@@ -83,3 +83,21 @@ def test_anchor_links_ending_in_md_are_not_pages(tmp_path, monkeypatch):
 
     assert acq.pages == 2, f"expected 2 real pages, got {acq.pages}"
     assert out.count("<!-- source:") == acq.pages
+
+
+def test_pages_lost_to_fetch_errors_are_counted(tmp_path, monkeypatch):
+    """Throttling drops pages one at a time; uncounted, the manifest reports a
+    complete crawl and audit sees nothing missing."""
+
+    def fake(url, **kwargs):
+        if url.endswith("/setup.md"):
+            raise OSError("503 throttled")
+        return _fake_fetch_text(url, **kwargs)
+
+    monkeypatch.setattr(http, "fetch_text", fake)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = LlmsTxtPattern().acquire("https://ex.com/docs/en/claude-code", tmp_path)
+
+    assert acq.pages == 1
+    assert acq.lost == 1

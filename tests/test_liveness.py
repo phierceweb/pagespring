@@ -7,6 +7,7 @@ timeout can see this — every request completed fine. Only progress can.
 """
 
 import pytest
+from pf_core.exceptions import InvalidInputError
 
 from pagespring.liveness import ProgressWatchdog
 
@@ -56,7 +57,7 @@ def test_zero_disables_the_watchdog():
 
 
 def test_negative_is_rejected_rather_than_silently_disabling():
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidInputError):
         ProgressWatchdog(stall_after_s=-1)
 
 

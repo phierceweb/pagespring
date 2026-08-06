@@ -21,7 +21,7 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs, strip_scripts
+from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
 
 log = get_logger(__name__)
 
@@ -50,6 +50,7 @@ def _extract(html: str, page_url: str) -> str | None:
     for el in article.select(_CHROME_CSS):
         el.decompose()
     strip_scripts(article)
+    flatten_responsive_images(article)
     absolutize_refs(article, page_url)
     return str(article)
 
@@ -72,15 +73,18 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     raw_dir = workdir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
+    lost = 0
     for i, url in enumerate(urls):
         try:
             final, body = http.fetch_text(url)
         except Exception as exc:
+            lost += 1
             log.warning("docusaurus.fetch_error", url=url, error=str(exc))
             http.polite_sleep()
             continue
         fragment = _extract(body, final)
         if fragment is None:
+            lost += 1
             log.warning("docusaurus.no_article", url=url)
             http.polite_sleep()
             continue
@@ -92,5 +96,11 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
         http.polite_sleep()
     log.info("docusaurus.acquire", base=base, pages=saved, slug=slug)
     return AcquireResult(
-        raw_dir=raw_dir, kind="html", slug=slug, pages=saved, title=title, truncated=truncated
+        raw_dir=raw_dir,
+        kind="html",
+        slug=slug,
+        pages=saved,
+        title=title,
+        truncated=truncated,
+        lost=lost,
     )

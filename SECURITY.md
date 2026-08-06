@@ -28,6 +28,12 @@ security-relevant surfaces are:
   `pf_core.fetch`. URLs are SSRF-guarded on the initial request and every
   redirect hop: private, loopback, link-local, and unresolvable hosts are
   refused before a request goes out (`URL_FETCH_ALLOW_PRIVATE=1` opts out).
+  TLS certificates are verified on every fetch, unconditionally: pagespring
+  passes the setting explicitly, so pf-core's process-wide `PF_VERIFY_TLS`
+  (legacy `URL_CHECK_VERIFY_TLS`) cannot turn verification off here. Every fetch
+  also carries a size cap bounding the decoded body as well as the wire read, so
+  an oversized or compressed response fails the acquire instead of exhausting
+  memory as it inflates.
 - **Archive extraction** (`archive_download`) — zips extract via `zipfile`'s
   sanitized `extractall`; tars use the `data` extraction filter.
 - **Content parsing** — BeautifulSoup for HTML, `json`/`yaml.safe_load` for
