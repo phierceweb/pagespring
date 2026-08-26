@@ -62,6 +62,11 @@ def ingest(
         "--slug",
         help="Override the derived slug (folded to kebab-case) — names the incoming/ dir and deliverable.",
     ),
+    replace: bool = typer.Option(
+        False,
+        "--replace",
+        help="Allow this URL to take over a slug already holding a DIFFERENT source, deleting it.",
+    ),
 ) -> None:
     """Acquire a manual from URL and normalize it into incoming/<slug>/."""
     try:
@@ -71,6 +76,7 @@ def ingest(
             download_images=download_images,
             if_changed=if_changed,
             slug_override=slug,
+            replace=replace,
         )
     except NoPatternError:
         typer.echo(
@@ -341,11 +347,14 @@ def status() -> None:
         typer.echo(_status_row(d))
 
 
+_ROW_FIELDS = ("deliverable", "pattern", "pages", "bytes", "source_url", "ingested_at")
+
+
 def _status_row(slug_dir: Path) -> str:
-    """One status line from the slug's manifest; for legacy (pre-manifest) dirs,
-    fall back to the first non-manifest deliverable file's own facts."""
+    """One status line from the slug's manifest; for legacy (pre-manifest) or
+    unreadable ones, fall back to the first non-manifest file's own facts."""
     m = manifest.read_manifest(slug_dir)
-    if m is not None:
+    if isinstance(m, dict) and all(k in m for k in _ROW_FIELDS):
         deliverable = slug_dir / m["deliverable"]
         size = deliverable.stat().st_size if deliverable.exists() else m["bytes"]
         pages = str(m["pages"]) if m["pages"] is not None else "-"

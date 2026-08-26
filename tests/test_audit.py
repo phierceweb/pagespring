@@ -6,8 +6,10 @@ trusted; warning-level = real but survivable RAG noise.
 """
 
 import pytest
+from typer.testing import CliRunner
 
-from pagespring import audit, images, manifest, orchestrate
+from pagespring import audit, images, manifest, orchestrate, refresh
+from pagespring.cli import app
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +27,8 @@ def _stage(
     images=0,
     pattern="fake",
     single_document=False,
+    lost=0,
+    localized_sha256=None,
 ):
     """Stage a slug the way a real ingest would: deliverable + matching manifest."""
     d = tmp_path / "incoming" / slug
@@ -46,6 +50,8 @@ def _stage(
             images=images,
             ingested_at="2026-07-01T00:00:00Z",
             single_document=single_document,
+            lost=lost,
+            localized_sha256=localized_sha256,
         ),
     )
     return d
@@ -130,9 +136,9 @@ def test_pdf_kind_skips_content_checks(tmp_path):
 def test_single_page_from_crawl_pattern_is_an_error(tmp_path):
     """A crawl pattern that yielded one page means the seed URL was too specific.
 
-    This is the code-claude-com collapse: seeding a single doc page made
-    llms_txt fetch that page's .md twin instead of walking the index — 1 page
-    where 172 were expected, and the ingest still exited 0.
+    Seeding a single doc page makes llms_txt fetch that page's .md twin instead
+    of walking the index — one page where a site's worth was expected, and the
+    ingest still exits 0.
     """
     _stage(tmp_path, pattern="llms_txt", pages=1)
     assert ("single_page_crawl", "error") in _checks(audit.audit_slug("fakeapp"))
@@ -367,3 +373,144 @@ def test_remote_non_image_refs_are_not_localize_findings(tmp_path):
     (d / "images" / "a.png").write_bytes(b"png")
 
     assert "localize_incomplete" not in [c for c, _l in _checks(audit.audit_slug("fakeapp"))]
+
+
+def test_single_operation_api_spec_is_not_a_collapsed_crawl(tmp_path):
+    """api_spec fetches ONE spec file and counts operations, not crawl pages, so a
+    one-operation spec is a complete deliverable — not a seed URL that named a
+    page instead of an index."""
+    _stage(tmp_path, pattern="api_spec", pages=1)
+    assert audit.audit_slug("fakeapp") == []
+
+
+def _lost_detail(tmp_path, *, pages, lost):
+    _stage(tmp_path, pattern="llms_txt", pages=pages, lost=lost)
+    return next(f for f in audit.audit_slug("fakeapp") if f["check"] == "pages_lost")["detail"]
+
+
+def test_sub_one_percent_page_loss_is_not_reported_as_zero(tmp_path):
+    """1 of 1972 pages rounded to "(0%)" — an error whose own number says nothing
+    was lost. The reader cannot tell a real loss from a rounding artifact."""
+    detail = _lost_detail(tmp_path, pages=1971, lost=1)
+    assert "1 of 1972" in detail
+    assert "(<1%)" in detail, f"loss rendered as zero: {detail}"
+
+
+def test_page_loss_share_renders_the_rounded_percentage(tmp_path):
+    assert "(60%)" in _lost_detail(tmp_path, pages=40, lost=60)
+
+
+def test_page_loss_of_exactly_one_percent_is_not_floored(tmp_path):
+    """The special cases must not widen past the values that round to a lie."""
+    assert "(1%)" in _lost_detail(tmp_path, pages=99, lost=1)
+
+
+def test_page_loss_just_under_the_ceiling_still_rounds_plainly(tmp_path):
+    assert "(99%)" in _lost_detail(tmp_path, pages=6, lost=994)
+
+
+def test_near_total_page_loss_is_not_reported_as_total(tmp_path):
+    """999 of 1000 rounded to "(100%)" — claiming nothing was staged when one
+    page was, the same lie as "(0%)" at the other end."""
+    detail = _lost_detail(tmp_path, pages=1, lost=999)
+    assert "(>99%)" in detail, f"partial loss rendered as total: {detail}"
+
+
+def test_actual_total_page_loss_says_so(tmp_path):
+    assert "(100%)" in _lost_detail(tmp_path, pages=0, lost=7)
+
+
+def test_unverifiable_deliverable_is_not_reported_as_healthy(tmp_path):
+    """With images but no localized_sha256 the sha check is skipped, so the slug
+    audited clean — "ok" meaning "verified" for some slugs and "never checked"
+    for others, with nothing to tell them apart."""
+    d = _stage(tmp_path, images=5)
+    # A real localize re-points refs, so the bytes diverge from the staged sha.
+    (d / "fakeapp.md").write_text("# Title\n\n![i](images/i.png)\n", encoding="utf-8")
+    (d / "images").mkdir()
+    (d / "images" / "i.png").write_bytes(b"png")
+    findings = _checks(audit.audit_slug("fakeapp"))
+    assert ("sha_unverified", "warning") in findings, f"reported healthy: {findings}"
+    assert ("sha_mismatch", "error") not in findings
+
+
+def test_ingest_killed_mid_image_pass_warns_instead_of_reporting_corruption(tmp_path):
+    """A killed localize leaves images=0 and no localized_sha256 but a legitimately
+    re-pointed deliverable; the divergence from the staged sha is the pass's own
+    work, not corruption, and only images/ existing can tell."""
+    d = _stage(tmp_path, body="# T\n\n![i](images/i.png)\n![j](https://x/j.png)\n")
+    m = manifest.read_manifest(d)
+    # The staged sha describes the pre-localize body; the file was checkpointed after.
+    m["sha256"] = "0" * 64
+    manifest.write_manifest(d, m)
+    (d / "images").mkdir()
+    (d / "images" / "i.png").write_bytes(b"png")
+
+    findings = _checks(audit.audit_slug("fakeapp"))
+    assert ("sha_unverified", "warning") in findings
+    assert ("sha_mismatch", "error") not in findings, "a killed pass is not corruption"
+
+
+def test_failed_image_pass_that_changed_nothing_still_verifies(tmp_path):
+    """images/ exists but every download failed: the deliverable is byte-identical
+    to the staged sha, which verifies it — warning here would cry wolf."""
+    d = _stage(tmp_path)
+    (d / "images").mkdir()
+
+    assert _checks(audit.audit_slug("fakeapp")) == []
+
+
+def test_localized_sha_present_means_the_deliverable_is_verified(tmp_path):
+    """The counterpart: a localized deliverable carrying its post-localize hash is
+    genuinely checked, so it must stay silent."""
+    d = _stage(tmp_path, images=5)
+    m = manifest.read_manifest(d)
+    m["localized_sha256"] = manifest.sha256_file(d / "fakeapp.md")
+    manifest.write_manifest(d, m)
+    assert audit.audit_slug("fakeapp") == []
+
+
+# --- one unreadable slug dir must not abort a corpus sweep ---
+
+
+def _stage_unreadable(tmp_path, slug="mmm-bad"):
+    """A slug dir whose manifest.json parses but carries none of the fields the
+    sweeps index — a truncated or hand-edited file."""
+    d = tmp_path / "incoming" / slug
+    d.mkdir(parents=True)
+    (d / "manifest.json").write_text('{"pages": 3}\n', encoding="utf-8")
+    return d
+
+
+def test_audit_all_reports_healthy_slugs_around_an_unreadable_one(tmp_path):
+    """One field-less manifest raised KeyError out of the corpus pass, so the
+    whole sweep died before printing a single healthy slug."""
+    _stage(tmp_path, slug="aaa-good", body="# T\n\ntext\n")
+    _stage_unreadable(tmp_path)
+
+    results = dict(audit.audit_all())
+
+    assert results["aaa-good"] == []
+    assert _checks(results["mmm-bad"]) == [("manifest_missing", "error")]
+
+
+def test_refresh_all_skips_an_unreadable_slug_and_sweeps_the_rest(tmp_path, monkeypatch):
+    _stage(tmp_path, slug="aaa-good", body="# T\n\ntext\n")
+    _stage_unreadable(tmp_path)
+    monkeypatch.setattr(refresh, "run_ingest", lambda url, **kw: {"changed": True})
+
+    outcomes = {o["slug"]: o["status"] for o in refresh.refresh_all()}
+
+    assert outcomes["aaa-good"] == "changed"
+    assert outcomes["mmm-bad"] == "skipped"
+
+
+def test_status_lists_healthy_slugs_around_an_unreadable_one(tmp_path):
+    _stage(tmp_path, slug="aaa-good", body="# T\n\ntext\n")
+    _stage_unreadable(tmp_path)
+
+    r = CliRunner().invoke(app, ["status"])
+
+    assert r.exit_code == 0, r.exception
+    assert "aaa-good.md" in r.output
+    assert "mmm-bad" in r.output

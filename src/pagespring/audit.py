@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, TypeGuard
 
 from pf_core.log import get_logger
 
@@ -47,12 +47,29 @@ def _f(check: str, level: Level, detail: str) -> Finding:
     return {"check": check, "level": level, "detail": detail}
 
 
+# read_manifest returns any parseable JSON as-is, so a truncated file reaches the
+# checks missing the fields they index — and must not abort the corpus sweep.
+_REQUIRED_FIELDS = ("source_url", "pattern", "kind", "deliverable", "pages", "sha256", "images")
+
+
+def _usable(m: object) -> TypeGuard[manifest.Manifest]:
+    return isinstance(m, dict) and all(k in m for k in _REQUIRED_FIELDS)
+
+
 def audit_slug(slug: str) -> list[Finding]:
     """Audit one ``incoming/<slug>/``; empty list ⇒ healthy."""
     incoming_dir = slug_dir(slug)
     m = manifest.read_manifest(incoming_dir)
     if m is None:
         return [_f("manifest_missing", "error", f"no manifest.json in {incoming_dir}/")]
+    if not _usable(m):
+        return [
+            _f(
+                "manifest_missing",
+                "error",
+                f"manifest.json in {incoming_dir}/ is missing required fields — re-ingest",
+            )
+        ]
 
     deliverable = incoming_dir / m["deliverable"]
     if not deliverable.exists():
@@ -63,11 +80,25 @@ def audit_slug(slug: str) -> list[Finding]:
     findings: list[Finding] = []
 
     # Localize re-points refs, so a localized deliverable diverges from the staged
-    # sha; `localized_sha256` is its post-localize hash. Neither present ⇒ unchecked.
-    expected = m.get("localized_sha256") or (m["sha256"] if m["images"] == 0 else None)
-    if expected is not None and manifest.sha256_file(deliverable) != expected:
+    # sha; `localized_sha256` is its post-localize hash. Whether a pass ran reads
+    # from images/ existing, not the count: a kill mid-pass leaves images=0.
+    localized = m["images"] > 0 or (incoming_dir / "images").is_dir()
+    expected = m.get("localized_sha256") or (None if localized else m["sha256"])
+    actual = manifest.sha256_file(deliverable)
+    if expected is not None:
+        if actual != expected:
+            findings.append(
+                _f("sha_mismatch", "error", "on-disk content differs from the recorded sha256")
+            )
+    elif actual != m["sha256"]:
+        # Warning, not error: nothing here can tell, and "ok" reads as verified.
         findings.append(
-            _f("sha_mismatch", "error", "on-disk content differs from the recorded sha256")
+            _f(
+                "sha_unverified",
+                "warning",
+                "localized deliverable carries no localized_sha256 — integrity "
+                "unverifiable; re-run localize to record one",
+            )
         )
 
     # A page cap cut the crawl short, so the deliverable is partial. Nothing about
@@ -88,12 +119,19 @@ def audit_slug(slug: str) -> list[Finding]:
     lost = m.get("lost") or 0
     if lost:
         staged = m["pages"] or 0
-        share = round(100 * lost / max(staged + lost, 1))
+        pct = 100 * lost / max(staged + lost, 1)
+        # Rounding must not flatten the share to a lie at either end: "0%" for a
+        # real loss, or "100%" while pages were staged.
+        share = f"{pct:.0f}%"
+        if pct < 1:
+            share = "<1%"
+        elif share == "100%" and staged:
+            share = ">99%"
         findings.append(
             _f(
                 "pages_lost",
                 "error",
-                f"{lost} of {staged + lost} discovered page(s) never staged ({share}%) — "
+                f"{lost} of {staged + lost} discovered page(s) never staged ({share}) — "
                 "the source threw errors mid-crawl; re-ingest",
             )
         )
@@ -177,10 +215,9 @@ def _corpus_findings(slugs: list[str]) -> dict[str, list[Finding]]:
     by_url: dict[str, list[str]] = {}
     for slug in slugs:
         m = manifest.read_manifest(incoming / slug)
-        if m is None:
-            continue
-        by_sha.setdefault(m["sha256"], []).append(slug)
-        by_url.setdefault(m["source_url"], []).append(slug)
+        if _usable(m):
+            by_sha.setdefault(m["sha256"], []).append(slug)
+            by_url.setdefault(m["source_url"], []).append(slug)
 
     out: dict[str, list[Finding]] = {}
     # Same source_url under two slugs is a staging error; same bytes from

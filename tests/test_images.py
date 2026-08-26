@@ -590,3 +590,74 @@ def test_existing_mixed_case_files_are_normalised_before_localize(tmp_path):
     assert "images/MG_0757.jpg" not in doc.read_text(encoding="utf-8")
     assert images.read_sidecar(slug_dir)[0]["local"] == "mg_0757.jpg"
     assert (slug_dir / "images" / "keep.png").is_file()  # untouched
+
+
+def test_provenance_does_not_claim_an_earlier_runs_identical_file(tmp_path, monkeypatch):
+    """A logo reused on a second host hashes the same as the first run's copy;
+    claiming that file leaves this run's real download untracked, and the
+    deliverable ends on a local ref no later pass can heal."""
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    imgs = tmp_path / "images"
+    doc = tmp_path / "d.md"
+
+    # Run 1: x.com/logo.png -> images/logo.png
+    doc.write_text("![a](https://x.com/logo.png)\n", encoding="utf-8")
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"x"')))
+    images.download_images(doc, imgs)
+    assert (imgs / "logo.png").is_file()
+
+    # Run 2: a different host serves the SAME bytes under a different name.
+    doc.write_text("![b](https://y.com/zebra.png)\n", encoding="utf-8")
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"y"')))
+    images.download_images(doc, imgs)
+
+    by_url = {r["source_url"]: r for r in images.read_sidecar(tmp_path)}
+    assert by_url["https://x.com/logo.png"]["local"] == "logo.png", "earlier record rewritten"
+    assert "https://y.com/zebra.png" in by_url, "this run's download went unrecorded"
+    assert by_url["https://y.com/zebra.png"]["local"] != "logo.png", (
+        "record attached to the earlier run's file"
+    )
+    assert (imgs / by_url["https://y.com/zebra.png"]["local"]).is_file()
+
+
+def test_provenance_guard_survives_a_corrupt_sidecar(tmp_path, monkeypatch):
+    """The earlier-run guard used the sidecar's records, and `read_sidecar` answers
+    [] for a corrupt file — the mis-attribution returned exactly when the record
+    of what to protect was lost. What existed before this run's downloads is read
+    from the directory instead, which cannot be unreadable."""
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    imgs = tmp_path / "images"
+    doc = tmp_path / "d.md"
+
+    doc.write_text("![a](https://x.com/logo.png)\n", encoding="utf-8")
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"x"')))
+    images.download_images(doc, imgs)
+    (tmp_path / images.SIDECAR_NAME).write_text('{"images": [', encoding="utf-8")
+
+    doc.write_text("![b](https://y.com/zebra.png)\n", encoding="utf-8")
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"y"')))
+    images.download_images(doc, imgs)
+
+    by_url = {r["source_url"]: r for r in images.read_sidecar(tmp_path)}
+    rec = by_url.get("https://y.com/zebra.png")
+    assert rec is not None, "this run's download went unrecorded"
+    assert rec["local"] == "zebra.png", "record attached to the earlier run's file"
+    assert (imgs / "zebra.png").is_file()
+
+
+def test_provenance_leaves_an_ambiguous_hash_match_unrecorded(tmp_path, monkeypatch):
+    """Two extensionless URLs in one run share the same bytes; the sniffed on-disk
+    names match neither proposal, so the tie-break has nothing to pick by. Both
+    stay unrecorded — wrong provenance is worse than none."""
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    imgs = tmp_path / "images"
+    doc = tmp_path / "d.md"
+    doc.write_text("![a](https://x.com/img/one)\n![b](https://x.com/img/two)\n", encoding="utf-8")
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"e"')))
+
+    images.download_images(doc, imgs)
+
+    staged = sorted(p.name for p in imgs.glob("*"))
+    assert len(staged) == 2, f"both downloads must land: {staged}"
+    recorded = {r["source_url"] for r in images.read_sidecar(tmp_path)}
+    assert recorded == set(), f"an ambiguous match was attributed anyway: {recorded}"

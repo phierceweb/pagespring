@@ -41,10 +41,12 @@ def refresh_slug(slug: str) -> RefreshOutcome:
     m = manifest.read_manifest(incoming_dir)
     if m is None:
         return {"slug": slug, "status": "skipped", "detail": "no manifest — ingest it first"}
+    if not isinstance(m, dict) or not m.get("source_url") or not m.get("slug"):
+        return {"slug": slug, "status": "skipped", "detail": "unreadable manifest — re-ingest"}
 
     # Fast path: only single-fetch patterns may trust stored validators — a
     # crawl's entry-page 304 proves nothing about the rest of the site.
-    pattern = pattern_by_name(m["pattern"])
+    pattern = pattern_by_name(m.get("pattern") or "")
     if pattern is not None and getattr(pattern, "single_fetch", False):
         etag, last_modified = m.get("etag"), m.get("last_modified")
         if (etag or last_modified) and http.not_modified(

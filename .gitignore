@@ -1,43 +1,43 @@
-# ─── Acquired output (the deliverable; large, regenerable — not tracked) ────
+# Acquired output (the deliverable; large, regenerable — not tracked)
 # pagespring writes one incoming/<slug>/ per manual. A separate step
 # (pagespeak) consumes these; regenerate with `bin/run ingest <url>`.
 /incoming/
 
-# ─── Python ────────────────────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
 build/
 dist/
 
-# ─── Virtual env / secrets ─────────────────────────────────────────────────
+# Virtual env / secrets
 .venv/
 .env
 
-# ─── Databases ─────────────────────────────────────────────────────────────
+# Databases
 *.db
 *.sqlite
 *.sqlite3
 
-# ─── Tooling caches ────────────────────────────────────────────────────────
+# Tooling caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 
-# ─── IDE / OS ──────────────────────────────────────────────────────────────
+# IDE / OS
 .vscode/
 .idea/
 *.swp
 .DS_Store
 
-# ─── Claude Code / Cursor local-only state ─────────────────────────────────
+# Claude Code / Cursor local-only state
 .ai
 .claude
 .cursor
 .superpowers/
 CLAUDE.md
 
-# ─── Playwright MCP artifacts ──────────────────────────────────────────────
+# Playwright MCP artifacts
 .playwright-mcp/
 docs/pf-core

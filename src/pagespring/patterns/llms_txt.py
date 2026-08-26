@@ -14,7 +14,7 @@ section base URL like ``https://platform.claude.com/docs/en/docs/claude-code``
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
 from pf_core.log import get_logger
@@ -32,6 +32,7 @@ _KNOWN_HOSTS = {
     "docs.anthropic.com",
     "code.claude.com",
 }
+_LLMS_NAMES = ("llms.txt", "llms-full.txt")
 # .md URLs, whether bare (GitBook) or inside a markdown link (Mintlify/Anthropic).
 _MD_URL_RE = re.compile(r"https?://[^\s)\]\"'<>]+\.md")
 # Safety cap so a giant index (e.g. a 1600-page platform llms.txt) can't trigger
@@ -39,33 +40,76 @@ _MD_URL_RE = re.compile(r"https?://[^\s)\]\"'<>]+\.md")
 _MAX_PAGES = 1000
 
 
+def _is_llms(url: str, *names: str) -> bool:
+    """Whether the URL's path basename is one of ``names`` — a query string,
+    fragment, or case change must not defeat the routing."""
+    basename = PurePosixPath(urlparse(url).path.rstrip("/")).name.lower()
+    return basename in names
+
+
+def _origin_and_path(url: str) -> tuple[str, str]:
+    p = urlparse(url)
+    return f"{p.scheme.lower()}://{p.netloc.lower()}", p.path.rstrip("/")
+
+
+def _under_section(md_url: str, section: str) -> bool:
+    """Membership is a path-segment prefix on a case-folded origin: a raw string
+    prefix also absorbs siblings (/guide swallowing /guide-advanced)."""
+    origin, path = _origin_and_path(md_url)
+    section_origin, section_path = _origin_and_path(section)
+    return origin == section_origin and (
+        path == section_path or path.startswith(f"{section_path}/")
+    )
+
+
 def _llms_url_and_section(url: str) -> tuple[str, str | None]:
     """From the input URL derive (llms_txt_url, section_prefix | None)."""
     u = url.rstrip("/")
-    if u.endswith("llms.txt") or u.endswith("llms-full.txt"):
+    if _is_llms(u, *_LLMS_NAMES):
         return u, None
     p = urlparse(u)
-    return f"{p.scheme}://{p.netloc}/llms.txt", u  # section base -> prefix filter
+    # Prefix-filtering with a query or fragment attached matches no .md link.
+    section = f"{p.scheme}://{p.netloc}{p.path}".rstrip("/")
+    return f"{p.scheme}://{p.netloc}/llms.txt", section
 
 
 def _slug(url: str, section: str | None) -> str:
     p = urlparse(section or url)
-    parts = [s for s in p.path.split("/") if s and not s.endswith("llms.txt")]
-    return (parts[-1] if parts else p.netloc).replace(".", "-")
+    host = p.netloc.lower()
+    parts = [s for s in p.path.split("/") if s and s.lower() not in _LLMS_NAMES]
+    if section:
+        return (parts[-1] if parts else host).replace(".", "-")
+    # An llms file names nothing, so its bare path segment ("docs", "en") is the
+    # same for every vendor; the host is what tells two of them apart.
+    return "-".join([host, *parts]).replace(".", "-")
 
 
 class LlmsTxtPattern:
     name = "llms_txt"
 
     def match(self, url: str) -> bool:
-        u = url.rstrip("/")
-        if u.endswith("llms.txt") or u.endswith("llms-full.txt"):
+        if _is_llms(url, *_LLMS_NAMES):
             return True
         return urlparse(url).netloc.lower() in _KNOWN_HOSTS
 
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         llms_url, section = _llms_url_and_section(url)
         _final, index = http.fetch_text(llms_url)
+
+        raw_dir = workdir / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+
+        # llms-full.txt inlines the documentation rather than listing it, so the
+        # body IS the deliverable; its .md citations are off-host noise.
+        if _is_llms(llms_url, "llms-full.txt"):
+            slug = _slug(url, section)
+            (raw_dir / "0000-llms-full.md").write_text(
+                f"<!-- source: {llms_url} -->\n\n{index}\n", encoding="utf-8"
+            )
+            log.info("llms_txt.acquire", llms=llms_url, full=True, pages=1, slug=slug)
+            return AcquireResult(
+                raw_dir=raw_dir, kind="markdown", slug=slug, pages=1, single_document=True
+            )
 
         md_urls: list[str] = []
         seen: set[str] = set()
@@ -74,7 +118,7 @@ class LlmsTxtPattern:
             # in-page anchor to a page already listed, not a page of its own.
             if not urlparse(m).path.endswith(".md"):
                 continue
-            if section and not m.startswith(section):
+            if section and not _under_section(m, section):
                 continue
             if m not in seen:
                 seen.add(m)
@@ -85,8 +129,6 @@ class LlmsTxtPattern:
             log.warning("llms_txt.truncated", found=len(md_urls), cap=_MAX_PAGES)
             md_urls = md_urls[:_MAX_PAGES]
 
-        raw_dir = workdir / "raw"
-        raw_dir.mkdir(parents=True, exist_ok=True)
         saved = 0
         lost = 0
         for i, mu in enumerate(md_urls):

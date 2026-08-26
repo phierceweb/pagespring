@@ -21,6 +21,7 @@ from pf_core.utils.slugify import slugify
 
 from pagespring import images as images_mod
 from pagespring import manifest
+from pagespring._staging import _clear_except, _same_source
 from pagespring.base import AcquireResult, SourceKind
 from pagespring.config import cfg
 from pagespring.paths import slug_dir
@@ -69,6 +70,7 @@ def run_ingest(
     download_images: bool = False,
     if_changed: bool = False,
     slug_override: str | None = None,
+    replace: bool = False,
 ) -> IngestResult:
     """Acquire + normalize ``url`` into ``incoming/<slug>/`` and return stats.
 
@@ -135,7 +137,11 @@ def run_ingest(
         # its localized images, and its mtime — nothing is re-staged.
         if if_changed:
             prior = manifest.read_manifest(incoming_dir)
-            if prior is not None and prior["sha256"] == sha256:
+            # Only a record naming this same source can answer "unchanged"; a
+            # parseable non-manifest, or another manual's, belongs to the guard below.
+            prior_url = prior.get("source_url") if isinstance(prior, dict) else None
+            same_source = _same_source(prior_url, url) if prior_url else False
+            if prior is not None and same_source and prior.get("sha256") == sha256:
                 log.info("ingest.unchanged", pattern=pattern.name, slug=acq.slug, sha256=sha256)
                 return {
                     "pattern": pattern.name,
@@ -149,27 +155,35 @@ def run_ingest(
                     "duplicate_of": duplicate_of,
                 }
 
-        # Re-ingest replaces: the slug dir holds exactly one ingest's output — no
-        # orphaned clean files, no stale raw/. The image cache is the exception and
-        # is carried across: a refresh brings the same image URLs back, so wiping
-        # images/ and its sidecar would re-download every image every time.
+        # A same-source re-ingest keeps its image cache — a refresh brings the same
+        # image URLs back. A takeover's cache and manifest describe the displaced manual.
         if incoming_dir.exists():
-            _clear_except(
-                incoming_dir,
-                keep={"images", images_mod.SIDECAR_NAME, manifest.MANIFEST_NAME},
-            )
+            # The clear below is unrecoverable: incoming/ is gitignored.
+            held = manifest.read_manifest(incoming_dir)
+            # read_manifest tolerates unparseable JSON but returns parseable
+            # non-manifests as-is; those must refuse below, not raise here.
+            held_url = held.get("source_url") if isinstance(held, dict) else None
+            if held_url:
+                takeover = not _same_source(held_url, url)
+                holds = repr(held_url)
+            else:
+                # Nothing here can say what it holds, so content means refuse.
+                takeover = any(incoming_dir.iterdir())
+                holds = "an unidentified manual (no readable manifest)"
+            if takeover and not replace:
+                own_dir = "--slug to give this source its own directory"
+                escape = "a different --slug" if slug_override is not None else own_dir
+                raise InvalidInputError(
+                    f"slug {acq.slug!r} already holds {holds} — "
+                    f"ingesting {url!r} would delete it. Pass {escape}, or "
+                    "--replace to take the slug over."
+                )
+            same_manual = {manifest.MANIFEST_NAME, "images", images_mod.SIDECAR_NAME}
+            _clear_except(incoming_dir, keep=set() if takeover else same_manual)
         incoming_dir.mkdir(parents=True, exist_ok=True)
         # Stage as <slug>.<ext> regardless of what normalize called the file —
         # patterns that name output at acquire time can't see a --slug override.
         staged = incoming_dir / f"{acq.slug}{clean.suffix}"
-        shutil.copy2(clean, staged)
-        # A PDF's normalize is a passthrough, so a replay can only return the
-        # bytes already staged — raw/ would duplicate the deliverable.
-        if keep_raw and acq.kind == "pdf":
-            log.info("ingest.raw_skipped", slug=acq.slug, reason="pdf normalize is a passthrough")
-        elif keep_raw:
-            shutil.copytree(acq.raw_dir, incoming_dir / "raw")
-
         record = manifest.build_manifest(
             source_url=url,
             pattern=pattern.name,
@@ -186,13 +200,24 @@ def run_ingest(
             last_modified=acq.last_modified,
             truncated=acq.truncated,
             single_document=acq.single_document,
-            # from the directory, not the flag — the manifest must not
-            # promise a replay that isn't on disk.
-            kept_raw=(incoming_dir / "raw").is_dir(),
+            kept_raw=False,
             lost=acq.lost,
             localized_sha256=None,
         )
-        # Before the image pass, so a run killed in there still leaves provenance.
+        # Before the copies, so a kill anywhere below still leaves provenance —
+        # content with no manifest reads as a foreign manual on the next ingest.
+        manifest.write_manifest(incoming_dir, record)
+
+        shutil.copy2(clean, staged)
+        # A PDF's normalize is a passthrough, so a replay can only return the
+        # bytes already staged — raw/ would duplicate the deliverable.
+        if keep_raw and acq.kind == "pdf":
+            log.info("ingest.raw_skipped", slug=acq.slug, reason="pdf normalize is a passthrough")
+        elif keep_raw:
+            shutil.copytree(acq.raw_dir, incoming_dir / "raw")
+        # from the directory, not the flag — the manifest must not promise a
+        # replay that isn't on disk.
+        record["kept_raw"] = (incoming_dir / "raw").is_dir()
         manifest.write_manifest(incoming_dir, record)
 
         n_images = 0
@@ -321,17 +346,6 @@ def run_renormalize(slug: str) -> RenormalizeResult:
         }
     finally:
         shutil.rmtree(work, ignore_errors=True)
-
-
-def _clear_except(directory: Path, *, keep: set[str]) -> None:
-    """Empty ``directory`` of everything not named in ``keep``."""
-    for entry in directory.iterdir():
-        if entry.name in keep:
-            continue
-        if entry.is_dir():
-            shutil.rmtree(entry, ignore_errors=True)
-        else:
-            entry.unlink(missing_ok=True)
 
 
 class _ImagePass(NamedTuple):

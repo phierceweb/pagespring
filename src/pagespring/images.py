@@ -280,6 +280,11 @@ def download_images(doc_path: Path, images_dir: Path, *, checkpoint_every: int =
     surviving record of where an image came from.
     """
     fetcher = _PacedFetcher()
+    # A file already here is not one of this run's downloads, whatever it hashes
+    # to. Read from the directory, which cannot be unreadable as a sidecar can.
+    preexisting = (
+        {p.name for p in images_dir.glob("*") if p.is_file()} if images_dir.is_dir() else set()
+    )
     downloaded = _core.localize_file(
         doc_path,
         images_dir,
@@ -289,11 +294,13 @@ def download_images(doc_path: Path, images_dir: Path, *, checkpoint_every: int =
         reuse_existing=False,
     )
     if fetcher.fetched:
-        _record_provenance(images_dir, fetcher.fetched)
+        _record_provenance(images_dir, fetcher.fetched, preexisting=preexisting)
     return downloaded
 
 
-def _record_provenance(images_dir: Path, fetched: list[tuple[str, _Provenance]]) -> None:
+def _record_provenance(
+    images_dir: Path, fetched: list[tuple[str, _Provenance]], *, preexisting: set[str]
+) -> None:
     """Join this run's downloads to the files they became, then merge the sidecar.
 
     The localizer picks the final filename itself (sniffing an extension,
@@ -302,19 +309,30 @@ def _record_provenance(images_dir: Path, fetched: list[tuple[str, _Provenance]])
     hash cannot separate them, so the name each URL *proposes* breaks the tie,
     and each download is claimed at most once.
     """
+    slug_dir = images_dir.parent
+    prior = read_sidecar(slug_dir)
+
     unclaimed = list(fetched)
     records: list[ImageRecord] = []
     for path in sorted(images_dir.glob("*")):
-        if not path.is_file():
+        if not path.is_file() or path.name in preexisting:
             continue
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         candidates = [i for i, (h, _f) in enumerate(unclaimed) if h == digest]
         if not candidates:
-            continue  # from an earlier run; its record is already in the sidecar
-        pick = next(
-            (i for i in candidates if _legacy_name(unclaimed[i][1]["source_url"]) == path.name),
-            candidates[0],
-        )
+            continue  # from an earlier run, not one of this run's downloads
+        if len(candidates) == 1:
+            pick = candidates[0]
+        else:
+            # The hash cannot separate same-byte downloads, so the proposed name
+            # breaks the tie; a sniffed extension matches none — leave it unrecorded.
+            named = next(
+                (i for i in candidates if _legacy_name(unclaimed[i][1]["source_url"]) == path.name),
+                None,
+            )
+            if named is None:
+                continue
+            pick = named
         _digest, fields = unclaimed.pop(pick)
         records.append(
             {
@@ -326,5 +344,4 @@ def _record_provenance(images_dir: Path, fetched: list[tuple[str, _Provenance]])
                 "bytes": fields["bytes"],
             }
         )
-    slug_dir = images_dir.parent
-    write_sidecar(slug_dir, _merge(read_sidecar(slug_dir), records))
+    write_sidecar(slug_dir, _merge(prior, records))

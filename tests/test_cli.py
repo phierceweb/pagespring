@@ -1,5 +1,7 @@
 """CLI commands (patterns / classify / ingest / status), via Typer's runner."""
 
+import json
+
 import pytest
 from typer.testing import CliRunner
 
@@ -523,3 +525,57 @@ def test_a_slug_that_folds_to_nothing_exits_2(cmd, monkeypatch, tmp_path):
     monkeypatch.setattr(climod.cfg, "INCOMING_DIR", str(tmp_path))
     r = runner.invoke(app, [*cmd, ".."])
     assert r.exit_code == 2, f"{cmd[0]} '..' exited {r.exit_code}: {r.output!r}"
+
+
+def test_ingest_replace_reaches_run_ingest_and_defaults_off(monkeypatch, tmp_path):
+    captured: dict = {}
+
+    def fake_run_ingest(url, **kwargs):
+        captured.update(kwargs)
+        return {
+            "pattern": "fake",
+            "slug": "s",
+            "kind": "html",
+            "clean": str(tmp_path / "s.html"),
+            "images": 0,
+            "pages": 1,
+            "bytes": 10,
+            "changed": True,
+            "duplicate_of": None,
+        }
+
+    monkeypatch.setattr(climod, "run_ingest", fake_run_ingest)
+    assert runner.invoke(app, ["ingest", "https://x"]).exit_code == 0
+    assert captured.get("replace") is False
+
+    assert runner.invoke(app, ["ingest", "https://x", "--replace"]).exit_code == 0
+    assert captured.get("replace") is True
+
+
+def _spec_file(path, title):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    spec = {
+        "openapi": "3.0.0",
+        "info": {"title": title, "version": "1"},
+        "paths": {"/ping": {"get": {"summary": "ping"}}},
+    }
+    path.write_text(json.dumps(spec), encoding="utf-8")
+    return path
+
+
+def test_ingest_refused_slug_takeover_exits_2(monkeypatch, tmp_path):
+    """Two vendors' specs share a title, so the second lands on the first's slug:
+    the refusal must reach the operator as exit 2 naming what is held, not as a
+    traceback — and the held manual must still be there afterwards."""
+    monkeypatch.setattr(climod.cfg, "INCOMING_DIR", str(tmp_path / "incoming"))
+    held = _spec_file(tmp_path / "vendor-a" / "openapi.json", "Vendor API")
+    incoming = _spec_file(tmp_path / "vendor-b" / "openapi.json", "Vendor API")
+
+    assert runner.invoke(app, ["ingest", str(held)]).exit_code == 0
+
+    r = runner.invoke(app, ["ingest", str(incoming)])
+
+    assert r.exit_code == 2
+    assert "vendor-a" in r.output and "would delete it" in r.output
+    slug_dir = next((tmp_path / "incoming").iterdir())
+    assert manifest.read_manifest(slug_dir)["source_url"] == str(held)

@@ -6,9 +6,30 @@ All settings are overridable via environment variables / .env.
 from pathlib import Path
 
 from pf_core.config import AppConfig
+from pf_core.log import get_logger
+from pf_core.utils.env import resolve_str
 
 # src/pagespring/config.py → parents[2] is the project root (editable install).
 _project_root = Path(__file__).resolve().parents[2]
+
+_ENV_FILE_VAR = "PAGESPRING_ENV_FILE"
+
+
+def _env_file() -> Path:
+    """The ``.env`` settings resolve from.
+
+    ``_project_root`` names the project only for an editable install, so an
+    installed CLI needs ``PAGESPRING_ENV_FILE``. The working directory is
+    deliberately not searched: every key in the file enters the environment.
+    """
+    override = resolve_str(None, _ENV_FILE_VAR)
+    if not override:
+        return _project_root / ".env"
+    path = Path(override).expanduser()
+    if not path.is_file():
+        # A typo'd override silently loses every setting the file carries.
+        get_logger(__name__).warning("config.env_file_missing", path=str(path))
+    return path
 
 
 class PagespringConfig(AppConfig):
@@ -27,4 +48,4 @@ class PagespringConfig(AppConfig):
     CRAWL_STALL_AFTER_S: int = 300
 
 
-cfg = PagespringConfig(env_file=_project_root / ".env")
+cfg = PagespringConfig(env_file=_env_file())

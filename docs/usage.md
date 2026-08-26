@@ -46,10 +46,12 @@ pagespring ingest https://support.apple.com/guide/keynote/welcome/mac
 pagespring ingest https://docs.tableplus.com
 pagespring ingest https://example.com/manual.pdf
 pagespring ingest https://requests.readthedocs.io/en/latest/   # Read the Docs → PDF build
+pagespring ingest https://docs.vendor.com/llms-full.txt   # inlined full-docs file → one markdown deliverable
+pagespring ingest https://vendor.com/manual.epub           # doc archives (zip/tar/epub) → merged clean file
 pagespring ingest ./openapi.json                # a local file or file:// path, not just a URL
 ```
 
-The argument can be a **local file path or `file://` URL**, not only a remote URL — handy for a spec or doc you've saved from a viewer's "Download" button (the source is then recognized by its content shape rather than its host).
+The argument can be a **local file path or `file://` URL** for an **API spec** — handy for one you've saved from a viewer's "Download" button (`api_spec` recognizes it by content shape rather than host). Only `api_spec` reads local files; a local `.pdf` or `.epub` routes to its pattern and then fails the fetch layer's scheme guard, so fetch those by URL.
 
 A few flags worth knowing (run `--help` for the rest):
 
@@ -57,10 +59,13 @@ A few flags worth knowing (run `--help` for the rest):
 - `--download-images` pulls an html/markdown source's remote images into `incoming/<slug>/images/` and re-points the refs (no-op for PDFs). Use it for sources whose images sit behind expiring or tokened URLs.
 - `--if-changed` re-crawls but **skips re-staging** when the result is byte-identical to the existing deliverable (compared via the manifest's `sha256`): it prints `unchanged` and leaves the file, its images, and its mtime alone. The crawl still runs — the slug isn't known until after acquire — so this saves the re-write and churn, not the download.
 - `--slug <name>` overrides the derived slug (folded to kebab-case) — it names the `incoming/` dir **and** the deliverable file, and `refresh` keeps it pinned thereafter. Use it when the URL-derived slug is noise (`auto-align-2-2-2-user-manual` → `auto-align-2`).
+- `--replace` lets an ingest take over a slug that already holds a **different** source, deleting that manual and its image cache. Without it that ingest is refused — see below.
 
 **Duplicate detection.** Every ingest compares the new deliverable's `sha256` against every other slug's manifest; byte-identical content under a second name prints `warning : content identical to incoming/<other>/`. Still staged — a deliberate duplicate is allowed; the warning is the product (the same manual fetched from two vendor URLs is how duplicate chunks reach retrieval).
 
-**Re-ingesting replaces, except the image cache.** A second `ingest` of the same slug clears the slug dir first — no stale `raw/`, no orphaned files — but keeps `images/` and `images.json`, so a re-ingest does not re-download images the source has not changed. The replace happens only once the new normalize succeeds, so a failed re-crawl never destroys a previous good deliverable. A re-ingest without `--download-images` resets the manifest's `images` to 0 and restores absolute refs, so re-run `localize` afterwards; the sidecar makes that near-free.
+**Re-ingesting the same source replaces, except the image cache.** A second `ingest` of the same slug clears the slug dir first — no stale `raw/`, no orphaned files — but keeps `images/` and `images.json`, so a re-ingest does not re-download images the source has not changed. The replace happens only once the new normalize succeeds, so a failed re-crawl never destroys a previous good deliverable. A re-ingest without `--download-images` resets the manifest's `images` to 0 and restores absolute refs, so re-run `localize` afterwards; the sidecar makes that near-free.
+
+**A slug collision with a different source is refused.** Where the slug dir already holds a manual from another URL, `ingest` raises instead of clearing it: `incoming/` is gitignored, so the displaced manual has no other copy, and host- or filename-derived slugs collide readily across one vendor's manuals. Two remote URLs are compared canonically, so an `http`→`https`, `www.`, trailing-slash, fragment, or tracking-param respelling still counts as the same source and replaces as usual; a local path or `file://` URL has no canonical form and is compared exactly. A slug dir carrying no readable manifest — a legacy pre-manifest slug, or a corrupted one — is refused whenever it still holds anything, since nothing there can say what that is; an empty leftover dir holds no manual and is staged into as usual. `--if-changed` reports `unchanged` only for the source the slug already holds; a different URL serving byte-identical content is refused like any other collision rather than quietly re-using the slug. Give the new source its own directory with `--slug`, or take the slug over with `--replace` — which deletes the displaced manual **and** its image cache, that cache belonging to the manual being displaced rather than the new one. The check runs after acquire, since the slug isn't known until then, so a refused ingest has already paid for its crawl.
 
 ## Ingesting API specs
 
@@ -113,7 +118,7 @@ pagespring refresh --all     # sweep every incoming/<slug>/
 One line per slug, then a summary count:
 
 - **`changed`** — the source produced different content; the deliverable was replaced (hand it back to pagespeak).
-- **`unchanged`** — byte-identical re-crawl (nothing touched), or, for single-fetch sources (direct PDFs, doc archives), a conditional-GET probe answered 304 — `unchanged — not modified (validator probe)` — and nothing was re-downloaded at all. Crawl sources always re-crawl: an entry page's validators prove nothing about the rest of a site.
+- **`unchanged`** — byte-identical re-crawl (nothing touched), or, for a single-fetch source whose manifest carries validators (a direct PDF, a doc archive), a conditional-GET probe answered 304 — `unchanged — not modified (validator probe)` — and nothing was re-downloaded at all. Crawl sources always re-crawl: an entry page's validators prove nothing about the rest of a site.
 - **`failed`** — the source didn't answer or normalized to nothing; the existing deliverable is kept.
 - **`skipped`** — no manifest (never ingested by a manifest-writing version).
 
@@ -127,10 +132,10 @@ The summary is the wrapper hook: grep the report for `: changed` to know which s
 
 `pagespring audit [<slug>|--all]` runs deterministic, $0 checks over staged deliverables — no network, no LLM, read-only. It catches what a glance at `status` can't:
 
-- **errors** (the deliverable can't be trusted): `manifest_missing`, `deliverable_missing`, `deliverable_empty`, `sha_mismatch` — the on-disk file no longer hashes to the staged `sha256` (hand-edited or corrupted; only checked while un-localized, since `localize` legitimately rewrites refs) — `crawl_truncated`, a crawl that hit its page cap or stalled — `pages_lost`, pages discovered but never staged because the source errored mid-crawl, which no content check can see — `single_page_crawl`, a crawl pattern that returned exactly one page (the too-specific-seed signature: point `llms_txt` at one doc page instead of the index and it fetches that page's `.md` twin, staging 1 page where the site has 170; PDF deliverables, `single_fetch` patterns, and sources the acquire marked `single_document` — a blog post or article that IS one page — are one file by design and never fire it) — `broken_image_ref`, a local `images/<name>` ref whose file is missing (invisible to the remote-ref count, so a fully localized deliverable could still ship dead images) — and `duplicate_source_url`, two slugs staged from the same URL, which blocks the hand-off for both.
-- **warnings** (real but survivable): `localize_incomplete` (localized images recorded but remote refs remain — re-run `localize`), `no_headings` (a multi-page crawl normalized to heading-less soup — the half-lost-crawl signature; it will split into nothing downstream), `duplicate_content` (two slugs holding byte-identical deliverables — legitimate when a vendor mirrors one manual at two URLs).
+- **errors** (the deliverable can't be trusted): `manifest_missing`, `deliverable_missing`, `deliverable_empty`, `sha_mismatch` — the on-disk file no longer hashes to the recorded hash: `localized_sha256` once an image pass recorded one, the staged `sha256` while un-localized (hand-edited or corrupted) — `crawl_truncated`, a crawl that hit its page cap or stalled — `pages_lost`, pages discovered but never staged because the source errored mid-crawl, which no content check can see — `single_page_crawl`, a crawl pattern that returned exactly one page (the too-specific-seed signature: point `llms_txt` at one doc page instead of the index and it fetches that page's `.md` twin, staging 1 page where the site has 170; PDF deliverables, `single_fetch` patterns, and sources the acquire marked `single_document` — a blog post, an article, or an `llms-full.txt` whose body IS the documentation — are one file by design and never fire it) — `broken_image_ref`, a local `images/<name>` ref whose file is missing (invisible to the remote-ref count, so a fully localized deliverable could still ship dead images) — and `duplicate_source_url`, two slugs staged from the same URL, which blocks the hand-off for both.
+- **warnings** (real but survivable): `localize_incomplete` (localized images recorded but remote refs remain — re-run `localize`), `sha_unverified` (an image pass ran but recorded no `localized_sha256` — an ingest killed mid-pass — and the file no longer matches the staged `sha256`; the divergence may be the pass's own re-pointing, but nothing on disk can tell, and a plain `ok` would read as verified — re-run `localize` to record one), `no_headings` (a multi-page crawl normalized to heading-less soup — the half-lost-crawl signature; it will split into nothing downstream), `duplicate_content` (two slugs whose manifests record the same `sha256` — content identity as normalize produced it, before any image pass re-pointed refs, so it is not a comparison of the bytes now on disk; legitimate when a vendor mirrors one manual at two URLs).
 
-The last two are **corpus-level**: they compare slugs against each other, so they only appear under `--all`.
+`duplicate_content` and `duplicate_source_url` are **corpus-level**: they compare slugs against each other, so they only appear under `--all`.
 
 Report-only by default (exit `0`). `--strict` exits `1` when any **error**-level finding exists, so a script can gate the pagespeak hand-off:
 
@@ -162,11 +167,13 @@ Any http(s) URL that no specific pattern claims classifies to `docs_probe` rathe
 
 `ingest` and `renormalize` distinguish failure modes so scripts (and you) can tell them apart:
 
-- `2` — no pattern matched a local file/`file://` argument, `docs_probe` couldn't recognise the site's generator at acquire time, or a URL/file routed to `api_spec` that isn't a recognizable OpenAPI/Swagger/Postman document. For `renormalize`: the slug was never ingested, has no kept `raw/`, or its recorded pattern is no longer registered.
+- `2` — no pattern matched a local file/`file://` argument, `docs_probe` couldn't recognise the site's generator at acquire time, a URL/file routed to `api_spec` that isn't a recognizable OpenAPI/Swagger/Postman document, or a refused slug takeover (the slug holds a different source and `--replace` wasn't given; the message names what it protected). For `renormalize`: the slug was never ingested, has no kept `raw/`, or its recorded pattern is no longer registered.
 - `3` — normalize produced an empty file (the source likely changed shape; nothing staged, a prior deliverable survives).
 - `4` — a network fetch died during acquire (nothing staged; `ingest` only — `renormalize` never touches the network).
 
 These rely on pf-core's `run_cli` propagating `typer.Exit` codes; without it a failed `ingest` would exit `0`.
+
+`localize` is the exception to the empty-corpus rule above: `localize --all` over an empty or missing `incoming/` exits `0` having done nothing, so a wrapper cannot read its `0` as "every image is local" the way it can for `audit` and `refresh`.
 
 A malformed invocation — unknown option, missing argument — also exits `2`, with a usage message rather than a traceback. So `2` means "the command couldn't proceed with what it was given", whether that's the argv or the source.
 

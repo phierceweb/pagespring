@@ -75,9 +75,10 @@ def test_reingest_replaces_stale_artifacts(tmp_path, monkeypatch):
     test_reingest_preserves_images_and_sidecar): re-downloading every image on
     every refresh costs far more than leaving unreferenced files on disk."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://x", keep_raw=True)
+
     slug_dir = tmp_path / "incoming" / "fakeapp"
-    (slug_dir / "raw").mkdir(parents=True)
-    (slug_dir / "images").mkdir()
+    (slug_dir / "images").mkdir(exist_ok=True)
     (slug_dir / "fakeapp-old-name.html").write_text("orphan", encoding="utf-8")
     (slug_dir / "raw" / "stale.html").write_text("stale", encoding="utf-8")
     (slug_dir / "images" / "old.png").write_bytes(b"png")
@@ -307,6 +308,43 @@ def test_if_changed_restages_when_content_differs(tmp_path, monkeypatch):
     assert res["changed"] is True
     assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "<h1>Two</h1>"
     assert not (slug_dir / "sentinel.txt").exists()
+
+
+@pytest.mark.parametrize("body", ['{"pages": 3}', "[1, 2, 3]", '"a string"'])
+def test_if_changed_refuses_an_unreadable_manifest_instead_of_crashing(tmp_path, monkeypatch, body):
+    """The --if-changed compare runs before the collision guard, so a parseable
+    non-manifest crashed it with KeyError/TypeError — exit 1, which `audit --strict`
+    also uses for real findings, instead of the exit-2 refusal."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "fakeapp.html").write_text("<h1>Held</h1>", encoding="utf-8")
+    (slug_dir / manifest.MANIFEST_NAME).write_text(body, encoding="utf-8")
+
+    with pytest.raises(InvalidInputError) as exc:
+        orchestrate.run_ingest("https://x", if_changed=True)
+
+    assert "no readable manifest" in str(exc.value)
+    assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "<h1>Held</h1>"
+
+
+def test_if_changed_does_not_report_a_different_source_unchanged(tmp_path, monkeypatch):
+    """Byte-identical content from another URL is still a collision: answering
+    `unchanged` left the slug holding a manual nobody asked to ingest, under a
+    manifest that still names the old source."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://vendor-a.example/manual")
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+
+    with pytest.raises(InvalidInputError):
+        orchestrate.run_ingest("https://vendor-b.example/manual", if_changed=True)
+
+    assert manifest.read_manifest(slug_dir)["source_url"] == "https://vendor-a.example/manual"
+
+    res = orchestrate.run_ingest("https://vendor-b.example/manual", if_changed=True, replace=True)
+
+    assert res["changed"] is True
+    assert manifest.read_manifest(slug_dir)["source_url"] == "https://vendor-b.example/manual"
 
 
 def _write_manifest(slug_dir, **over):
@@ -1026,9 +1064,9 @@ def test_an_ingest_killed_during_the_image_pass_still_leaves_provenance(tmp_path
     assert m["sha256"] == manifest.sha256_file(slug_dir / "fakeapp.html")
 
 
-def test_a_reingest_keeps_the_old_manifest_until_the_new_one_replaces_it(tmp_path, monkeypatch):
+def test_a_reingest_keeps_a_manifest_through_a_death_before_restaging(tmp_path, monkeypatch):
     """The clear-before-restage must not take the manifest with it: an ingest that
-    dies before writing leaves the previous record, which `refresh` can act on."""
+    dies before staging leaves a record of the same source, which `refresh` can act on."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     orchestrate.run_ingest("https://first")
 
@@ -1040,8 +1078,352 @@ def test_a_reingest_keeps_the_old_manifest_until_the_new_one_replaces_it(tmp_pat
 
     monkeypatch.setattr(orchestrate.shutil, "copy2", die_after_clear)
     with pytest.raises(OSError):
-        orchestrate.run_ingest("https://second")
+        orchestrate.run_ingest("https://first")
 
     survived = manifest.read_manifest(slug_dir)
     assert survived is not None, "the clear destroyed the manifest before restaging"
     assert survived["source_url"] == "https://first"
+
+
+def test_a_failed_takeover_leaves_no_manifest_for_the_displaced_manual(tmp_path, monkeypatch):
+    """--replace deletes the displaced manual, so its manifest goes with it: kept,
+    it describes files that are gone — `audit` blames the wrong source, and the
+    next plain ingest of the new URL is refused over a manual no longer there."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://vendor-a.example/manual")
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+
+    real_write = orchestrate.manifest.write_manifest
+    writes = []
+
+    def die_before_the_first_provenance(*args, **kwargs):
+        writes.append(args)
+        if len(writes) == 1:
+            raise OSError("killed before the new manifest was written")
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrate.manifest, "write_manifest", die_before_the_first_provenance)
+    with pytest.raises(OSError):
+        orchestrate.run_ingest("https://vendor-b.example/manual", replace=True)
+
+    assert manifest.read_manifest(slug_dir) is None, "the displaced manual's manifest survived"
+
+    orchestrate.run_ingest("https://vendor-b.example/manual")  # no second --replace
+    assert manifest.read_manifest(slug_dir)["source_url"] == "https://vendor-b.example/manual"
+
+
+def test_an_ingest_killed_before_the_deliverable_lands_can_be_rerun(tmp_path, monkeypatch):
+    """A kill between the mkdir and the copies left content with no manifest, which
+    the next run of the SAME url read as an unidentified foreign manual."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    real_copytree = orchestrate.shutil.copytree
+    crawl_copies = []
+
+    def die_on_the_first_crawl_copy(src, dst, *args, **kwargs):
+        crawl_copies.append(dst)
+        if len(crawl_copies) == 1:
+            raise KeyboardInterrupt("killed mid-copy")
+        return real_copytree(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(orchestrate.shutil, "copytree", die_on_the_first_crawl_copy)
+    with pytest.raises(KeyboardInterrupt):
+        orchestrate.run_ingest("https://x/manual", keep_raw=True)
+
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    assert (slug_dir / "fakeapp.html").exists(), "nothing was staged — window not reproduced"
+
+    res = orchestrate.run_ingest("https://x/manual", keep_raw=True)  # same url, no --replace
+
+    assert res["changed"] is True
+    assert manifest.read_manifest(slug_dir)["kept_raw"] is True
+
+
+def test_reingest_of_a_different_source_refuses_to_take_the_slug_over(tmp_path, monkeypatch):
+    """Two manuals whose derived slug collides: the second silently deleted the
+    first's deliverable and raw/, overwrote its manifest, and printed success.
+    incoming/ is gitignored, so there was no copy to recover."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://vendor-a.example/files/manual.pdf")
+
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    before = (slug_dir / "fakeapp.html").read_text(encoding="utf-8")
+
+    with pytest.raises(InvalidInputError) as exc:
+        orchestrate.run_ingest("https://vendor-b.example/docs/manual.pdf")
+
+    assert "vendor-a.example" in str(exc.value), "the refusal must name what it protected"
+    assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == before
+    m = manifest.read_manifest(slug_dir)
+    assert m["source_url"] == "https://vendor-a.example/files/manual.pdf"
+
+
+def test_reingest_of_the_same_source_is_allowed_across_url_spellings(tmp_path, monkeypatch):
+    """The guard compares canonical URLs, so a trailing slash or scheme change is
+    the same source — refusing those would break every legitimate re-ingest."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://x.example/docs/guide/")
+
+    orchestrate.run_ingest("http://X.example/docs/guide")  # same source, respelled
+
+    m = manifest.read_manifest(tmp_path / "incoming" / "fakeapp")
+    assert m["source_url"] == "http://X.example/docs/guide"
+
+
+def test_replace_takes_the_slug_over_and_drops_the_prior_image_cache(tmp_path, monkeypatch):
+    """A deliberate takeover must not inherit the previous source's images: they
+    belong to a manual that is no longer here, and prune_orphans only sweeps
+    them if a later localize pass happens to reach zero remaining."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://vendor-a.example/manual.pdf")
+
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    imgs = slug_dir / "images"
+    imgs.mkdir(exist_ok=True)
+    (imgs / "vendor-a-diagram.png").write_bytes(b"\x89PNG vendor a")
+
+    orchestrate.run_ingest("https://vendor-b.example/manual.pdf", replace=True)
+
+    assert manifest.read_manifest(slug_dir)["source_url"] == "https://vendor-b.example/manual.pdf"
+    assert not (imgs / "vendor-a-diagram.png").exists(), "stale image cache carried over"
+
+
+def test_replace_on_the_same_source_keeps_the_image_cache(tmp_path, monkeypatch):
+    """The keep-set is keyed on takeover, not on --replace: `--replace` against the
+    source already staged there is still a refresh, and re-downloading every image
+    is the cost the cache exists to avoid."""
+    from pagespring import images
+
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://x.example/manual")
+
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    imgs = slug_dir / "images"
+    imgs.mkdir(exist_ok=True)
+    (imgs / "kept.png").write_bytes(b"\x89PNG\r\n\x1a\nx")
+    images.write_sidecar(
+        slug_dir,
+        [
+            {
+                "local": "kept.png",
+                "source_url": "https://x.example/kept.png",
+                "etag": '"k"',
+                "last_modified": None,
+                "sha256": "abc",
+                "bytes": 11,
+            }
+        ],
+    )
+
+    orchestrate.run_ingest("https://x.example/manual", replace=True)
+
+    assert (imgs / "kept.png").exists(), "--replace discarded the same manual's image cache"
+    assert [r["local"] for r in images.read_sidecar(slug_dir)] == ["kept.png"]
+
+
+def test_reingest_of_a_different_local_file_refuses_to_take_the_slug_over(tmp_path, monkeypatch):
+    """`canonical_url` returns "" for every non-http scheme, so comparing local
+    sources canonically made every saved spec equal to every other — and api_spec
+    derives the same slug from every vendor's `openapi.json`."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("/specs/vendor-a/openapi.json")
+
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    before = (slug_dir / "fakeapp.html").read_text(encoding="utf-8")
+
+    with pytest.raises(InvalidInputError) as exc:
+        orchestrate.run_ingest("/specs/vendor-b/openapi.json")
+
+    assert "vendor-a" in str(exc.value), "the refusal must name what it protected"
+    assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == before
+    assert manifest.read_manifest(slug_dir)["source_url"] == "/specs/vendor-a/openapi.json"
+
+
+def test_reingest_of_the_same_local_file_is_allowed(tmp_path, monkeypatch):
+    """The exact-match fallback must not refuse a legitimate local re-ingest."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("file:///specs/openapi.json")
+
+    orchestrate.run_ingest("file:///specs/openapi.json")
+
+    m = manifest.read_manifest(tmp_path / "incoming" / "fakeapp")
+    assert m["source_url"] == "file:///specs/openapi.json"
+
+
+def test_reingest_of_the_same_local_file_respelled_is_allowed(tmp_path, monkeypatch):
+    """Shell completion alone turns `./openapi.json` into `openapi.json`, and the
+    exact-match fallback refused the second run of a routine workflow — pointing
+    the user at --replace, which is documented as deleting a *different* manual."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    spec = tmp_path / "openapi.json"
+    spec.write_text("{}", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    orchestrate.run_ingest("./openapi.json")
+
+    orchestrate.run_ingest("openapi.json")
+    orchestrate.run_ingest(str(spec))
+    orchestrate.run_ingest(spec.as_uri())
+
+    m = manifest.read_manifest(tmp_path / "incoming" / "fakeapp")
+    assert m["source_url"] == spec.as_uri()
+
+
+def test_reingest_refuses_a_slug_dir_holding_content_with_no_manifest(tmp_path, monkeypatch):
+    """`read_manifest` returns None for an absent manifest, which used to mean
+    `takeover=False` and a silent clear. A legacy pre-manifest slug dir — which
+    `status`, `refresh` and `audit` all still expect — is someone's only copy."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "legacy-manual.html").write_text("<h1>Legacy</h1>", encoding="utf-8")
+
+    with pytest.raises(InvalidInputError) as exc:
+        orchestrate.run_ingest("https://x")
+
+    assert "no readable manifest" in str(exc.value)
+    assert (slug_dir / "legacy-manual.html").exists(), "legacy deliverable deleted"
+
+
+def test_reingest_refuses_a_slug_dir_whose_manifest_is_corrupt(tmp_path, monkeypatch):
+    """`read_manifest` is tolerant by design and answers None for unparseable JSON
+    too, so the guard cannot read that as 'nothing here'."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "fakeapp.html").write_text("<h1>Held</h1>", encoding="utf-8")
+    (slug_dir / manifest.MANIFEST_NAME).write_text('{"source_url": "https://a', encoding="utf-8")
+
+    with pytest.raises(InvalidInputError):
+        orchestrate.run_ingest("https://x")
+
+    assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "<h1>Held</h1>"
+
+
+def test_reingest_into_an_empty_leftover_slug_dir_proceeds(tmp_path, monkeypatch):
+    """An empty dir holds no manual; refusing it would be a false alarm."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    (tmp_path / "incoming" / "fakeapp").mkdir(parents=True)
+
+    res = orchestrate.run_ingest("https://x")
+
+    assert res["slug"] == "fakeapp"
+    assert (tmp_path / "incoming" / "fakeapp" / "fakeapp.html").exists()
+
+
+def test_the_refusal_never_tells_the_user_to_pass_the_slug_they_passed(tmp_path, monkeypatch):
+    """`ingest --slug foo` onto an occupied `foo` is the commonest deliberate
+    collision, and the advice named the flag the user had just used."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://vendor-a.example/manual")  # slug from the pattern
+    orchestrate.run_ingest("https://vendor-a.example/manual", slug_override="shared")
+
+    with pytest.raises(InvalidInputError) as passed_slug:
+        orchestrate.run_ingest("https://vendor-b.example/manual", slug_override="shared")
+
+    assert "give this source its own directory" not in str(passed_slug.value)
+    assert "--replace" in str(passed_slug.value)
+
+    with pytest.raises(InvalidInputError) as derived_slug:
+        orchestrate.run_ingest("https://vendor-b.example/manual")
+
+    assert "give this source its own directory" in str(derived_slug.value)
+
+
+def test_replace_takes_over_a_slug_dir_with_no_readable_manifest(tmp_path, monkeypatch):
+    """The escape hatch has to cover the manifest-less case, or a legacy slug
+    becomes permanently un-reingestable."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "legacy-manual.html").write_text("<h1>Legacy</h1>", encoding="utf-8")
+
+    orchestrate.run_ingest("https://x", replace=True)
+
+    assert not (slug_dir / "legacy-manual.html").exists()
+    assert manifest.read_manifest(slug_dir)["source_url"] == "https://x"
+
+
+@pytest.mark.parametrize(
+    ("held", "new", "same"),
+    [
+        ("https://a.com/m", "https://a.com/m", True),
+        ("https://a.com/m", "http://www.a.com/m/#x", True),  # respelled remote
+        ("https://a.com/m", "https://b.com/m", False),
+        ("file:///u/a/spec.json", "file:///u/a/spec.json", True),
+        ("file:///u/a/spec.json", "file:///u/b/spec.json", False),
+        ("./a.json", "./b.json", False),
+        ("https://a.com/m", "./b.json", False),  # remote vs local
+        ("/u/a/spec.json", "file:///u/a/spec.json", True),  # one file, two spellings
+        ("./a.json", "a.json", True),
+        ("mailto:a@b.example", "mailto:c@d.example", False),  # neither remote nor local
+    ],
+)
+def test_same_source_truth_table(held, new, same):
+    """Local sources have no canonical form (`canonical_url` answers "" for every
+    non-http scheme), so they compare by resolved path — comparing them canonically
+    made every saved spec equal to every other, and comparing the raw strings
+    refused the same file typed a different way."""
+    assert orchestrate._same_source(held, new) is same
+
+
+def test_reingest_refuses_a_manifest_missing_its_source_url(tmp_path, monkeypatch):
+    """Valid JSON without the key crashed the guard with KeyError — before the
+    --replace check, so the slug was un-reingestable until hand-repaired."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "fakeapp.html").write_text("<h1>Held</h1>", encoding="utf-8")
+    (slug_dir / manifest.MANIFEST_NAME).write_text('{"pages": 3}', encoding="utf-8")
+
+    with pytest.raises(InvalidInputError) as exc:
+        orchestrate.run_ingest("https://x")
+    assert "no readable manifest" in str(exc.value)
+
+    orchestrate.run_ingest("https://x", replace=True)  # the escape hatch must work
+    assert manifest.read_manifest(slug_dir)["source_url"] == "https://x"
+
+
+def test_reingest_refuses_a_manifest_that_is_not_a_dict(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "fakeapp.html").write_text("<h1>Held</h1>", encoding="utf-8")
+    (slug_dir / manifest.MANIFEST_NAME).write_text("[1, 2, 3]", encoding="utf-8")
+
+    with pytest.raises(InvalidInputError):
+        orchestrate.run_ingest("https://x")
+    assert (slug_dir / "fakeapp.html").exists()
+
+
+def test_reingest_refuses_a_manifest_whose_source_url_is_not_a_string(tmp_path, monkeypatch):
+    """Nothing validates a hand-edited manifest, and the compare must refuse the
+    junk it finds rather than crash the ingest."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "fakeapp.html").write_text("<h1>Held</h1>", encoding="utf-8")
+    (slug_dir / manifest.MANIFEST_NAME).write_text('{"source_url": 123}', encoding="utf-8")
+
+    with pytest.raises(InvalidInputError):
+        orchestrate.run_ingest("https://x")
+
+    assert (slug_dir / "fakeapp.html").exists()
+
+
+def test_reingest_refuses_a_held_url_with_an_invalid_port(tmp_path, monkeypatch):
+    """`canonical_url` answers "" for a URL it cannot parse, which must not read as
+    "no recorded source": an unparseable held URL refuses, and --replace still gets
+    through."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "fakeapp.html").write_text("<h1>Held</h1>", encoding="utf-8")
+    orchestrate.run_ingest("https://x", replace=True)
+    m = manifest.read_manifest(slug_dir)
+    m["source_url"] = "https://example.com:99999/x"
+    manifest.write_manifest(slug_dir, m)
+
+    with pytest.raises(InvalidInputError):
+        orchestrate.run_ingest("https://y")
+
+    orchestrate.run_ingest("https://y", replace=True)
+    assert manifest.read_manifest(slug_dir)["source_url"] == "https://y"

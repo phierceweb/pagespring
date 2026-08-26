@@ -4,6 +4,79 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.10.0] — 2026-08-26
+
+### Added
+
+- **`ingest --replace`** takes over a slug already holding a different source,
+  deleting that manual along with its image cache and manifest.
+  `run_ingest(replace=...)` is the API equivalent.
+- **`PAGESPRING_ENV_FILE`** names the `.env` settings resolve from. Without it
+  an installed, non-editable CLI resolves to the directory containing
+  site-packages, where no `.env` exists, so `.env`-sourced settings silently
+  fell back to their defaults (exported environment variables always applied).
+  A missing override file logs a warning instead of silently no-opping. The
+  working directory is never searched: every key in the resolved file enters the
+  process environment, so an adjacent project's `.env` would be adopted whole.
+
+### Changed
+
+- **Python 3.12 is the floor** — `requires-python >=3.12`, following pf-core.
+  A 3.11 install of 0.10.0 is unresolvable; stay on 0.9.x for 3.11.
+- **A re-ingest whose slug collides with a different source is refused** instead
+  of replacing it, exiting `2`. Remote URLs are compared canonically, so a
+  respelled re-ingest of the same source still proceeds; local paths and
+  `file://` URLs are compared as resolved filesystem paths. A slug dir holding
+  content with no readable manifest is refused (an empty one is staged into as
+  usual). `--if-changed` reports `unchanged` only for the source the slug
+  already holds. Callers relying on the old clear-and-restage must pass `--slug`
+  or `--replace`.
+- **`audit` reports `sha_unverified` (warning) where it used to report
+  `sha_mismatch` (error)** for a deliverable whose image pass recorded no
+  `localized_sha256` — an ingest killed mid-pass. `audit --strict` therefore
+  exits `0` on such a slug where it previously exited `1`; the finding is
+  reported either way. Page loss renders as `<1%` and `>99%` at the ends rather
+  than rounding to `0%` or `100%`.
+- **A corpus sweep survives one unreadable slug dir.** `audit --all`, `refresh
+  --all` and `status` skip a manifest missing required fields and report the
+  rest, instead of aborting the whole sweep on it.
+- **pf-core pin raised to `~=0.20.0`** — for `canonical_url`, which the
+  slug-collision check compares source URLs with. pf-core 0.20.0 requires
+  Python 3.12, which is what moves this package's floor.
+
+### Fixed
+
+- **EPUB 3 content documents are recognized.** `.xhtml` counts as an HTML member
+  in an EPUB container (an OPF package document or an `application/epub+zip`
+  mimetype member), so spec-named chapters are staged in spine order. Other
+  archives are unaffected: a `.md` collection carrying a stray `.xhtml` keeps its
+  markdown. The archive kind-sniff is also case-insensitive.
+- **A one-operation API spec no longer audits as a collapsed crawl.** `api_spec`
+  declares `single_fetch` — the marker `audit` and `refresh` read for a
+  deliverable derived from exactly one URL — so `single_page_crawl` no longer
+  applies to it.
+- **Image provenance no longer claims an earlier run's file.** The hash join
+  skips files already on disk before this run's downloads — whatever state the
+  sidecar is in — and leaves an ambiguous multi-candidate match unrecorded.
+- **A localized deliverable with no recorded hash no longer audits as `ok`.** It
+  reports `sha_unverified` when its bytes have diverged from the staged
+  `sha256`; whether an image pass ran is read from `images/` existing rather
+  than the image count.
+- **`llms-full.txt` is read as content, not as an index.** Its body is the
+  deliverable (one page, `single_document`). Routing keys on the URL's path
+  basename, so a query string, fragment, or case change no longer sends it to
+  `docs_probe` for a site crawl. Its slug now folds in the host, so two vendors
+  publishing at the same path no longer collide — **an `llms.txt`/`llms-full.txt`
+  slug ingested under 0.9.x will re-ingest to a new directory**; delete the old
+  one, or `audit --all` reports `duplicate_source_url` on both.
+- **A section base URL matches on path boundaries, not string prefixes.** An
+  `llms_txt` section seed no longer absorbs a sibling section sharing its prefix
+  (`/guide` pulling `/guide-advanced/*`), and an uppercase host matches its
+  lowercase links instead of staging nothing.
+- **An interrupted ingest no longer locks its slug.** The manifest is written
+  before the deliverable is copied, so a run killed mid-copy leaves provenance
+  and the same URL can simply be re-ingested.
+
 ## [0.9.0] — 2026-08-05
 
 ### Added

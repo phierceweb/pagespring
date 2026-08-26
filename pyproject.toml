@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pagespring"
-version = "0.9.0"
+version = "0.10.0"
 description = "Acquire and normalize online documentation into clean, convertible source files — the acquisition front-end to pagespeak."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Mike Farr" }]
@@ -16,7 +16,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Operating System :: OS Independent",
     "Topic :: Text Processing :: Markup :: Markdown",
@@ -32,7 +31,7 @@ dependencies = [
     # Page counts for PDF deliverables. pdfium decrypts internally, so encrypted
     # manuals count without a separate crypto dependency.
     "pypdfium2>=4.30",
-    "pf-core[cli]~=0.18.1",
+    "pf-core[cli]~=0.20.0",
 ]
 
 [project.optional-dependencies]
@@ -60,7 +59,7 @@ pagespring = ["py.typed"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
@@ -71,7 +70,7 @@ ignore = ["E501"]
 "tests/*" = ["B011"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 

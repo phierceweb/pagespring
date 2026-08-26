@@ -32,6 +32,18 @@ _TEXTY = (".txt", ".md", ".rst")
 _HTMLY = (".html", ".htm")
 
 
+def _html_exts(raw_dir: Path) -> tuple[str, ...]:
+    """HTML member extensions for this archive. ``.xhtml`` counts only inside an
+    EPUB container: elsewhere a stray one must not flip the kind sniff to html
+    and filter the real .md/.txt docs out of the deliverable."""
+    epub = any(raw_dir.rglob("*.opf")) or any(
+        p.read_text(encoding="utf-8", errors="replace").strip() == "application/epub+zip"
+        for p in raw_dir.rglob("mimetype")
+        if p.is_file()
+    )
+    return (*_HTMLY, ".xhtml") if epub else _HTMLY
+
+
 def _slug_from(url: str) -> str:
     name = Path(urlparse(url).path).name
     for suf in _ARCHIVE_SUFFIXES:
@@ -128,11 +140,12 @@ class ArchiveDownloadPattern:
         raw_dir.mkdir(parents=True, exist_ok=True)
         _f, data, meta = http.fetch_bytes_meta(url)
         _extract(data, raw_dir)
+        htmly = _html_exts(raw_dir)
         kind: SourceKind = (
-            "html" if any(raw_dir.rglob("*.html")) or any(raw_dir.rglob("*.htm")) else "markdown"
+            "html" if any(p.suffix.lower() in htmly for p in raw_dir.rglob("*")) else "markdown"
         )
         slug = _slug_from(url)
-        exts = _HTMLY if kind == "html" else _TEXTY
+        exts = htmly if kind == "html" else _TEXTY
         pages = sum(1 for p in raw_dir.rglob("*") if p.suffix.lower() in exts)
         log.info("archive_download.acquire", url=url, slug=slug, kind=kind, bytes=len(data))
         return AcquireResult(
@@ -145,7 +158,7 @@ class ArchiveDownloadPattern:
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
-        exts = _HTMLY if acq.kind == "html" else _TEXTY
+        exts = _html_exts(acq.raw_dir) if acq.kind == "html" else _TEXTY
         files = _ordered_members(acq.raw_dir, exts)
         parts = []
         for p in files:

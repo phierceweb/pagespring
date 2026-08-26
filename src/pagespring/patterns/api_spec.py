@@ -91,6 +91,9 @@ def _title_slug(data: dict[str, Any], fmt: str, src: str) -> tuple[str, str]:
 
 class ApiSpecPattern:
     name = "api_spec"
+    # One spec file, and `pages` counts operations rather than crawl pages — so a
+    # one-operation spec is complete, not a collapsed crawl.
+    single_fetch = True
 
     def match(self, url: str) -> bool:
         seg = _last_segment(url)

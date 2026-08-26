@@ -3,6 +3,8 @@ network). Re-ingests each slug from its manifest's source_url with --if-changed
 semantics; single-fetch patterns with stored validators get a conditional-GET
 fast path."""
 
+import json
+
 import pytest
 
 from pagespring import manifest, orchestrate, refresh
@@ -291,3 +293,44 @@ def test_refresh_all_sweeps_every_slug_and_isolates_failures(tmp_path, monkeypat
     assert (tmp_path / "incoming" / "bbb-alive" / "bbb-alive.html").read_text(
         encoding="utf-8"
     ) == "new"
+
+
+def test_refresh_single_fetch_without_validators_skips_the_probe(tmp_path, monkeypatch):
+    """`api_spec` declares single_fetch but its acquire captures no validators, so
+    the probe has nothing to send — it must fall straight to the full re-ingest
+    without issuing a conditional GET at all. The real pattern, ingested from a
+    local spec file: a fake could declare validators the pattern never records."""
+    spec = tmp_path / "openapi.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "openapi": "3.0.0",
+                "info": {"title": "Vendor API", "version": "1"},
+                "paths": {"/ping": {"get": {"summary": "ping"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    slug = orchestrate.run_ingest(str(spec))["slug"]
+    m = manifest.read_manifest(tmp_path / "incoming" / slug)
+
+    assert m["pattern"] == "api_spec"
+    assert refresh.pattern_by_name("api_spec").single_fetch is True
+    assert (m["etag"], m["last_modified"]) == (None, None)  # nothing to probe with
+
+    monkeypatch.setattr(
+        refresh.http,
+        "not_modified",
+        lambda url, **k: pytest.fail("probed with no validators to send"),
+    )
+    reingested: list = []
+    monkeypatch.setattr(
+        refresh,
+        "run_ingest",
+        lambda url, **k: (reingested.append(url), {"changed": True, "duplicate_of": None})[1],
+    )
+
+    out = refresh.refresh_slug(slug)
+
+    assert reingested == [str(spec)]
+    assert out["status"] == "changed"

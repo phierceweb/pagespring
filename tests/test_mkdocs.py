@@ -101,3 +101,23 @@ def test_page_record_text_is_not_repeated_under_its_sections(tmp_path, monkeypat
     assert merged.count("Install step.") == 1, "page blob duplicated its own sections"
     assert merged.count("Config step.") == 1
     assert "Intro blurb." in merged, "page-level prose before the first section is content"
+
+
+def test_page_blob_kept_when_no_section_carries_text(tmp_path, monkeypatch):
+    """With `indexing: sections` every section record is text-free, so the
+    page-level blob is the only carrier of the body — it must survive."""
+    index = json.dumps(
+        {
+            "docs": [
+                {"location": "guide/", "title": "Guide", "text": "The entire page body."},
+                {"location": "guide/#install", "title": "Install", "text": ""},
+                {"location": "guide/#config", "title": "Config", "text": ""},
+            ]
+        }
+    )
+    monkeypatch.setattr(http, "fetch_text", lambda url, **kw: (url, index))
+
+    acq = _mkdocs.acquire("https://ex.org", tmp_path, slug="ex", title=None)
+    merged = "".join(p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*")))
+
+    assert "The entire page body." in merged, "dropped the only copy of the body"
