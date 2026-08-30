@@ -15,7 +15,7 @@ paywalls, or bot-detection evasion (see the README's *Intended use*).
 
 The most useful contribution is a new **source pattern** — see
 [docs/architecture.md](docs/architecture.md#adding-a-new-pattern) for the
-five-member protocol and the registration order rules.
+four-member protocol and the registration order rules.
 
 ## Development setup
 

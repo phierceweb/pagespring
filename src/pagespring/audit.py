@@ -79,10 +79,17 @@ def audit_slug(slug: str) -> list[Finding]:
 
     findings: list[Finding] = []
 
-    # Localize re-points refs, so a localized deliverable diverges from the staged
-    # sha; `localized_sha256` is its post-localize hash. Whether a pass ran reads
-    # from images/ existing, not the count: a kill mid-pass leaves images=0.
-    localized = m["images"] > 0 or (incoming_dir / "images").is_dir()
+    # Localize re-points refs, so `localized_sha256` — not `sha256` — describes a
+    # localized file. A pass ran if images>0 (0 after a kill mid-pass), or images/
+    # exists *and* the file still carries a local ref (a re-ingest keeps the dir).
+    doc_text = (
+        deliverable.read_text(encoding="utf-8", errors="replace")
+        if m["kind"] in ("markdown", "html")
+        else ""
+    )
+    localized = m["images"] > 0 or (
+        (incoming_dir / "images").is_dir() and bool(_LOCAL_IMG_RE.search(doc_text))
+    )
     expected = m.get("localized_sha256") or (None if localized else m["sha256"])
     actual = manifest.sha256_file(deliverable)
     if expected is not None:
@@ -158,7 +165,6 @@ def audit_slug(slug: str) -> list[Finding]:
         )
 
     if m["kind"] in ("markdown", "html"):
-        doc_text = deliverable.read_text(encoding="utf-8", errors="replace")
         # images/ existing is the fact that a localize pass ran; the count can be
         # 0 when every download failed.
         if m["images"] > 0 or (incoming_dir / "images").is_dir():

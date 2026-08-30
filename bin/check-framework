@@ -27,11 +27,15 @@ BANNED_IMPORTS = {
         "structured events, and the project's log level and file wiring",
     ),
     "dotenv": (
-        "pf_core.config.load_env",
+        "pf_core.config.AppConfig",
         "entry points already load .env; a second loader fights the first",
     ),
     "requests": ("pagespring.http", "the crawl User-Agent, size caps, retries and the SSRF guard"),
     "httpx": ("pagespring.http", "the crawl User-Agent, size caps, retries and the SSRF guard"),
+    "hashlib": (
+        "pf_core.utils.hashing.content_hash, or pf_core.pipeline.run_record.file_sha256 for a file",
+        "one spelling of a digest, and the file variant streams instead of slurping",
+    ),
     "aiohttp": ("pagespring.http", "fetching is stdlib urllib through one shim"),
     "urllib3": ("pagespring.http", "fetching is stdlib urllib through one shim"),
 }

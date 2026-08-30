@@ -363,3 +363,17 @@ def test_normalize_rejects_unrecognized_raw(tmp_path):
     acq = AcquireResult(raw_dir=raw_dir, kind="markdown", slug="x", pages=0, title=None)
     with pytest.raises(InvalidInputError):
         ApiSpecPattern().normalize(acq, tmp_path)
+
+
+def test_a_null_paths_block_counts_as_zero_operations():
+    """`paths:` written with nothing under it parses as None, not a missing key, so a
+    `{}` default never applies."""
+    from pagespring.patterns import _openapi_render
+
+    spec = {"openapi": "3.0.0", "info": {"title": "Empty API"}, "paths": None}
+    assert _openapi_render.count_operations(spec) == 0
+    assert "# Empty API" in _openapi_render.render(spec, "Empty API")
+
+    listy = {"openapi": "3.0.0", "info": {"title": "Odd API"}, "paths": []}
+    assert _openapi_render.count_operations(listy) == 0
+    assert "# Odd API" in _openapi_render.render(listy, "Odd API")

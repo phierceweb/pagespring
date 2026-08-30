@@ -128,7 +128,17 @@ class AppleHelpPattern:
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         out_path = workdir / f"{acq.slug}.html"
-        merged = build_merged_html(acq.raw_dir, acq.slug)
+        merged, dropped = build_merged_html(acq.raw_dir, acq.slug)
+        if dropped:
+            # Counted by the crawl but absent from the merge, so `pages` alone
+            # would describe topics the deliverable does not carry.
+            acq.lost += len(dropped)
+            log.warning(
+                "apple_help.merge_dropped",
+                slug=acq.slug,
+                dropped=len(dropped),
+                examples=dropped[:5],
+            )
         out_path.write_text(merged, encoding="utf-8")
         log.info("apple_help.normalize", slug=acq.slug, out=str(out_path), bytes=len(merged))
         return out_path

@@ -17,8 +17,10 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from bs4 import BeautifulSoup
+from pf_core.exceptions import InvalidInputError
 from pf_core.log import get_logger
 from pf_core.utils.slugify import slugify
 
@@ -29,6 +31,9 @@ log = get_logger(__name__)
 
 _ARCHIVE_SUFFIXES = (".zip", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".epub")
 _TEXTY = (".txt", ".md", ".rst")
+_PACKAGING = frozenset(
+    {"readme", "license", "licence", "changelog", "contributing", "install", "notice", "authors"}
+)
 _HTMLY = (".html", ".htm")
 
 
@@ -53,6 +58,17 @@ def _slug_from(url: str) -> str:
     return slugify(name) or "docs"
 
 
+def _load_bytes(src: str) -> tuple[bytes, http.Validators]:
+    """Archive bytes from an http(s) URL, a ``file://`` URL, or a local path."""
+    if src.startswith(("http://", "https://")):
+        _final, data, meta = http.fetch_bytes_meta(src)
+        return data, meta
+    path = Path(url2pathname(urlparse(src).path) if src.startswith("file://") else src)
+    if not path.is_file():
+        raise InvalidInputError(f"not a fetchable URL or existing file: {src}")
+    return path.read_bytes(), http.Validators(etag=None, last_modified=None)
+
+
 def _natural_key(path: Path) -> tuple[object, ...]:
     """Sort key where embedded digits compare numerically, so ch2 precedes ch10."""
     return tuple(
@@ -60,8 +76,9 @@ def _natural_key(path: Path) -> tuple[object, ...]:
     )
 
 
-def _spine_order(raw_dir: Path) -> list[str]:
-    """Member hrefs in EPUB reading order, from the OPF spine ([] if absent).
+def _spine_order(raw_dir: Path) -> list[Path]:
+    """Member paths in EPUB reading order, each resolved against the OPF's own
+    directory, from the OPF spine ([] if absent).
 
     The spine is the only authoritative order: filenames sort ch10 between ch1
     and ch2, and Gutenberg names its cover ``wrap0000`` so it lands last.
@@ -82,7 +99,7 @@ def _spine_order(raw_dir: Path) -> list[str]:
     spine = [
         hrefs.get(ref.get("idref") or "") for ref in root.iterfind(".//opf:spine/opf:itemref", ns)
     ]
-    return [h for h in spine if h]
+    return [opf.parent / h for h in spine if h]
 
 
 def _ordered_members(raw_dir: Path, exts: tuple[str, ...]) -> list[Path]:
@@ -91,15 +108,19 @@ def _ordered_members(raw_dir: Path, exts: tuple[str, ...]) -> list[Path]:
     spine = _spine_order(raw_dir)
     if not spine:
         return sorted(members, key=_natural_key)
-    rank = {href: i for i, href in enumerate(spine)}
+    by_path = {p.resolve(): p for p in members}
     by_name = {p.name: p for p in members}
-    ordered = [by_name[Path(h).name] for h in spine if Path(h).name in by_name]
-    listed = set(ordered)
+    ordered: list[Path] = []
+    listed: set[Path] = set()
+    for href in spine:
+        # Full path first: two chapters can share a basename in different folders,
+        # and the name alone collapses them onto whichever one the dict kept.
+        member = by_path.get(href.resolve()) or by_name.get(href.name)
+        if member is not None and member not in listed:
+            listed.add(member)
+            ordered.append(member)
     # Anything the spine omits still belongs in the deliverable, after the book.
-    return ordered + sorted(
-        (p for p in members if p not in listed),
-        key=lambda p: (rank.get(p.name, len(rank)), _natural_key(p)),
-    )
+    return ordered + sorted((p for p in members if p not in listed), key=_natural_key)
 
 
 def _body_fragment(html: str) -> str:
@@ -138,15 +159,19 @@ class ArchiveDownloadPattern:
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
-        _f, data, meta = http.fetch_bytes_meta(url)
+        data, meta = _load_bytes(url)
         _extract(data, raw_dir)
         htmly = _html_exts(raw_dir)
-        kind: SourceKind = (
-            "html" if any(p.suffix.lower() in htmly for p in raw_dir.rglob("*")) else "markdown"
-        )
+        members = [(p.suffix.lower(), p.stem.lower()) for p in raw_dir.rglob("*")]
+        n_html = sum(1 for suffix, _ in members if suffix in htmly)
+        n_text = sum(1 for suffix, _ in members if suffix in _TEXTY)
+        # Which family carries the archive, not which is merely present: a text
+        # archive shipping one search.html would otherwise filter out every doc,
+        # and one README would outweigh the single page it describes.
+        n_docs = sum(1 for suffix, stem in members if suffix in _TEXTY and stem not in _PACKAGING)
+        kind: SourceKind = "html" if n_html > n_docs else "markdown"
         slug = _slug_from(url)
-        exts = htmly if kind == "html" else _TEXTY
-        pages = sum(1 for p in raw_dir.rglob("*") if p.suffix.lower() in exts)
+        pages = n_html if kind == "html" else n_text
         log.info("archive_download.acquire", url=url, slug=slug, kind=kind, bytes=len(data))
         return AcquireResult(
             raw_dir=raw_dir,

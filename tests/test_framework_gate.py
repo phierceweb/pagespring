@@ -22,6 +22,7 @@ BREACHES = [
     ("import logging\n", "logging"),
     ("import requests\n", "requests"),
     ("import httpx\n", "httpx"),
+    ("import hashlib\n", "hashlib"),
     ("def f():\n    raise RuntimeError('x')\n", "RuntimeError"),
     ("def f():\n    raise ValueError('x')\n", "ValueError"),
     ("def f():\n    raise Exception('x')\n", "Exception"),

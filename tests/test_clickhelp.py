@@ -167,3 +167,14 @@ def test_a_topic_id_holding_a_path_separator_is_flattened_into_the_filename(tmp_
 
     assert [p.name for p in acq.raw_dir.glob("*.html")] == ["0000-guide-setup.html"]
     assert f"{ROOT}/HTML/guide/setup.html" in seen  # the URL keeps the id verbatim
+
+
+def test_manual_root_accepts_a_directory_form_entry_url():
+    """The export root a reader lands on has no filename to drop; dropping its last
+    segment anyway resolves one level too high and 404s every TOC fetch."""
+    root = "https://vendor.example/manuals/Widget/Manual"
+    assert _clickhelp.manual_root(f"{root}/") == root
+    assert _clickhelp.manual_root(root) == root
+    # the entry file and the HTML/ topic form still resolve to the same root
+    assert _clickhelp.manual_root(f"{root}/index.html") == root
+    assert _clickhelp.manual_root(f"{root}/HTML/topic-1.html") == root

@@ -5,6 +5,8 @@ Findings-based: a healthy slug audits to an empty list; each defect is one
 trusted; warning-level = real but survivable RAG noise.
 """
 
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -514,3 +516,41 @@ def test_status_lists_healthy_slugs_around_an_unreadable_one(tmp_path):
     assert r.exit_code == 0, r.exception
     assert "aaa-good.md" in r.output
     assert "mmm-bad" in r.output
+
+
+def test_a_leftover_images_dir_does_not_excuse_a_corrupt_deliverable(tmp_path):
+    """A re-ingest keeps images/ while staging a fresh, un-localized deliverable, so the
+    bare directory is no proof of localization. Corruption must stay sha_mismatch
+    (error) rather than sha_unverified (warning), or `audit --strict` passes it."""
+    d = _stage(tmp_path, body="# T\n\ntext\n")
+    (d / "images").mkdir()  # left behind by an earlier --download-images run
+    deliverable = d / "fakeapp.md"
+    deliverable.write_text("# T\n\nCORRUPTED\n", encoding="utf-8")
+
+    findings = audit.audit_slug("fakeapp")
+
+    assert _checks(findings) == [("sha_mismatch", "error")], (
+        f"corruption was downgraded: {_checks(findings)}"
+    )
+
+
+def test_the_deliverable_is_read_at_most_once_per_audit(tmp_path, monkeypatch):
+    """`audit_slug` walks the deliverable for several checks, so it reads the file once —
+    and never decodes a PDF, which carries its images inline and never localizes."""
+    d = _stage(tmp_path, body="# T\n\n![a](images/a.png)\n")
+    (d / "images").mkdir()
+    (d / "images" / "a.png").write_bytes(b"x")
+    deliverable = d / "fakeapp.md"
+
+    reads = []
+    real_read_text = Path.read_text
+
+    def counting_read_text(self, *a, **kw):
+        if self == deliverable:
+            reads.append(1)
+        return real_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    audit.audit_slug("fakeapp")
+
+    assert len(reads) <= 1, f"deliverable decoded {len(reads)} times in one audit"

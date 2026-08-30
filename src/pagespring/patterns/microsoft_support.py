@@ -20,6 +20,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
+from pf_core.exceptions import InvalidInputError
 from pf_core.log import get_logger
 
 from pagespring import http
@@ -38,6 +39,7 @@ _CHROME_RE = re.compile(
 _SITEMAP_TPL = "https://support.microsoft.com/_sitemaps/{product}_{locale}_{n}.xml"
 _LOC_RE = re.compile(r"<loc>([^<]+)</loc>")
 _MAX = 2000  # per-product sitemap scale (excel ≈ 1700)
+_MAX_SITEMAP_PAGES = 50  # the largest product publishes a single sitemap page
 _MIN_BODY = 200  # below this, a title-less page is a chrome shell — skip it
 _COOLDOWN = 60.0  # seconds to back off when the site throttles (it 403s, not 429s)
 _MAX_FAILED_COOLDOWNS = 3  # consecutive failed retries → sustained block; stop paying cooldowns
@@ -86,8 +88,7 @@ def _sitemap_articles(product: str, locale: str) -> tuple[list[str], bool]:
     can't be counted one by one the way a failed page fetch can.
     """
     links: list[str] = []
-    n = 1
-    while True:
+    for n in range(1, _MAX_SITEMAP_PAGES + 1):
         url = _SITEMAP_TPL.format(product=product, locale=locale, n=n)
         try:
             _f, xml = http.fetch_text(url)
@@ -103,8 +104,15 @@ def _sitemap_articles(product: str, locale: str) -> tuple[list[str], bool]:
         except Exception as exc:  # network/timeout mid-crawl — truncation, not the end
             log.warning("microsoft_support.sitemap_error", url=url, error=str(exc), pages=n - 1)
             return links, True
-        links.extend(_LOC_RE.findall(xml))
-        n += 1
+        found = _LOC_RE.findall(xml)
+        if not found:
+            # A soft-404 landing page, CDN error page or WAF interstitial answers
+            # 200 with no <loc>; without this the walk never reaches its 404 end.
+            break
+        links.extend(found)
+    else:
+        log.warning("microsoft_support.sitemap_capped", product=product, cap=_MAX_SITEMAP_PAGES)
+        return links, True
     return links, False
 
 
@@ -186,6 +194,13 @@ class MicrosoftSupportPattern:
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         title = acq.slug.replace("-", " ").title()
         parts = [p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*.html"))]
+        if not parts:
+            # The wrapper alone is non-empty, so staging would accept it and clear
+            # the good deliverable it replaces.
+            raise InvalidInputError(
+                f"{acq.slug}: the crawl captured no article — the hub's shape changed, "
+                "or the site quota-blocked every fetch. Nothing was staged."
+            )
         doc = (
             '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
             f"<title>{_html.escape(title)} Help</title></head>\n<body>\n"

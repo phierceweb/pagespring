@@ -19,6 +19,15 @@ def test_sha256_file_matches_stdlib(tmp_path):
     assert manifest.sha256_file(f) == hashlib.sha256(data).hexdigest()
 
 
+def test_sha256_file_matches_stdlib_across_chunk_boundaries(tmp_path):
+    """The digest is streamed in 1 MiB chunks. A fixture smaller than one chunk
+    never exercises the loop, so a broken chunk walk would still pass."""
+    data = b"pagespring" * 300_000  # ~2.9 MB — spans three 1 MiB reads
+    f = tmp_path / "big.pdf"
+    f.write_bytes(data)
+    assert manifest.sha256_file(f) == hashlib.sha256(data).hexdigest()
+
+
 def _sample() -> manifest.Manifest:
     return manifest.build_manifest(
         source_url="https://docs.tableplus.com/",
@@ -83,6 +92,22 @@ def test_read_manifest_missing_returns_none(tmp_path):
 
 def test_read_manifest_corrupt_returns_none(tmp_path):
     (tmp_path / manifest.MANIFEST_NAME).write_text("{not valid json", encoding="utf-8")
+    assert manifest.read_manifest(tmp_path) is None
+
+
+@pytest.mark.parametrize("payload", ["[1, 2, 3]", '"a string"', "null", "42", "true"])
+def test_read_manifest_non_object_json_returns_none(tmp_path, payload):
+    """JSON that parses but is not an object is not a manifest. Every caller reads it by
+    key, so handing one back raises TypeError instead of the clean "no manifest —
+    ingest it first"."""
+    (tmp_path / manifest.MANIFEST_NAME).write_text(payload, encoding="utf-8")
+    assert manifest.read_manifest(tmp_path) is None
+
+
+def test_read_manifest_invalid_utf8_returns_none(tmp_path):
+    """A corrupt byte reads as "no record", exactly like corrupt JSON: a UnicodeDecodeError
+    escaping from here kills a whole corpus sweep."""
+    (tmp_path / manifest.MANIFEST_NAME).write_bytes(b'{"slug": "\xff caf\xe9"}')
     assert manifest.read_manifest(tmp_path) is None
 
 

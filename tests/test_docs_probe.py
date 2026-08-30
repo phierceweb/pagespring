@@ -5,7 +5,7 @@ from pf_core.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns import _docusaurus, _mkdocs, _sphinx
+from pagespring.patterns import _docusaurus, _mkdocs, _sphinx, docs_probe, gitbook
 from pagespring.patterns.docs_probe import DocsProbePattern
 
 _MKDOCS_HOME = (
@@ -217,3 +217,33 @@ def test_clickhelp_is_detected_without_a_generator_meta(tmp_path, monkeypatch):
 
     assert called["url"].endswith("/HTML/welcome.html")
     assert acq.slug == "widget", "slug must come from the manual path, not the host"
+
+
+def test_llms_txt_delegation_keeps_the_probed_slug_and_title(tmp_path, monkeypatch):
+    """docs_probe derives the slug from the host and the title from the page. Delegating
+    to GitBook without them folds every custom domain onto its generic host label
+    ('help', 'docs'), where they collide."""
+    home = (
+        "<html><head><title>Widget Pro Manual</title>"
+        '<meta name="generator" content="nothing-known"></head><body>x</body></html>'
+    )
+    llms = "- [Intro](https://help.widgetpro.com/intro.md)\n"
+
+    def fake_fetch(url, **kw):
+        if url.endswith("/llms.txt"):
+            return url, llms
+        if url.endswith(".md"):
+            return url, "# Intro\n\nbody\n"
+        return url, home
+
+    monkeypatch.setattr(docs_probe.http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(
+        docs_probe, "_fetch_or_none", lambda url: llms if url.endswith("llms.txt") else None
+    )
+    monkeypatch.setattr(gitbook.http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(gitbook.http, "polite_sleep", lambda *a, **k: None)
+
+    acq = docs_probe.DocsProbePattern().acquire("https://help.widgetpro.com/", tmp_path)
+
+    assert acq.slug == "widgetpro", f"probed slug discarded, got {acq.slug!r}"
+    assert acq.title == "Widget Pro Manual", "probed title discarded"

@@ -9,7 +9,6 @@ speculative selector ladder stages a hollow deliverable when a theme changes.
 
 from __future__ import annotations
 
-import hashlib
 import time
 from pathlib import Path
 from urllib.error import HTTPError
@@ -19,6 +18,7 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pf_core.exceptions import InvalidInputError
 from pf_core.log import get_logger
+from pf_core.utils.hashing import content_hash
 from pf_core.utils.slugify import slugify
 
 from pagespring import http
@@ -169,7 +169,7 @@ def acquire(url: str, workdir: Path, *, slug: str, title: str | None) -> Acquire
             continue
         # A directory URL and its index.html are one page under two names, as are
         # redirect aliases; identical content is the only reliable tell.
-        digest = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+        digest = content_hash(fragment)
         if digest in staged_hashes:
             http.polite_sleep()
             continue

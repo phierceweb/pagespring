@@ -170,3 +170,18 @@ def test_index_without_urls_is_an_input_error(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "fetch_text", _fetch(fuzzy="indexDict['en'] = [];"))
     with pytest.raises(InvalidInputError, match="no pages"):
         _paligo.acquire(f"{ROOT}/index.html", tmp_path, slug="widget5", title=None)
+
+
+def test_publication_base_keeps_a_directory_form_portal_url():
+    """A portal URL's last segment is a real directory; popping it unconditionally puts
+    the locale dir on the host root, 404ing every asset and topic."""
+    html = '<a href="en/index.html">English</a>'
+    assert (
+        _paligo.publication_base("https://docs.vendor.example/widget5", html)
+        == "https://docs.vendor.example/widget5/en"
+    )
+    # an entry FILE still has its filename stripped
+    assert (
+        _paligo.publication_base("https://docs.vendor.example/widget5/index.html", html)
+        == "https://docs.vendor.example/widget5/en"
+    )

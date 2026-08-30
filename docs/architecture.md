@@ -24,6 +24,8 @@ One command, `ingest`, drives `run_ingest` in `orchestrate.py`:
 3. **normalize** — the pattern turns the raw pages into ONE clean file (`.html` / `.md` / `.pdf`) with **absolute** asset URLs.
 4. **stage** — `run_ingest` clears `incoming/<slug>/` (keeping the image cache on a same-source re-ingest; a slug holding a *different* source — or content with no readable manifest — is refused rather than cleared unless `--replace`, which drops the cache with the manual it belongs to), copies the clean file in, and writes a `manifest.json` beside it (see [The manifest](#the-manifest)).
 
+Every slug — the one acquire derived or a `--slug` override — passes through `paths.fold_slug` before it names anything: slugified, then capped at 100 characters with the trailing dash trimmed. The fold is fed by remote titles, and an uncapped one names a file no filesystem will create.
+
 All work happens in a temp dir; only the final clean file (plus its `manifest.json`, and optionally `raw/`, `images/`) lands in `incoming/`. Empty normalize output raises `EmptyOutputError` *before* the staging clear, so a bad re-crawl never destroys a prior good deliverable.
 
 **Normalize flattens responsive images first.** The localizer follows `<img src>` and markdown `](…)` only, so any reference parked in `<picture>`/`<source srcset>`, `srcset`/`data-srcset`, or a `data-src` lazy-load attribute is invisible to it and ships remote no matter how often `localize` runs. `_site.flatten_responsive_images` reduces each image to one plain `<img src>`, resolving a winner **before** deleting any carrier. The winner is the **widest declared rendition** — a `srcset` `w`/`x` descriptor, or a CDN sizing parameter (`wid=`, `width=`) — because the deliverable feeds a vision pass, so resolution is the point. With no widths declared anywhere it falls back to `src`, then `data-src`, then an arbitrary `srcset` candidate (the tie breaks on the URL string, not document order).
@@ -47,7 +49,7 @@ Every staged deliverable gets a sibling `incoming/<slug>/manifest.json` (`manife
 ```json
 {
   "schema_version": 6,
-  "pagespring_version": "0.10.0",
+  "pagespring_version": "0.11.0",
   "source_url": "https://docs.tableplus.com/",
   "pattern": "docs_probe",
   "slug": "tableplus",
@@ -73,9 +75,11 @@ Schema v2 added `title` (acquire's source title, feeding `renormalize` replays);
 
 **v5 dropped `convert_recipe`** — the sole non-additive change. Every remaining field states what the source *is*; none instructs the converter. Do not add a field that does: pagespring cannot see pagespeak's flags, so a hint staged here goes stale silently the moment pagespeak's evidence or CLI moves, and nothing fails loudly when it does. pagespeak derives conversion settings from `kind`, `pattern`, and the deliverable itself.
 
+`source_url` is the identity every later run compares against — `refresh` replays it and the slug-takeover guard canonicalizes it — so a **local** source records its resolved absolute path rather than the argument as typed, which names a different file from every other working directory.
+
 `sha256` is the hash of the deliverable **as `normalize()` produced it** (before `--download-images` re-points any refs) — so on the default path it matches the on-disk file, and it stays stable as the content's identity regardless of image-localization. `localized_sha256` is the companion: the hash of the file **as it stands after** an image pass re-pointed its refs, refreshed by every pass and reset to `null` by `renormalize`. `audit` checks whichever of the two describes the bytes on disk, so a localized deliverable — the most-processed kind — still has an integrity record rather than none.
 
-That hash is what `ingest --if-changed` compares against: a re-crawl that normalizes to the same bytes leaves the existing `incoming/<slug>/` untouched (file, images, mtime) and reports `unchanged`. The crawl itself still runs — the slug is only known after `acquire`, so `--if-changed` saves the re-stage and churn, not the network round-trip. `status` reads these manifests; legacy dirs without one fall back to the deliverable file's own facts.
+That hash is what `ingest --if-changed` compares against: a re-crawl that normalizes to the same bytes leaves the existing `incoming/<slug>/` untouched (file, images, mtime) and reports `unchanged` — but only while the recorded `deliverable` is still on disk, since a sha describes a file that has to be there to be kept. The crawl itself still runs — the slug is only known after `acquire`, so `--if-changed` saves the re-stage and churn, not the network round-trip. `status` reads these manifests; legacy dirs without one fall back to the deliverable file's own facts.
 
 ## The Pattern contract
 
@@ -92,7 +96,7 @@ The `acquire`/`normalize` split is the key design rule: `acquire` holds all netw
 
 First match wins, so registration order in `registry.py` is load-bearing. Four tiers, cheapest/most-specific first:
 
-1. **Host-specific** patterns (e.g. `apple_help`, `readthedocs`, `github_markdown`) — they recognise a known host. RTD projects without PDF builds fall back to a Sphinx crawl instead of failing.
+1. **Host-specific** patterns (e.g. `apple_help`, `readthedocs`, `github_markdown`) — they recognise a known host. RTD projects without PDF builds fall back to a Sphinx crawl instead of failing. A host-specific `match` may still **decline** a URL on its own host so a later tier can claim it: `github_markdown` takes a `/blob/` URL naming a `.md` file (scoping the crawl to that file's directory on that branch) and declines every other blob, since a spec, PDF or archive committed to a repo belongs to the pattern for its type.
 2. **Extension / content** patterns — `api_spec` (a `.json`/`.yaml`/`.yml` extension, or an `openapi`/`swagger`/`postman` token in the last path segment), then `pdf_url`, `archive_download` — so a spec or a `.pdf` routes here rather than falling through to a broader pattern below.
 3. **`gitbook`**, narrowed to its own hosting (`*.gitbook.io`) — custom-domain GitBook sites carry no URL tell, so they fall through to `docs_probe` instead.
 4. **`docs_probe` last** — a content-probing catch-all that claims any http(s) URL nothing above it matched. Its `match` is nearly free (scheme check only); all the real classification work happens in `acquire`, which probes the base page in order — `%PDF-` magic bytes first (a vendor may serve the manual itself as a PDF from an extensionless path, which `pdf_url.match` cannot see), then the **tell-based** detectors, then `<meta name="generator">`, then fallback tells: `_static/` assets (Sphinx), a `search/search_index.json` (MkDocs — the index is then also the acquisition source: pages are rebuilt from its records, not crawled, which costs fidelity: the index stores flattened plain text, so code blocks lose their fencing), an `llms.txt` with per-page `.md` links (GitBook-style sites on custom domains, delegated back to the gitbook machinery so its image-proxy resolution still applies). A site none of these recognise raises `InvalidInputError` naming what was probed (CLI exit 2).

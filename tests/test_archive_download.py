@@ -3,6 +3,9 @@
 import io
 import zipfile
 
+import pytest
+from pf_core.exceptions import InvalidInputError
+
 from pagespring import http
 from pagespring.patterns.archive_download import ArchiveDownloadPattern
 
@@ -240,3 +243,178 @@ def test_uppercase_html_members_are_sniffed_as_html(tmp_path, monkeypatch):
     text = out.read_text(encoding="utf-8")
     assert "First chapter." in text and "Second chapter." in text
     assert "Unpack and open" not in text, "packaging README leaked into an HTML deliverable"
+
+
+def _text_zip_with_stray_html() -> bytes:
+    """A Python-docs-style text archive carrying one stray .html — the shape a
+    packaged search page or redirect stub produces."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for i in range(1, 4):
+            z.writestr(f"docs/chapter{i}.txt", f"Chapter {i} body.")
+        z.writestr("docs/search.html", "<html><body>search form</body></html>")
+    return buf.getvalue()
+
+
+def test_one_stray_html_does_not_flip_a_text_archive_to_html(tmp_path, monkeypatch):
+    """One .html member must not reclassify a text archive: the html filter then drops
+    every .txt and stages the stub as the whole deliverable — the .xhtml case above,
+    through the plain .html branch."""
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda url, **kw: (url, _text_zip_with_stray_html(), {"etag": None, "last_modified": None}),
+    )
+    p = ArchiveDownloadPattern()
+    acq = p.acquire("https://x.com/python-3.14-docs-text.zip", tmp_path)
+
+    assert acq.kind == "markdown", "three .txt docs outweigh one stray .html"
+    assert acq.pages == 3, f"every text doc must count as a page, got {acq.pages}"
+
+    text = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+    for i in range(1, 4):
+        assert f"Chapter {i} body." in text, f"chapter {i} dropped from the deliverable"
+    assert "search form" not in text, "stray .html leaked into a text deliverable"
+
+
+def _html_zip_with_packaging_readme() -> bytes:
+    """A single-page HTML manual shipped beside its packaging README — one member
+    of each family, the count the sniff has to break."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(
+            "manual.html", "<html><body><h1>Manual</h1><p>The real manual body.</p></body></html>"
+        )
+        z.writestr("README.md", "# Building this archive\n\nUnpack and open manual.html.\n")
+    return buf.getvalue()
+
+
+def test_an_equal_member_count_stages_the_html_manual_not_the_readme(tmp_path, monkeypatch):
+    """A tie is an HTML archive: the text family here is the packaging README, and
+    resolving to markdown filters the manual out and stages the README as the whole
+    deliverable — with a valid manifest and a clean audit, so nothing else catches it."""
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda url, **kw: (
+            url,
+            _html_zip_with_packaging_readme(),
+            {"etag": None, "last_modified": None},
+        ),
+    )
+    p = ArchiveDownloadPattern()
+    acq = p.acquire("https://x.com/manual.zip", tmp_path)
+
+    assert acq.kind == "html", "one .html against one .md is an HTML archive"
+    assert acq.pages == 1
+
+    text = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+    assert "The real manual body." in text, "the manual was dropped from its own deliverable"
+    assert "Unpack and open" not in text, "packaging README staged as the manual"
+
+
+def _text_zip_with_one_stub() -> bytes:
+    """A one-chapter text manual beside a search stub — the mirror of the packaging
+    README case, with the junk in the other family."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("docs/chapter1.txt", "Chapter 1 body.")
+        z.writestr("docs/search.html", "<html><body>search form</body></html>")
+    return buf.getvalue()
+
+
+def test_a_lone_stub_does_not_outvote_a_lone_text_chapter(tmp_path, monkeypatch):
+    """The mirror of the case above: breaking the tie on raw counts alone swings this
+    one the wrong way, staging the stub and dropping the only chapter. Which family
+    holds the junk is the signal, not how many members each has."""
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda url, **kw: (url, _text_zip_with_one_stub(), {"etag": None, "last_modified": None}),
+    )
+    p = ArchiveDownloadPattern()
+    acq = p.acquire("https://x.com/docs.zip", tmp_path)
+
+    assert acq.kind == "markdown", "one chapter against one stub is still a text archive"
+
+    text = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+    assert "Chapter 1 body." in text, "the only chapter was dropped from its own deliverable"
+    assert "search form" not in text, "the search stub was staged as the manual"
+
+
+def test_a_local_archive_is_read_from_disk(tmp_path):
+    """`classify ./manual.zip` answers archive_download, so ingest has to honour it.
+    Handing the bare path to the fetcher fails on scheme — an error naming neither
+    the file nor anything the caller can act on."""
+    archive = tmp_path / "widget-manual.zip"
+    archive.write_bytes(_html_zip_with_packaging_readme())
+    work = tmp_path / "work"
+
+    p = ArchiveDownloadPattern()
+    acq = p.acquire(str(archive), work)
+
+    assert acq.slug == "widget-manual"
+    assert acq.kind == "html"
+    text = p.normalize(acq, work).read_text(encoding="utf-8")
+    assert "The real manual body." in text
+
+
+def test_a_file_url_archive_is_read_from_disk(tmp_path):
+    """The `file://` spelling of the same source, which `_staging` already treats as
+    one manual with the bare path."""
+    archive = tmp_path / "widget-manual.zip"
+    archive.write_bytes(_html_zip_with_packaging_readme())
+    work = tmp_path / "work"
+
+    acq = ArchiveDownloadPattern().acquire(archive.as_uri(), work)
+
+    assert acq.slug == "widget-manual"
+    assert acq.kind == "html"
+
+
+def test_a_missing_local_archive_names_the_file(tmp_path):
+    """A typo'd path must say what it could not find, not surface a scheme error."""
+    with pytest.raises(InvalidInputError, match="no-such-manual"):
+        ArchiveDownloadPattern().acquire(str(tmp_path / "no-such-manual.zip"), tmp_path / "w")
+
+
+def _epub_with_same_named_chapters() -> bytes:
+    """An EPUB whose spine lists two chapters that share a basename in different
+    folders — the shape a per-part directory layout produces."""
+    opf = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="c1" href="part1/chapter.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c2" href="part2/chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
+</package>"""
+    page = "<html><body><h1>{h}</h1><p>{b}</p></body></html>"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("OEBPS/content.opf", opf)
+        z.writestr("OEBPS/part1/chapter.xhtml", page.format(h="One", b="PART ONE BODY"))
+        z.writestr("OEBPS/part2/chapter.xhtml", page.format(h="Two", b="PART TWO BODY"))
+    return buf.getvalue()
+
+
+def test_spine_members_sharing_a_basename_are_not_confused(tmp_path, monkeypatch):
+    """Two chapters can share a basename in different folders. Matching the spine on
+    basename alone collapses them onto one Path: one is emitted twice and the other
+    pushed out of reading order to the end."""
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda url, **kw: (
+            url,
+            _epub_with_same_named_chapters(),
+            {"etag": None, "last_modified": None},
+        ),
+    )
+    p = ArchiveDownloadPattern()
+    acq = p.acquire("https://x.com/book.epub", tmp_path)
+    out = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert out.count("PART ONE BODY") == 1, "part one duplicated"
+    assert out.count("PART TWO BODY") == 1, "part two dropped or duplicated"
+    assert out.index("PART ONE BODY") < out.index("PART TWO BODY"), "spine order lost"

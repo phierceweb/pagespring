@@ -10,11 +10,11 @@ Pure stdlib; no network, no pattern machinery.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
-from typing import NotRequired, TypedDict
+from typing import NotRequired, TypedDict, cast
 
+from pf_core.pipeline.run_record import file_sha256
 from pf_core.utils.io import atomic_write_text
 
 from pagespring import __version__
@@ -56,7 +56,7 @@ class Manifest(TypedDict):
 
 def sha256_file(path: Path) -> str:
     """Hex SHA-256 of ``path``'s bytes (the deliverable's content identity)."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return file_sha256(path)
 
 
 def build_manifest(
@@ -131,16 +131,18 @@ def find_by_sha(incoming_root: Path, sha256: str, *, exclude_slug: str) -> str |
 
 
 def read_manifest(slug_dir: Path) -> Manifest | None:
-    """Read ``slug_dir/manifest.json``; ``None`` if absent or unparseable.
+    """Read ``slug_dir/manifest.json``; ``None`` if absent or unreadable.
 
     Tolerant by design: a legacy slug dir (pre-manifest) or a corrupt file must
     not crash ``status`` or ``--if-changed`` — they treat ``None`` as "no record".
+    Unreadable covers undecodable bytes, unparseable JSON, and a parseable
+    non-object, which callers would index by key and raise ``TypeError`` on.
     """
     path = slug_dir / MANIFEST_NAME
     if not path.exists():
         return None
     try:
-        data: Manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
         return None
-    return data
+    return cast("Manifest", data) if isinstance(data, dict) else None

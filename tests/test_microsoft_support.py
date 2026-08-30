@@ -2,7 +2,11 @@
 
 import urllib.error
 
+import pytest
+from pf_core.exceptions import InvalidInputError
+
 from pagespring import http
+from pagespring.base import AcquireResult
 from pagespring.patterns.microsoft_support import MicrosoftSupportPattern
 
 _GUID = "11111111-1111-1111-1111-111111111111"
@@ -356,3 +360,74 @@ def test_acquire_extracts_articles(tmp_path, monkeypatch):
     assert "support.content.office.net/img/pivot.png" in html  # image ref kept absolute
     assert "site chrome" not in html and "more chrome" not in html  # page chrome excluded
     assert "Was this helpful" not in html  # feedback chrome stripped
+
+
+def test_a_zero_article_crawl_refuses_to_normalize(tmp_path):
+    """A hub whose shape changed — or a crawl the site quota-blocked outright — acquires
+    nothing, and a titled HTML shell wrapping zero articles is non-empty, so staging
+    would accept it over the previous good deliverable."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    acq = AcquireResult(raw_dir=raw, kind="html", slug="windows-help", pages=0)
+
+    with pytest.raises(InvalidInputError, match="no article"):
+        MicrosoftSupportPattern().normalize(acq, tmp_path)
+
+
+def test_a_soft_404_sitemap_page_ends_pagination(tmp_path, monkeypatch):
+    """An origin that answers 200 with a landing page for an out-of-range sitemap never
+    reaches the 404 that ends the walk — one request per iteration, against a site
+    that quota-blocks bursts."""
+    from pagespring.patterns import microsoft_support as mod
+
+    calls = []
+
+    def fake_fetch(url, **kw):
+        calls.append(url)
+        if url.endswith("_1.xml"):
+            return (
+                url,
+                "<urlset><url><loc>https://support.microsoft.com/en-us/office/a</loc></url></urlset>",
+            )
+        return url, "<html><body>Page not found</body></html>"  # soft 404, HTTP 200
+
+    monkeypatch.setattr(mod.http, "fetch_text", fake_fetch)
+
+    links, truncated = mod._sitemap_articles("excel", "en-us")
+
+    assert links == ["https://support.microsoft.com/en-us/office/a"]
+    assert truncated is False, "a clean end of pagination is not truncation"
+    assert len(calls) == 2, f"walked past the empty page: {len(calls)} requests"
+
+
+def test_the_sitemap_page_cap_stops_the_walk_and_reports_truncated(tmp_path, monkeypatch):
+    """A product whose sitemap never 404s — more pages than the cap, or an origin
+    that answers every _n.xml — must stop at the cap and say so: the articles on
+    the pages never requested cannot be counted one by one."""
+    from pagespring.patterns import microsoft_support as mod
+
+    requested: list[str] = []
+
+    def fake_fetch(url, **kwargs):
+        if "_sitemaps/" in url:
+            requested.append(url)
+            n = url.rsplit("_", 1)[-1].removesuffix(".xml")
+            return url, (
+                '<?xml version="1.0" encoding="UTF-8"?><urlset><url><loc>'
+                f"https://support.microsoft.com/en-us/excel/enter-and-format-data-{n}"
+                "</loc></url></urlset>"
+            )
+        return url, _ART2
+
+    monkeypatch.setattr(http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "_MAX_SITEMAP_PAGES", 3)
+    spy = _LogSpy()
+    monkeypatch.setattr(mod, "log", spy)
+
+    acq = MicrosoftSupportPattern().acquire("https://support.microsoft.com/en-us/excel", tmp_path)
+
+    assert len(requested) == 3, f"the walk must stop at the cap, requested {len(requested)}"
+    assert acq.truncated is True, "a capped walk left articles undiscovered"
+    assert acq.pages == 3
+    assert any(event == "microsoft_support.sitemap_capped" for event, _ in spy.warnings)

@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from pf_core.log import get_logger
 from pf_core.utils.slugify import slugify
+from pf_core.utils.url_parse import domain_of
 
 from pagespring import http
 from pagespring.base import AcquireResult
@@ -46,7 +47,9 @@ _ATTACHMENT_SEG = "/article_attachments/"
 def _api_base_and_locale(url: str) -> tuple[str, str]:
     p = urlparse(url)
     origin = f"{p.scheme}://{p.netloc}"
-    m = re.search(r"/hc/([a-z]{2}-[a-z]{2})", p.path)
+    # Zendesk publishes bare two-letter locales (/hc/de) as well as xx-xx, and
+    # numeric regional ones (es-419); missing one silently serves en-us instead.
+    m = re.search(r"/hc/([a-z]{2}(?:-[a-z0-9]{2,4})?)(?:/|$)", p.path)
     return origin, (m.group(1) if m else "en-us")
 
 
@@ -74,7 +77,7 @@ def _slug(url: str) -> str:
     Both halves are load-bearing: a host-only slug collides across articles, an
     article-only slug collides across vendors."""
     article = _ARTICLE_RE.search(urlparse(url).path)
-    host = urlparse(url).netloc.lower().removeprefix("www.").removeprefix("support.")
+    host = domain_of(url).removeprefix("support.")
     host_slug = slugify(host.split(".")[0]) or "help"
     if article:
         return slugify(f"{host_slug}-{article.group(2) or article.group(1)}")

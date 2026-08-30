@@ -150,3 +150,12 @@ def test_unreadable_pdf_records_no_page_count(tmp_path, monkeypatch):
     )
     acq = PdfUrlPattern().acquire("https://vendor.example/manual.pdf", tmp_path)
     assert acq.pages is None
+
+
+def test_slug_from_a_download_path_uses_the_host():
+    """RTD-style /_/downloads/en/<ver>/pdf/ has basename 'pdf' — the host names it."""
+    from pagespring.patterns.pdf_url import _slug_from_url
+
+    assert _slug_from_url("https://www.widgetpro.readthedocs.io/_/downloads/en/latest/pdf/") == (
+        "widgetpro"
+    )

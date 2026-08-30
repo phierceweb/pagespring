@@ -4,6 +4,80 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.11.0] — 2026-08-29
+
+### Changed
+
+- **Slugs fold to at most 100 characters**, trailing dash trimmed — derived
+  slugs and `--slug` alike. A source whose title exceeds the cap ingests instead
+  of dying on the filesystem's name limit; it stages under the truncated name.
+- **`--if-changed` answers `unchanged` only while the deliverable it describes is
+  on disk.** A slug that lost its file re-stages.
+- **A local-path ingest records the resolved absolute path as `source_url`.**
+  `refresh` replays that value and the slug-takeover guard compares it, neither
+  of which a bare relative path survives. Manifests from earlier versions keep
+  their literal argument; the next refresh rewrites it.
+- **`archive_download` picks the deliverable's kind by which member family
+  carries the archive.** A markdown collection shipping one `search.html` stays
+  markdown, and packaging files (`README`, `LICENSE`, …) don't count toward the
+  text family. `pages` counts the family that won.
+- **`microsoft_support` refuses a crawl that captured no article** (exit `2`).
+  Nothing is staged, so the previous deliverable survives.
+- **`github_markdown` accepts `/blob/` URLs**: a blob naming a `.md` file scopes
+  the crawl to that file's directory on that branch. A blob naming anything else
+  is declined, so a spec, PDF or archive committed to a repo routes to its own
+  pattern.
+- **A `github_markdown` ingest scoped to a subdirectory slugs as
+  `<owner>-<repo>-<subdir>`**, path separators folded to `-`. A last segment alone
+  collides: `docs` for every repo that keeps its manual there, `guide` for both
+  locales of `docs/<lang>/guide`. An unscoped repo ingest still slugs as
+  `<owner>-<repo>`.
+- **`audit` reads a deliverable as localized only when it carries a local image
+  ref**, not from `images/` existing — a re-ingest keeps that directory while
+  staging a fresh un-localized file, whose `sha256` still describes what is on
+  disk.
+- **pf-core pin raised to `~=0.22.0`.**
+
+### Fixed
+
+- **A local archive ingests from disk.** `archive_download` claims any path
+  carrying an archive suffix, a bare path or `file://` URL included, but read it
+  through the fetcher — which refused on scheme. A path naming no file now says
+  which file it could not find.
+- **A directory entry URL no longer scopes one level too high** in ClickHelp,
+  Paligo and Hugo: the last path segment is dropped only when it names a file, so
+  a seed like `…/docs/manual` keeps its scope instead of 404ing every fetch.
+- **A GitBook site reached through `llms.txt` keeps the slug and title
+  `docs_probe` derived**, so a custom domain no longer folds to its generic host
+  label and collides with every other `help.`/`docs.` site.
+- **`github_markdown` percent-encodes the raw fetch URL**, so a file whose name
+  carries a space or a non-ASCII character is fetched rather than dropped.
+- **A README below the repo root is staged as content** — it is that directory's
+  index page. The other meta names (`LICENSE`/`CONTRIBUTING`/`CHANGELOG`/
+  `documentation.md`) are excluded at **any** depth, so a vendored license, a
+  per-package changelog or a nested nav file stays out of the deliverable.
+- **A Sphinx crawl stages one copy of a page reachable under two URLs** — a
+  directory URL and its `index.html`, or a redirect alias.
+- **`apple_help` counts a topic dropped during the merge as `lost`**, so `pages`
+  no longer describes topics the deliverable does not carry.
+- **The Microsoft Support sitemap walk ends on a `<loc>`-less 200** — a soft-404,
+  CDN error page or WAF interstitial — and stops at a page cap, reporting
+  `truncated` when it hits one.
+- **Zendesk bare (`/hc/de`) and regional (`/hc/es-419`) locales are recognized**
+  instead of silently serving `en-us`.
+- **EPUB spine hrefs resolve against the OPF's own directory**, and two chapters
+  sharing a basename in different folders both reach the deliverable.
+- **An OpenAPI spec whose `paths:` is empty or a list renders** instead of
+  raising: an explicit `paths:` with nothing under it parses as `None`, not as a
+  missing key.
+- **MkDocs lead-in dedup uses the first section that carries text**, so a heading
+  followed straight by a sub-heading no longer leaves the intro duplicated.
+- **`read_manifest` returns `None` for a parseable non-object and for undecodable
+  bytes**, so a corrupt manifest meets the same guards as a missing one instead
+  of raising past them.
+- **Image case-normalization and unchanged-image reuse write the deliverable
+  atomically**, so a kill mid-write cannot truncate it.
+
 ## [0.10.0] — 2026-08-26
 
 ### Added

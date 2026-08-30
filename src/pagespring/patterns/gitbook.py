@@ -47,7 +47,9 @@ class GitBookPattern:
         # docs_probe's llms.txt sniff and delegated back to this pattern's acquire.
         return urlparse(url).netloc.lower().endswith(".gitbook.io")
 
-    def acquire(self, url: str, workdir: Path) -> AcquireResult:
+    def acquire(
+        self, url: str, workdir: Path, *, slug: str | None = None, title: str | None = None
+    ) -> AcquireResult:
         base = url.rstrip("/")
         p = urlparse(base)
         origin = f"{p.scheme}://{p.netloc}"
@@ -83,9 +85,13 @@ class GitBookPattern:
             saved += 1
             http.polite_sleep()
 
-        slug = _slug(url)
+        # docs_probe already identified the site and derived these; _slug only knows
+        # *.gitbook.io, so a custom domain folds to its generic host label.
+        slug = slug or _slug(url)
         log.info("gitbook.acquire", base=base, pages=saved, slug=slug, lost=lost)
-        return AcquireResult(raw_dir=raw_dir, kind="markdown", slug=slug, pages=saved, lost=lost)
+        return AcquireResult(
+            raw_dir=raw_dir, kind="markdown", slug=slug, pages=saved, lost=lost, title=title
+        )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         parts = [p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*.md"))]

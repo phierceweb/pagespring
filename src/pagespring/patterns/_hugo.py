@@ -23,7 +23,12 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
+from pagespring.patterns._site import (
+    absolutize_refs,
+    flatten_responsive_images,
+    names_a_file,
+    strip_scripts,
+)
 
 log = get_logger(__name__)
 
@@ -57,7 +62,7 @@ def _base_dir(url: str) -> str:
     """``url`` with any trailing file component dropped, no trailing slash."""
     p = urlparse(url)
     segs = [s for s in p.path.split("/") if s]
-    if segs and "." in segs[-1]:
+    if segs and names_a_file(segs[-1]):
         segs.pop()
     return f"{p.scheme}://{p.netloc}" + ("/" + "/".join(segs) if segs else "")
 

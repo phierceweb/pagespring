@@ -2,7 +2,10 @@
 
 import json
 
+import pytest
+
 from pagespring import http
+from pagespring.patterns import zendesk_help
 from pagespring.patterns.zendesk_help import ZendeskHelpPattern, _slug
 
 _PAGE1 = json.dumps(
@@ -254,3 +257,33 @@ def test_article_slug_keeps_the_vendor_host():
 
     assert one != two
     assert "getting-started" in one
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/hc/de/sections/12345-Handbuch", "de"),
+        ("/hc/fr", "fr"),
+        ("/hc/ja/articles/9-x", "ja"),
+        ("/hc/es-419/sections/1", "es-419"),
+        ("/hc/en-us/articles/1", "en-us"),
+        ("/hc/articles/1", "en-us"),
+    ],
+)
+def test_bare_two_letter_and_regional_locales_are_honoured(path, expected):
+    """Zendesk publishes /hc/de and /hc/es-419 as well as xx-xx; matching only xx-xx falls
+    back to en-us and silently acquires the wrong language."""
+    _origin, locale = zendesk_help._api_base_and_locale(f"https://support.v.com{path}")
+    assert locale == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://support.vendor.com/hc/en-us", "vendor"),
+        ("https://www.vendor.com/hc/en-us", "vendor"),
+        ("https://vendor.com/hc/en-us/articles/123-Thing", "vendor-thing"),
+    ],
+)
+def test_slug_is_stable_across_host_spellings(url, expected):
+    assert _slug(url) == expected

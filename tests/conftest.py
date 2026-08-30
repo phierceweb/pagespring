@@ -10,9 +10,10 @@ import os
 import shutil
 from pathlib import Path
 
+import pf_core.fetch.images as core_images
 import pytest
 
-from pagespring import orchestrate
+from pagespring import images, manifest, orchestrate
 from pagespring.config import cfg
 
 # Read before `_sandbox_incoming_dir` rewrites it: a corpus configured elsewhere
@@ -77,6 +78,15 @@ def _refuse_to_touch_the_corpus():
         mp.setattr(Path, "unlink", _guarded(Path.unlink, "delete", 0))
         mp.setattr(Path, "write_text", _guarded(Path.write_text, "overwrite", 0))
         mp.setattr(Path, "write_bytes", _guarded(Path.write_bytes, "overwrite", 0))
+        # Atomic writes land through `os.replace`, reaching none of the guards above,
+        # and each module imported the name directly — so patch per binding site.
+        for module, attr in (
+            (manifest, "atomic_write_text"),
+            (images, "atomic_write_text"),
+            (core_images, "atomic_write_text"),
+            (core_images, "atomic_write_bytes"),
+        ):
+            mp.setattr(module, attr, _guarded(getattr(module, attr), "overwrite", 0, "path"))
         yield
 
 

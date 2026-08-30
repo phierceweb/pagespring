@@ -13,7 +13,6 @@ User-Agent and the polite delay.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from html import unescape
@@ -23,6 +22,8 @@ from urllib.parse import urlparse
 
 from pf_core.fetch import images as _core
 from pf_core.log import get_logger
+from pf_core.pipeline.run_record import file_sha256
+from pf_core.utils.hashing import content_hash
 from pf_core.utils.io import atomic_write_text
 
 from pagespring import http
@@ -78,7 +79,7 @@ class _PacedFetcher:
         final_url, data, meta = http.fetch_bytes_meta(url)
         self.fetched.append(
             (
-                hashlib.sha256(data).hexdigest(),
+                content_hash(data),
                 {
                     "source_url": url,
                     "etag": meta["etag"],
@@ -158,7 +159,7 @@ def normalize_case(doc_path: Path, slug_dir: Path) -> int:
         if rec is not None:
             rec["local"] = target.name
             records[target.name] = rec
-    doc_path.write_text(text, encoding="utf-8")
+    atomic_write_text(doc_path, text, encoding="utf-8")
     write_sidecar(slug_dir, sorted(records.values(), key=lambda r: r["source_url"]))
     log.info("images.case_normalized", slug=slug_dir.name, renamed=len(stale))
     return len(stale)
@@ -202,7 +203,7 @@ def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
             (images_dir / rec["local"]).unlink(missing_ok=True)
             superseded.append(decoded)
     if reused:
-        doc_path.write_text(text, encoding="utf-8")
+        atomic_write_text(doc_path, text, encoding="utf-8")
     if superseded:
         for url in superseded:
             records.pop(url, None)
@@ -317,7 +318,7 @@ def _record_provenance(
     for path in sorted(images_dir.glob("*")):
         if not path.is_file() or path.name in preexisting:
             continue
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest = file_sha256(path)
         candidates = [i for i, (h, _f) in enumerate(unclaimed) if h == digest]
         if not candidates:
             continue  # from an earlier run, not one of this run's downloads

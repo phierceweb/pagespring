@@ -140,8 +140,12 @@ def extract_body(page_html: str, target_level: int) -> str | None:
     return root.decode_contents()
 
 
-def build_merged_html(in_dir: Path, slug: str) -> str:
-    """Merge in_dir's saved Apple Support pages into one clean HTML document."""
+def build_merged_html(in_dir: Path, slug: str) -> tuple[str, list[str]]:
+    """Merge in_dir's saved Apple Support pages into one clean HTML document.
+
+    Returns the document and the slugs whose body could not be extracted; the
+    crawl counted those pages, so ``pages`` overstates the merge without them.
+    """
     welcome = in_dir / "welcome.html"
     title = app_title(slug, welcome)
     files_by_slug = {p.stem: p for p in in_dir.glob("*.html") if p.name != "welcome.html"}
@@ -151,6 +155,7 @@ def build_merged_html(in_dir: Path, slug: str) -> str:
     leftovers = sorted(s for s in files_by_slug if s not in toc_slugs)
 
     parts = [f"<h1>{_html.escape(title)}</h1>"]
+    dropped: list[str] = []
     for kind, value, level in items:
         if kind == "group":
             parts.append(f"<h{level}>{_html.escape(value)}</h{level}>")
@@ -158,18 +163,23 @@ def build_merged_html(in_dir: Path, slug: str) -> str:
         inner = extract_body(
             files_by_slug[value].read_text(encoding="utf-8", errors="ignore"), level
         )
-        if inner is not None:
+        if inner is None:
+            dropped.append(value)
+        else:
             parts.append(f'<section data-slug="{value}">\n{inner}\n</section>')
     for leftover in leftovers:
         inner = extract_body(
             files_by_slug[leftover].read_text(encoding="utf-8", errors="ignore"), 2
         )
-        if inner is not None:
+        if inner is None:
+            dropped.append(leftover)
+        else:
             parts.append(f'<section data-slug="{leftover}">\n{inner}\n</section>')
 
-    return (
+    doc = (
         '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
         f"<title>{_html.escape(title)}</title></head>\n<body>\n"
         + "\n".join(parts)
         + "\n</body></html>\n"
     )
+    return doc, dropped

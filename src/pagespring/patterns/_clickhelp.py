@@ -26,7 +26,12 @@ from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
+from pagespring.patterns._site import (
+    absolutize_refs,
+    flatten_responsive_images,
+    names_a_file,
+    strip_scripts,
+)
 
 log = get_logger(__name__)
 
@@ -51,9 +56,18 @@ def is_clickhelp(html: str) -> bool:
 
 
 def manual_root(url: str) -> str:
-    """The publication root: topics live at ``<root>/HTML/<id>.html``."""
-    base = url.rsplit("/", 1)[0]  # drop <id>.html
-    return base[: -len("/HTML")] if base.endswith("/HTML") else base
+    """The publication root: topics live at ``<root>/HTML/<id>.html``.
+
+    Accepts the entry file or its bare directory: a trailing segment is dropped
+    only when it names a file, or the root resolves one level too high.
+    """
+    p = urlparse(url)
+    path = p.path.rstrip("/")
+    head, _, last = path.rpartition("/")
+    base = head if names_a_file(last) else path
+    if base.endswith("/HTML"):
+        base = base[: -len("/HTML")]
+    return f"{p.scheme}://{p.netloc}{base}"
 
 
 def slug_from_path(url: str) -> str:

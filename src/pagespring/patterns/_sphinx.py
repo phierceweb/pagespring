@@ -18,6 +18,7 @@ from urllib.parse import urldefrag, urljoin, urlparse
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pf_core.log import get_logger
+from pf_core.utils.hashing import content_hash
 
 from pagespring import http
 from pagespring.base import AcquireResult
@@ -106,6 +107,7 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     raw_dir.mkdir(parents=True, exist_ok=True)
     seen: set[str] = {base}
     queue: deque[str] = deque([base])
+    staged_hashes: set[str] = set()
     saved = 0
     lost = 0
     watchdog = ProgressWatchdog(stall_after_s=cfg.CRAWL_STALL_AFTER_S, now=time.monotonic)
@@ -125,13 +127,20 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
             continue
         fragment = _extract(body, final)
         if fragment is not None:
-            stem = urlparse(url).path[len(prefix) :].strip("/").replace("/", "-") or "index"
-            (raw_dir / f"{saved:04d}-{stem}.html").write_text(
-                f"<!-- source: {url} -->\n<section>\n{fragment}\n</section>\n",
-                encoding="utf-8",
-            )
-            saved += 1
-            watchdog.progress()
+            # A directory URL and its index.html are one page under two names, as
+            # are redirect aliases; identical content is the only reliable tell.
+            digest = content_hash(fragment)
+            if digest in staged_hashes:
+                log.info("sphinx.duplicate_page", url=url)
+            else:
+                staged_hashes.add(digest)
+                stem = urlparse(url).path[len(prefix) :].strip("/").replace("/", "-") or "index"
+                (raw_dir / f"{saved:04d}-{stem}.html").write_text(
+                    f"<!-- source: {url} -->\n<section>\n{fragment}\n</section>\n",
+                    encoding="utf-8",
+                )
+                saved += 1
+                watchdog.progress()
         else:
             lost += 1
             log.warning("sphinx.no_content_root", url=url)

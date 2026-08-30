@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from pf_core.log import get_logger
 from pf_core.utils.slugify import slugify
@@ -28,8 +28,8 @@ log = get_logger(__name__)
 _API = "https://api.github.com"
 _RAW = "https://raw.githubusercontent.com"
 _MAX_FILES = 2000  # safety cap so an unscoped huge repo can't fan out forever
-# Navigation/meta files: used for ordering, not emitted as content.
-_META = {"documentation.md", "readme.md", "license.md", "contributing.md", "changelog.md"}
+# Never content; documentation.md doubles as the TOC source.
+_META = {"documentation.md", "license.md", "contributing.md", "changelog.md"}
 _LINK_RE = re.compile(r"\]\(([^)]+)\)")
 
 
@@ -38,8 +38,11 @@ def _parse_repo(url: str) -> tuple[str, str, str | None, str]:
     parts = [p for p in urlparse(url).path.split("/") if p]
     owner, repo = parts[0], parts[1]
     branch, subdir = None, ""
-    if len(parts) >= 4 and parts[2] == "tree":
-        branch, subdir = parts[3], "/".join(parts[4:])
+    if len(parts) >= 4 and parts[2] in ("tree", "blob"):
+        branch, rest = parts[3], "/".join(parts[4:])
+        # A tree URL names the directory to crawl; a blob names one file, so its
+        # parent directory is the scope.
+        subdir = rest if parts[2] == "tree" else rest.rpartition("/")[0]
     return owner, repo, branch, subdir
 
 
@@ -57,7 +60,9 @@ def _list_md(owner: str, repo: str, branch: str, subdir: str) -> tuple[dict[str,
     for node in data.get("tree", []):
         path = node.get("path", "")
         if node.get("type") == "blob" and path.lower().endswith(".md") and path.startswith(prefix):
-            out[path] = f"{_RAW}/{owner}/{repo}/{branch}/{path}"
+            # The key stays the real path; only the fetch URL is encoded, or a
+            # space or non-ASCII name raises InvalidURL and the file is dropped.
+            out[path] = f"{_RAW}/{owner}/{repo}/{quote(branch)}/{quote(path)}"
     # GitHub's own signal: the tree listing itself was cut short, so files are
     # missing before any cap of ours applies.
     tree_truncated = bool(data.get("truncated"))
@@ -70,9 +75,16 @@ def _basename(path: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
+def _is_meta(path: str) -> bool:
+    """Repo meta, not content. README only at the root — below it, a README is the
+    directory's own index page."""
+    name = _basename(path).lower()
+    return name in _META or (name == "readme.md" and "/" not in path)
+
+
 def _ordered_content(md: dict[str, str]) -> list[str]:
     """Content paths in TOC order (via a root documentation.md if present, e.g.
-    Laravel) else by path; meta files (README/LICENSE/…) excluded."""
+    Laravel) else by path; meta excluded."""
     ordered: list[str] = []
     if "documentation.md" in md:
         try:
@@ -82,9 +94,9 @@ def _ordered_content(md: dict[str, str]) -> list[str]:
         for target in _LINK_RE.findall(toc):
             seg = target.split("#")[0].split("?")[0].rstrip("/").rsplit("/", 1)[-1]
             name = re.sub(r"\.md$", "", seg) + ".md"
-            if name in md and name.lower() not in _META and name not in ordered:
+            if name in md and not _is_meta(name) and name not in ordered:
                 ordered.append(name)
-    rest = sorted(p for p in md if p not in ordered and _basename(p).lower() not in _META)
+    rest = sorted(p for p in md if p not in ordered and not _is_meta(p))
     return ordered + rest
 
 
@@ -95,7 +107,14 @@ class GitHubMarkdownPattern:
         p = urlparse(url)
         if p.netloc.lower() not in ("github.com", "www.github.com"):
             return False
-        return len([s for s in p.path.split("/") if s]) >= 2  # /<owner>/<repo>
+        parts = [s for s in p.path.split("/") if s]
+        if len(parts) < 2:  # /<owner>/<repo>
+            return False
+        # A blob naming a non-markdown file is a spec, PDF or archive that its
+        # own pattern handles; claiming it here would crawl the whole repo.
+        return not (
+            len(parts) >= 5 and parts[2] == "blob" and not parts[-1].lower().endswith(".md")
+        )
 
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         owner, repo, branch, subdir = _parse_repo(url)
@@ -125,7 +144,10 @@ class GitHubMarkdownPattern:
             saved += 1
             http.polite_sleep()
 
-        slug_base = subdir.rstrip("/").split("/")[-1] if subdir else f"{owner}-{repo}"
+        # A last segment alone collides: "docs" for every repo that keeps its manual
+        # there, "guide" for both locales of docs/<lang>/guide.
+        scope = subdir.strip("/").replace("/", "-")
+        slug_base = f"{owner}-{repo}-{scope}" if scope else f"{owner}-{repo}"
         slug = slugify(slug_base) or "docs"
         log.info(
             "github_markdown.acquire",

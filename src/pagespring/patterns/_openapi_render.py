@@ -14,7 +14,10 @@ _METHODS = ("get", "post", "put", "patch", "delete", "head", "options", "trace")
 def count_operations(spec: dict[str, Any]) -> int:
     """Number of HTTP operations across all paths."""
     n = 0
-    for item in spec.get("paths", {}).values():
+    # An explicit `paths:` with nothing under it parses as None, not a missing
+    # key, so the `{}` default never applies; a YAML list is the same trap.
+    paths = spec.get("paths")
+    for item in (paths if isinstance(paths, dict) else {}).values():
         if isinstance(item, dict):
             n += sum(1 for m in _METHODS if isinstance(item.get(m), dict))
     return n
@@ -31,7 +34,8 @@ def render(spec: dict[str, Any], title: str) -> str:
     if base:
         out.append(f"**Base URL:** `{base}`")
 
-    for path, item in spec.get("paths", {}).items():
+    rendered = spec.get("paths")
+    for path, item in (rendered if isinstance(rendered, dict) else {}).items():
         if not isinstance(item, dict):
             continue
         common = item.get("parameters", []) if isinstance(item.get("parameters"), list) else []

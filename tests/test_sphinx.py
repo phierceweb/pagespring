@@ -182,3 +182,34 @@ def test_extract_drops_scripts_and_styles():
     assert "Real content." in frag
     assert "<script" not in frag and "<style" not in frag and "<noscript" not in frag
     assert "analytics.example" not in frag
+
+
+def test_a_page_reachable_twice_is_staged_once(tmp_path, monkeypatch):
+    """Sphinx themes link the start page as `index.html` from every breadcrumb, so a
+    directory-URL crawl meets its own entry page under a second name; staging both
+    duplicates the body and overstates `pages`."""
+    home = """<html><body><div role="main">
+      <h1>Welcome</h1><p>Index body.</p>
+      <a href="index.html">Home</a>
+      <a href="usage.html">Usage</a>
+    </div></body></html>"""
+    usage = """<html><body><div role="main">
+      <h1>Usage</h1><p>Usage body.</p>
+    </div></body></html>"""
+
+    def fake_fetch(url, **kwargs):
+        table = {
+            "https://docs.ex.org/en/stable/": home,
+            "https://docs.ex.org/en/stable/index.html": home,
+            "https://docs.ex.org/en/stable/usage.html": usage,
+        }
+        return url, table[url]
+
+    monkeypatch.setattr(http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    acq = _sphinx.acquire("https://docs.ex.org/en/stable/", tmp_path, slug="ex", title=None)
+
+    merged = "".join(p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*.html")))
+    assert merged.count("Index body.") == 1, "entry page staged twice under a second URL"
+    assert merged.count("Usage body.") == 1
+    assert acq.pages == 2, "pages counted the duplicate"

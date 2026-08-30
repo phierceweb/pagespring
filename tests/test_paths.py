@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from pf_core.exceptions import InvalidInputError
 
-from pagespring import audit, orchestrate, refresh
+from pagespring import audit, orchestrate, paths, refresh
 from pagespring import manifest as manifest_mod
 from pagespring.config import cfg
 from pagespring.paths import slug_dir
@@ -75,3 +75,19 @@ def test_every_slug_entry_point_folds_before_touching_disk(call, monkeypatch, tm
     root = tmp_path.resolve()
     for d in looked_at:
         assert d.resolve().parent == root, f"resolved outside the corpus: {d}"
+
+
+def test_an_over_long_slug_is_capped_to_a_creatable_name():
+    """The fold is fed by remote titles, and a 300-character one names a file past
+    NAME_MAX — the OSError escapes the CLI's handlers as a traceback."""
+    folded = paths.fold_slug("A Very Long Product Manual Title " * 12)
+
+    assert 0 < len(folded) <= paths._MAX_SLUG
+    assert not folded.endswith("-"), "a cut mid-word left a trailing separator"
+    # short slugs are untouched
+    assert paths.fold_slug("widget-pro") == "widget-pro"
+
+
+def test_slug_dir_uses_the_capped_fold():
+    d = slug_dir("A Very Long Product Manual Title " * 12)
+    assert len(d.name) <= paths._MAX_SLUG

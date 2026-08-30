@@ -4,6 +4,8 @@ import hashlib
 import urllib.error
 from email.message import Message
 
+import pytest
+
 from pagespring import http, images
 
 _PNG = b"\x89PNG\r\n\x1a\n" + b"pngbody"
@@ -661,3 +663,43 @@ def test_provenance_leaves_an_ambiguous_hash_match_unrecorded(tmp_path, monkeypa
     assert len(staged) == 2, f"both downloads must land: {staged}"
     recorded = {r["source_url"] for r in images.read_sidecar(tmp_path)}
     assert recorded == set(), f"an ambiguous match was attributed anyway: {recorded}"
+
+
+def test_a_killed_reuse_pass_leaves_the_deliverable_intact(tmp_path, monkeypatch):
+    """`reuse_unchanged` rewrites the deliverable in place, and a bare `write_text`
+    truncates the target first, so a kill mid-write leaves a partial manual —
+    `incoming/` is gitignored, so there is no copy to restore."""
+    import pf_core.utils.io as io_mod
+
+    imgs = tmp_path / "images"
+    imgs.mkdir()
+    (imgs / "a.png").write_bytes(_PNG)
+    images.write_sidecar(
+        tmp_path,
+        [
+            {
+                "local": "a.png",
+                "source_url": "https://x.com/a.png",
+                "etag": '"aaa"',
+                "last_modified": None,
+                "sha256": hashlib.sha256(_PNG).hexdigest(),
+                "bytes": len(_PNG),
+            }
+        ],
+    )
+    doc = tmp_path / "d.md"
+    original = "![a](https://x.com/a.png)\n"
+    doc.write_text(original, encoding="utf-8")
+
+    monkeypatch.setattr(http, "not_modified", lambda url, **kw: True)
+
+    def boom(src, dst):
+        raise OSError("killed mid-write")
+
+    monkeypatch.setattr(io_mod.os, "replace", boom)
+
+    with pytest.raises(OSError):
+        images.reuse_unchanged(doc, tmp_path)
+
+    assert doc.read_text(encoding="utf-8") == original, "the deliverable was destroyed"
+    assert not list(tmp_path.glob(".d.md.*")), "temp file left behind"

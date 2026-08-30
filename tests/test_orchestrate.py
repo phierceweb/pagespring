@@ -16,6 +16,7 @@ from pf_core.exceptions import ClientError, InvalidInputError, PreconditionError
 from pagespring import http, manifest, orchestrate
 from pagespring.base import AcquireResult
 from pagespring.patterns.docs_probe import DocsProbePattern
+from pagespring.patterns.microsoft_support import MicrosoftSupportPattern
 
 
 @pytest.fixture(autouse=True)
@@ -176,6 +177,39 @@ def test_zero_fragment_html_crawl_fails_and_preserves_previous(tmp_path, monkeyp
     assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "previous good"
 
 
+class _ZeroArticleMicrosoftPattern(_FakePattern):
+    """A support.microsoft.com crawl that captured no article — the hub retemplated,
+    or the site quota-blocked every fetch."""
+
+    def acquire(self, url, workdir):
+        raw = workdir / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        return AcquireResult(raw_dir=raw, kind="html", slug="fakeapp", pages=0)
+
+    def normalize(self, acq, workdir):
+        return MicrosoftSupportPattern().normalize(acq, workdir)
+
+
+def test_zero_article_microsoft_crawl_fails_and_preserves_previous(tmp_path, monkeypatch):
+    """The titled shell wrapping zero articles is non-empty, so EmptyOutputError never
+    fires and staging would accept it: normalize has to refuse first, before the
+    staging clear, or the previous good deliverable is gone."""
+    url = "https://support.microsoft.com/en-us/fakeapp"
+    monkeypatch.setattr(orchestrate, "classify", lambda u: _ZeroArticleMicrosoftPattern())
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    # A same-source manifest, so the takeover guard passes and the run reaches the
+    # staging clear: without it the refusal is untested — any raise preserves the dir.
+    _write_manifest(
+        slug_dir, source_url=url, pattern="microsoft_support", deliverable="fakeapp.html"
+    )
+    (slug_dir / "fakeapp.html").write_text("previous good", encoding="utf-8")
+
+    with pytest.raises(InvalidInputError, match="no article"):
+        orchestrate.run_ingest(url)
+
+    assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "previous good"
+
+
 def test_writes_manifest_beside_deliverable(tmp_path, monkeypatch):
     """Every ingest drops a manifest.json next to the clean file, carrying the
     provenance + a hash of the deliverable."""
@@ -292,6 +326,21 @@ def test_if_changed_skips_restage_when_identical(tmp_path, monkeypatch):
     assert res["changed"] is False
     assert res["clean"] == str(slug_dir / "fakeapp.html")
     assert (slug_dir / "sentinel.txt").read_text(encoding="utf-8") == "keep me"
+
+
+def test_if_changed_restages_when_the_deliverable_is_gone(tmp_path, monkeypatch):
+    """The manifest's sha describes a file that must still be there. The sha alone reports
+    "unchanged" forever for a slug whose deliverable was deleted, and refresh can
+    never heal it."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://x")
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    (slug_dir / "fakeapp.html").unlink()
+
+    res = orchestrate.run_ingest("https://x", if_changed=True)
+
+    assert res["changed"] is True, "a missing deliverable cannot be 'unchanged'"
+    assert (slug_dir / "fakeapp.html").exists(), "the deliverable was not restored"
 
 
 def test_if_changed_restages_when_content_differs(tmp_path, monkeypatch):
@@ -1427,3 +1476,29 @@ def test_reingest_refuses_a_held_url_with_an_invalid_port(tmp_path, monkeypatch)
 
     orchestrate.run_ingest("https://y", replace=True)
     assert manifest.read_manifest(slug_dir)["source_url"] == "https://y"
+
+
+def test_a_relative_local_source_is_recorded_absolutely(tmp_path, monkeypatch):
+    """refresh replays the recorded source_url from wherever it runs, and `_local_path`
+    resolves it against the CWD, so a relative spelling makes the slug's identity mean
+    a different file in every directory."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    vendor_a = tmp_path / "vendor-a"
+    vendor_a.mkdir()
+    (vendor_a / "openapi.json").write_text("{}", encoding="utf-8")
+    monkeypatch.chdir(vendor_a)
+
+    orchestrate.run_ingest("./openapi.json")
+
+    recorded = manifest.read_manifest(tmp_path / "incoming" / "fakeapp")["source_url"]
+    assert recorded == str(vendor_a / "openapi.json"), f"stored CWD-relative: {recorded!r}"
+
+    # A same-named spec in another directory is a DIFFERENT manual and must refuse.
+    vendor_b = tmp_path / "vendor-b"
+    vendor_b.mkdir()
+    (vendor_b / "openapi.json").write_text("{}", encoding="utf-8")
+    monkeypatch.chdir(vendor_b)
+
+    with pytest.raises(InvalidInputError) as exc:
+        orchestrate.run_ingest("./openapi.json")
+    assert "vendor-a" in str(exc.value), "the refusal must name what it protected"

@@ -262,3 +262,19 @@ def test_extract_drops_the_sidebar_nav_drawer():
     assert "Real documentation." in frag
     assert "drawer" not in frag
     assert "Introduction" not in frag and "Dither" not in frag
+
+
+def test_a_dotted_version_dir_is_not_treated_as_a_filename():
+    """A versioned manual root ends in a dotted directory; popping it as a filename
+    scopes the crawl at the product level and merges sibling versions into one
+    deliverable."""
+    assert _hugo._base_dir("https://help.ex.com/docs/ozone/11.0/") == (
+        "https://help.ex.com/docs/ozone/11.0"
+    )
+    assert _hugo._base_dir("https://help.ex.com/docs/ozone/v2.1") == (
+        "https://help.ex.com/docs/ozone/v2.1"
+    )
+    # a real filename is still stripped
+    assert _hugo._base_dir("https://help.ex.com/docs/ozone/index.html") == (
+        "https://help.ex.com/docs/ozone"
+    )

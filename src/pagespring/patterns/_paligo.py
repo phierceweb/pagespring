@@ -24,7 +24,12 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
+from pagespring.patterns._site import (
+    absolutize_refs,
+    flatten_responsive_images,
+    names_a_file,
+    strip_scripts,
+)
 
 log = get_logger(__name__)
 
@@ -50,7 +55,12 @@ def publication_base(url: str, html: str) -> str:
     A topic URL already sits in it. A portal URL does not — the locale dir is
     whatever the portal links into, which is not always ``en``.
     """
-    here = url.rsplit("/", 1)[0]
+    p = urlparse(url.split("?", 1)[0].split("#", 1)[0])
+    path = p.path.rstrip("/")
+    # A portal URL's last segment is a real directory, so only a filename is dropped.
+    if names_a_file(path.rsplit("/", 1)[-1]):
+        path = path.rsplit("/", 1)[0]
+    here = f"{p.scheme}://{p.netloc}{path}"
     if re.search(r'name="generator"\s+content="paligo"', html, re.I):
         return here
     locale = _LOCALE_LINK_RE.search(html)

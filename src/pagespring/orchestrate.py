@@ -10,21 +10,21 @@ from __future__ import annotations
 
 import shutil
 import urllib.error
-from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import NamedTuple, TypedDict, cast
+from urllib.parse import urlsplit
 
 from pf_core.exceptions import ClientError, InvalidInputError, PreconditionError
 from pf_core.log import get_logger
-from pf_core.utils.slugify import slugify
+from pf_core.utils.dates import now_iso
 
 from pagespring import images as images_mod
 from pagespring import manifest
 from pagespring._staging import _clear_except, _same_source
 from pagespring.base import AcquireResult, SourceKind
 from pagespring.config import cfg
-from pagespring.paths import slug_dir
+from pagespring.paths import fold_slug, slug_dir
 from pagespring.registry import classify, pattern_by_name
 
 log = get_logger(__name__)
@@ -109,11 +109,11 @@ def run_ingest(
         # from a remote URL, and `incoming/<slug>` is later cleared with rmtree,
         # so a slug of ".." would delete everything outside the corpus.
         if slug_override is not None:
-            folded = slugify(slug_override)
+            folded = fold_slug(slug_override)
             if not folded:
                 raise InvalidInputError(f"--slug {slug_override!r} folds to an empty slug")
         else:
-            folded = slugify(acq.slug)
+            folded = fold_slug(acq.slug)
             if not folded:
                 raise InvalidInputError(
                     f"{pattern.name} derived an unusable slug {acq.slug!r} from {url!r}"
@@ -137,11 +137,16 @@ def run_ingest(
         # its localized images, and its mtime — nothing is re-staged.
         if if_changed:
             prior = manifest.read_manifest(incoming_dir)
-            # Only a record naming this same source can answer "unchanged"; a
-            # parseable non-manifest, or another manual's, belongs to the guard below.
+            # Only a record naming this same source can answer "unchanged";
+            # another manual's belongs to the guard below.
             prior_url = prior.get("source_url") if isinstance(prior, dict) else None
             same_source = _same_source(prior_url, url) if prior_url else False
-            if prior is not None and same_source and prior.get("sha256") == sha256:
+            # The recorded sha answers "unchanged" only while the file it describes
+            # is still on disk; a slug that lost its deliverable must re-stage.
+            staged_name = prior.get("deliverable") if prior_url and prior else None
+            prior_file = incoming_dir / str(staged_name) if staged_name else None
+            on_disk = prior_file is not None and prior_file.is_file() and prior_file.stat().st_size
+            if prior is not None and same_source and prior.get("sha256") == sha256 and on_disk:
                 log.info("ingest.unchanged", pattern=pattern.name, slug=acq.slug, sha256=sha256)
                 return {
                     "pattern": pattern.name,
@@ -160,8 +165,6 @@ def run_ingest(
         if incoming_dir.exists():
             # The clear below is unrecoverable: incoming/ is gitignored.
             held = manifest.read_manifest(incoming_dir)
-            # read_manifest tolerates unparseable JSON but returns parseable
-            # non-manifests as-is; those must refuse below, not raise here.
             held_url = held.get("source_url") if isinstance(held, dict) else None
             if held_url:
                 takeover = not _same_source(held_url, url)
@@ -184,8 +187,11 @@ def run_ingest(
         # Stage as <slug>.<ext> regardless of what normalize called the file —
         # patterns that name output at acquire time can't see a --slug override.
         staged = incoming_dir / f"{acq.slug}{clean.suffix}"
+        # A bare local path names a different file from every other directory, and
+        # refresh replays this string verbatim — persist the resolved one.
+        recorded_url = url if urlsplit(url).scheme else str(Path(url).resolve())
         record = manifest.build_manifest(
-            source_url=url,
+            source_url=recorded_url,
             pattern=pattern.name,
             slug=acq.slug,
             kind=acq.kind,
@@ -194,7 +200,7 @@ def run_ingest(
             size_bytes=size_bytes,
             sha256=sha256,
             images=0,
-            ingested_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ingested_at=now_iso(),
             title=acq.title,
             etag=acq.etag,
             last_modified=acq.last_modified,

@@ -288,3 +288,31 @@ def test_extract_body_drops_the_download_guides_widget():
     assert "Real content." in frag
     assert "LinkDownload" not in frag
     assert "Download the guides" not in frag
+
+
+def test_a_topic_with_no_extractable_body_is_reported_as_lost(tmp_path):
+    """Some Apple topic pages carry an article section with no <h1>, so the merge skips
+    them — unreported, `pages` counts topics the deliverable does not contain."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "welcome.html").write_text(
+        '<html><body><h1>Numbers</h1><nav><a href="good.html">Good</a>'
+        '<a href="hollow.html">Hollow</a></nav></body></html>',
+        encoding="utf-8",
+    )
+    (raw / "good.html").write_text(
+        '<html><body><div id="article-section"><h1>Good</h1><p>real body</p></div></body></html>',
+        encoding="utf-8",
+    )
+    # an article section with no <h1> — extract_body declines it
+    (raw / "hollow.html").write_text(
+        '<html><body><div id="article-section"><p>gallery only</p></div></body></html>',
+        encoding="utf-8",
+    )
+    acq = AcquireResult(raw_dir=raw, kind="html", slug="numbers", pages=3, lost=0)
+
+    merged = AppleHelpPattern().normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert "real body" in merged
+    assert "gallery only" not in merged, "fixture assumption: the hollow topic is skipped"
+    assert acq.lost == 1, f"a dropped topic was not reported as lost (lost={acq.lost})"

@@ -137,7 +137,7 @@ class DocsProbePattern:
         llms = _fetch_or_none(f"{origin}/llms.txt")
         if llms is not None and _gitbook.discover_pages(llms):
             log.info("docs_probe.detected", generator="llms_txt", base=base, via="llms.txt")
-            return GitBookPattern().acquire(origin, workdir)
+            return GitBookPattern().acquire(origin, workdir, slug=slug, title=title)
         raise InvalidInputError(
             f"unrecognized docs site: {base} — probed the generator meta tag "
             "(MkDocs/Docusaurus/Hugo/Asciidoctor/WordPress/Sphinx), ClickHelp + Paligo + SCHEMA ST4 tells, "

@@ -63,7 +63,9 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
         # section's text again. Keep only the prose before the first section,
         # or half the deliverable is a verbatim second copy of itself.
         if sections and lead:
-            first = sections[0][1]
+            # The first section *with text*: a heading straight above a sub-heading
+            # indexes with none of its own.
+            first = next((text for _title, text in sections if text), "")
             if first and first in lead:
                 lead = lead.split(first, 1)[0].strip()
         blocks: list[str] = []

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Lint gate (same as CI): ruff check + ruff format check over src + tests, mypy
-# strict over src/, pf-core's structural build gate (file-size), and the
-# framework-first gate.
+# Lint gate (same as CI): ruff check + ruff format check over src, tests and the
+# extension-less python in bin/ (which pre-commit types by shebang, so a file left
+# out here fails at commit time), mypy strict over src/, pf-core's structural build
+# gate (file-size), and the framework-first gate.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 [ -d .venv ] || { echo "No .venv found. Run bin/setup first." >&2; exit 1; }
-.venv/bin/python -m ruff check src tests
-.venv/bin/python -m ruff format --check src tests
+.venv/bin/python -m ruff check src tests bin/check-framework
+.venv/bin/python -m ruff format --check src tests bin/check-framework
 .venv/bin/python -m mypy src
 .venv/bin/python -m pf_core.guards --root src/pagespring
 .venv/bin/python bin/check-framework

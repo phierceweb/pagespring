@@ -15,6 +15,7 @@ from urllib.parse import unquote, urlparse
 from pf_core.exceptions import InvalidInputError
 from pf_core.log import get_logger
 from pf_core.utils.slugify import slugify
+from pf_core.utils.url_parse import domain_of
 
 from pagespring import http
 from pagespring.base import AcquireResult
@@ -38,7 +39,7 @@ def _slug_from_url(url: str) -> str:
     if name.lower().endswith(".pdf"):
         return _slugify(name)
     # RTD-style /_/downloads/en/<ver>/pdf/ — basename is "pdf"; name from the host.
-    return _slugify(p.netloc.lower().removeprefix("www.").split(".")[0])
+    return _slugify(domain_of(url).split(".")[0])
 
 
 class PdfUrlPattern:
