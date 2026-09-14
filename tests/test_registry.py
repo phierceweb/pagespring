@@ -24,6 +24,15 @@ from pagespring.registry import PATTERNS, classify
         ("https://picard-docs.musicbrainz.org/_/downloads/en/latest/pdf/", "pdf_url"),
         ("https://requests.readthedocs.io/en/latest/", "readthedocs"),
         ("https://requests.readthedocs.io/_/downloads/en/latest/pdf/", "pdf_url"),
+        ("https://parent.readthedocs.io/_/downloads/child/en/latest/pdf/", "pdf_url"),
+        ("https://foo.readthedocs.io/en/latest/_static/openapi.yaml", "api_spec"),
+        ("https://foo.readthedocs.io/en/latest/_static/swagger.json", "api_spec"),
+        ("https://foo.readthedocs.io/en/latest/_downloads/x/examples.zip", "archive_download"),
+        ("https://foo.readthedocs.io/en/latest/_downloads/x/guide.pdf", "pdf_url"),
+        # a /pdf/ section of a docs site is a page, not a download
+        ("https://docs.aspose.com/pdf/", "docs_probe"),
+        ("https://example.com/hc/", "zendesk_help"),
+        ("https://example.com/docs/hc/intro", "docs_probe"),
         # extension beats the broad docs.* gitbook heuristic:
         ("https://docs.vendor.com/guide/manual.pdf", "pdf_url"),
         # docs.* custom domains no longer match gitbook directly — docs_probe's

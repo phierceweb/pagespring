@@ -13,7 +13,7 @@ from pathlib import Path
 import pf_core.fetch.images as core_images
 import pytest
 
-from pagespring import images, manifest, orchestrate
+from pagespring import _staging, images, manifest, orchestrate
 from pagespring.config import cfg
 
 # Read before `_sandbox_incoming_dir` rewrites it: a corpus configured elsewhere
@@ -82,7 +82,9 @@ def _refuse_to_touch_the_corpus():
         # and each module imported the name directly — so patch per binding site.
         for module, attr in (
             (manifest, "atomic_write_text"),
+            (_staging, "atomic_write_bytes"),
             (images, "atomic_write_text"),
+            (images, "atomic_write_bytes"),
             (core_images, "atomic_write_text"),
             (core_images, "atomic_write_bytes"),
         ):

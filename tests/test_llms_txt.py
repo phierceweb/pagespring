@@ -1,6 +1,7 @@
 """llms_txt — match + acquire/normalize with a synthetic index (no network)."""
 
 from pagespring import http
+from pagespring.base import AcquireResult
 from pagespring.patterns.llms_txt import LlmsTxtPattern
 
 _LLMS = """# Docs index
@@ -264,3 +265,40 @@ def test_match_requires_the_whole_llms_basename(monkeypatch):
     assert not p.match("https://x.com/vendor-llms.txt")
     assert not p.match("https://x.com/allms.txt")
     assert not p.match("https://x.com/my-llms-full.txt")
+
+
+def test_normalize_strips_platform_preambles_and_absolutizes_links(tmp_path):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "0000-intro.md").write_text(
+        "<!-- source: https://docs.vendor.example/docs/intro.md -->\n\n"
+        "> This is a page from the Vendor documentation. For a complete page index, fetch "
+        "https://docs.vendor.example/docs/llms.txt.\n\n"
+        "# Intro\n\nSee [Setup](./setup) and [Pricing](/pricing).\n",
+        encoding="utf-8",
+    )
+    acq = AcquireResult(raw_dir=raw, kind="markdown", slug="vendor", pages=1)
+
+    text = LlmsTxtPattern().normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert "For a complete page index" not in text
+    assert "[Setup](https://docs.vendor.example/docs/setup)" in text
+    assert "[Pricing](https://docs.vendor.example/pricing)" in text
+
+
+def test_llms_full_leaves_page_relative_links_unresolved(tmp_path):
+    """The file's URL is not any section's page URL, so resolving against it
+    would point a section's relative link at the wrong page."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "0000-llms-full.md").write_text(
+        "<!-- source: https://docs.vendor.example/llms-full.txt -->\n\n"
+        "# Install\n\nNext: [setup](setup). See [Pricing](/pricing).\n",
+        encoding="utf-8",
+    )
+    acq = AcquireResult(raw_dir=raw, kind="markdown", slug="vendor", pages=1, single_document=True)
+
+    text = LlmsTxtPattern().normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert "[setup](setup)" in text
+    assert "[Pricing](https://docs.vendor.example/pricing)" in text

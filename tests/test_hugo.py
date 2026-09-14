@@ -194,8 +194,52 @@ def test_taxonomy_list_pages_are_excluded():
         "https://d.ex.com/ozone/print/",
     ]
     base = "https://d.ex.com/ozone"
-    kept = [u for u in locs if _hugo._is_content_page(u, base)]
+    kept = [u for u in locs if _hugo._is_content_page(u, base, {base})]
     assert kept == ["https://d.ex.com/ozone/", "https://d.ex.com/ozone/eq/"]
+
+
+def test_a_tags_categories_or_print_page_below_the_site_root_is_kept():
+    """Hugo generates taxonomy and print pages only at a site root; deeper down those
+    names are ordinary topics."""
+    root = "https://d.ex.com/ozone"
+    locs = [
+        "https://d.ex.com/ozone/hub-images/tags/",
+        "https://d.ex.com/ozone/catalog/categories/",
+        "https://d.ex.com/ozone/export/print/",
+        "https://d.ex.com/ozone/tags/eq/",
+    ]
+    kept = [u for u in locs if _hugo._is_content_page(u, root, {root})]
+    assert kept == locs[:3]
+
+
+_CHILD_EN_TAXONOMY = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://docs.example.com/prod/en/index.html</loc></url>
+  <url><loc>https://docs.example.com/prod/en/alm/tags/index.html</loc></url>
+  <url><loc>https://docs.example.com/prod/en/tags/eq/index.html</loc></url>
+</urlset>"""
+
+
+def test_each_child_sitemap_is_a_site_root_for_taxonomy_pages(tmp_path, monkeypatch):
+    """A multilingual index roots each language at its child sitemap's directory."""
+
+    def fetch(url, **kwargs):
+        if url == "https://docs.example.com/prod/sitemap.xml":
+            return url, _SITEMAP_INDEX.replace(
+                "<sitemap><loc>https://docs.example.com/prod/de/sitemap.xml</loc></sitemap>", ""
+            )
+        if url == "https://docs.example.com/prod/en/sitemap.xml":
+            return url, _CHILD_EN_TAXONOMY
+        if url.endswith("sitemap.xml"):
+            raise OSError(f"404 {url}")
+        return url, _PAGE
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+
+    acq = _hugo.acquire("https://docs.example.com/prod/", tmp_path, slug="prod", title=None)
+
+    staged = sorted(p.name for p in acq.raw_dir.glob("*.html"))
+    assert staged == ["0000-prod-en-index.html.html", "0001-prod-en-alm-tags-index.html.html"]
 
 
 def test_a_page_without_main_counts_as_lost(tmp_path, monkeypatch):

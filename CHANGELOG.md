@@ -4,6 +4,102 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.12.0] — 2026-09-10
+
+### Changed
+
+- **Relicensed to Apache-2.0** (was MIT). Releases through 0.11.0 stay under MIT;
+  the change applies from this release forward.
+- **A same-source re-ingest that finds far fewer pages than the staged manual is
+  refused** (exit 2; `refresh` reports `failed`), keeping the manual. `--replace`
+  accepts it; `COLLAPSE_KEEP_PCT` and `COLLAPSE_MIN_PAGES` tune the check. For a
+  single-fetch source (PDF, doc archive, API spec) the message describes the
+  re-fetched document, and the hint adds `--keep-raw` when the slug holds `raw/`.
+- **Staging is atomic.** Re-ingest and `renormalize` write the new deliverable
+  before clearing stale files, so a full disk or a kill keeps the previous one; an
+  interrupted `--replace` takeover leaves the displaced manual under its manifest.
+- **`localize <slug>` exits 2 when it refuses the slug.** `audit`'s `sha_unverified`
+  warning advises re-ingesting with `--download-images`.
+- **`ingest --download-images` prints this run's downloads apart from the total**
+  in `images/`.
+- **OpenAPI deliverables open with a `## Tags` section** for described tags, show
+  request-body descriptions and 3.1 type lists (`string | null`). Postman
+  deliverables fence raw bodies in their declared language and mark disabled
+  parameters.
+
+### Added
+
+- **Swagger UI, Redoc and Scalar pages ingest the spec they name**, whether
+  `docs_probe` or `api_spec` (a `/swagger-ui.html` or `/swagger/` path) claims the
+  page. The page's `url` query picks the spec; otherwise Redoc/Scalar attributes,
+  Swagger UI config documents (`configUrl`) and quoted spec URLs in the page or its
+  initializer are candidates, never Swagger's Petstore demo. Each is proven to parse
+  as OpenAPI; a page naming several parse-proven specs, or none, exits 2 listing
+  what it found.
+- **`docs_probe` ingests an OpenAPI document served from an extensionless path**
+  (springdoc's `/v3/api-docs/<group>`) — one with a version and paths, not an API
+  root that only links to its spec.
+
+### Fixed
+
+- **`apple_help` crawls the version-less topic links Apple's guides publish**, for
+  the platform the URL names (`mac`, `ios`, `ipados`, `watchos`, …) or, for a URL
+  naming none (`/guide/iphone/`), the platform and locale Apple redirects it to —
+  including topic tokens with an underscore. A topic-page seed also fetches its
+  release's welcome page for the outline and title, a locale seed stays in its
+  locale, a crawl that captures no topic page exits 2 without staging, and TOC
+  topics the crawl never saved count as `lost`.
+- **`api_spec` refuses a body that is neither JSON nor YAML** (an HTML error page
+  served in place of the spec) with exit 2 instead of a traceback.
+- **`refresh --all` reports a slug whose refresh raises as `failed`** and sweeps on.
+- **Image reuse keeps a cached image until its replacement is in hand**
+  (`--download-images`, `localize`). An image the server doesn't confirm unchanged
+  is fetched: identical bytes reuse the file, changed bytes replace it under the same
+  name, and a failed fetch or a non-image body keeps the file and its record. Each
+  probe and fetch is paced with the crawl delay. An interrupted image pass records
+  every image that landed in `images.json`.
+- **`docs_probe` reads the `llms.txt` nearest the URL's path**, so a docs subpath's
+  own index wins over the site root's. It skips rendered-page fetches when a
+  generator tag names a platform other than GitBook. GitBook acquisition — hosted
+  `*.gitbook.io` sites and the `llms.txt` route alike — caps at 1000 pages
+  (`truncated`). Every request on the spec and llms.txt routes is paced.
+- **Markdown from llms.txt platforms is cleaned** (`gitbook`, `llms_txt`, the
+  `docs_probe` llms.txt route): notes sending AI clients to an llms.txt index, YAML
+  front matter (a leading `---` block that parses as a mapping), and top-level MDX
+  `import`/`export` definitions outside code fences are dropped. Page-relative links
+  resolve against the page URL — never inside code, and not in `llms-full.txt`.
+- **`refresh`, `ingest --if-changed` and `renormalize` compare the file on disk**
+  with its recorded hash: a missing or altered deliverable is re-staged rather than
+  reported `unchanged`, and a 304 validator probe is trusted only for an intact one.
+  A deliverable localized without a recorded hash is left in place.
+- **`localize` refuses a deliverable that no longer matches its recorded hash**
+  instead of recording the damage as verified; `--all` reports a slug with an
+  unusable manifest and carries on. `renormalize` records the `lost` count
+  normalize derives.
+- **`archive_download` refuses unsafe or invalid archives with exit 2**: a
+  declared size, member count or compression ratio over the extraction budget, a
+  non-archive body, a corrupt archive, or a member escaping the extraction root.
+  EPUB spine hrefs are percent-decoded, keeping chapter order.
+- **Routing:** `github_markdown` claims only a repo root, `/tree/` and `.md`
+  `/blob/` URLs, leaving release assets, `/raw/` files and source archives to their
+  extension patterns; `readthedocs` leaves spec, archive and PDF file URLs to theirs
+  and fetches a subproject URL's own build at its version; `pdf_url` claims only
+  `.pdf` paths and Read the Docs PDF builds (`docs_probe` hands any other PDF to it,
+  including one too large for the text budget); `zendesk_help` claims only paths
+  starting `/hc/` on other hosts and exits 2 on a non-JSON API answer.
+- **Crawl order and coverage:** Sphinx crawls stage pages in toctree order;
+  `github_markdown` keeps `.MD` files and orders numbered files numerically; Hugo
+  keeps `tags`/`categories`/`print` pages below the site root; Docusaurus keeps doc
+  slugs that start like a version.
+- **`microsoft_support` paces every sitemap page and article request**; a sitemap
+  page that is not a `<urlset>` marks the crawl truncated, and a sustained 403
+  block — confirmed by re-checking an article that loaded earlier (or the next one),
+  since a restricted article also answers 403 — stops it with the unfetched articles
+  counted as `lost`.
+- **API spec rendering:** OpenAPI resolves `$ref` request bodies and path items and
+  ignores wrong-typed fields instead of crashing; Postman renders folder and
+  request descriptions, query parameters, path variables, and every body mode.
+
 ## [0.11.0] — 2026-08-29
 
 ### Changed

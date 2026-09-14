@@ -1,11 +1,11 @@
 """docs_probe — generator sniffing + strategy dispatch, all http mocked."""
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pf_core.exceptions import ClientError, InvalidInputError
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns import _docusaurus, _mkdocs, _sphinx, docs_probe, gitbook
+from pagespring.patterns import _docusaurus, _hugo, _mkdocs, _sphinx, docs_probe, gitbook
 from pagespring.patterns.docs_probe import DocsProbePattern
 
 _MKDOCS_HOME = (
@@ -24,6 +24,11 @@ _STATIC_ONLY_HOME = (
     "<body><main>hi</main></body></html>"
 )
 _PLAIN_HOME = "<html><head><title>plain</title></head><body>nothing here</body></html>"
+
+
+@pytest.fixture(autouse=True)
+def _no_pacing(monkeypatch):
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
 
 def _fake_acquire(kind):
@@ -247,3 +252,380 @@ def test_llms_txt_delegation_keeps_the_probed_slug_and_title(tmp_path, monkeypat
 
     assert acq.slug == "widgetpro", f"probed slug discarded, got {acq.slug!r}"
     assert acq.title == "Widget Pro Manual", "probed title discarded"
+
+
+def _spy_gitbook_acquire(called):
+    def spy(self, url, workdir, *, slug=None, title=None, rendered=True):
+        called.update(url=url, slug=slug, title=title, rendered=rendered)
+        raw = workdir / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        return AcquireResult(raw_dir=raw, kind="markdown", slug=slug, pages=2, title=title)
+
+    return spy
+
+
+def test_llms_txt_rung_uses_the_index_nearest_the_seed(tmp_path, monkeypatch):
+    """A docs subpath often publishes its own llms.txt; the site root's lists other pages."""
+    home = "<html><head><title>Acme Docs</title></head><body>x</body></html>"
+    indexes = {
+        "https://acme.example/llms.txt": "- [Pricing](https://acme.example/pricing.md)\n",
+        "https://acme.example/docs/llms.txt": (
+            "- [Intro](https://acme.example/docs/intro.md)\n"
+            "- [Setup](https://acme.example/docs/setup.md)\n"
+        ),
+    }
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    monkeypatch.setattr(docs_probe, "_fetch_or_none", indexes.get)
+    called = {}
+    monkeypatch.setattr(gitbook.GitBookPattern, "acquire", _spy_gitbook_acquire(called))
+
+    DocsProbePattern().acquire("https://acme.example/docs/intro", tmp_path)
+
+    assert called == {
+        "url": "https://acme.example/docs",
+        "slug": "acme",
+        "title": "Acme Docs",
+        "rendered": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("generator", "rendered"),
+    [("", True), ("GitBook (931cbe7)", True), ("Mintlify", False)],
+    ids=["no-generator", "gitbook", "other-platform"],
+)
+def test_llms_txt_rung_fetches_rendered_pages_only_for_gitbook(
+    tmp_path, monkeypatch, generator, rendered
+):
+    """Only a GitBook page needs its rendered twin, to resolve /files/<id> images."""
+    meta = f'<meta name="generator" content="{generator}">' if generator else ""
+    home = f"<html><head>{meta}<title>R</title></head><body>x</body></html>"
+    index = "- [Intro](https://docs.example.com/intro.md)\n"
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
+    monkeypatch.setattr(
+        docs_probe, "_fetch_or_none", lambda url: index if url.endswith("/llms.txt") else None
+    )
+    called = {}
+    monkeypatch.setattr(gitbook.GitBookPattern, "acquire", _spy_gitbook_acquire(called))
+
+    DocsProbePattern().acquire("https://docs.example.com/", tmp_path)
+
+    assert called["rendered"] is rendered
+
+
+def test_an_extensionless_url_serving_openapi_is_ingested_as_the_spec(tmp_path, monkeypatch):
+    """springdoc serves specs from /v3/api-docs/<group>, so api_spec.match declines
+    them — and a UI page's several-specs refusal lists exactly those URLs to ingest."""
+    url = "https://demo.example/v3/api-docs/users"
+    spec_text = (
+        '{"openapi": "3.0.1", "info": {"title": "Users API", "version": "2.9.1"}, '
+        '"paths": {"/users": {"get": {"summary": "List users"}}}}'
+    )
+    fetched: list[str] = []
+
+    def fetch(u, **k):
+        fetched.append(u)
+        return u, spec_text
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    probe = DocsProbePattern()
+
+    acq = probe.acquire(url, tmp_path)
+    out = probe.normalize(acq, tmp_path)
+
+    assert (acq.kind, acq.slug, acq.single_document) == ("markdown", "users-api-2-9-1", True)
+    assert "/users" in out.read_text(encoding="utf-8")
+    assert fetched == [url]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"name": "Acme API", "swagger": "https://api.acme.example/swagger/v1/swagger.json"}',
+        '{"docs": "/docs", "openapi": "/openapi.json"}',
+    ],
+    ids=["swagger-link", "openapi-link"],
+)
+def test_an_api_root_that_only_links_its_spec_is_not_taken_for_the_spec(
+    tmp_path, monkeypatch, body
+):
+    monkeypatch.setattr(http, "fetch_text", lambda u, **k: (u, body))
+
+    with pytest.raises(InvalidInputError, match="unrecognized docs site"):
+        DocsProbePattern().acquire("https://api.acme.example/", tmp_path)
+
+
+def test_a_pdf_too_large_for_the_text_budget_is_handed_to_pdf_url(tmp_path, monkeypatch):
+    """The home page is read under the text budget; a vendor PDF can exceed it."""
+    url = "https://vendor.example/manual/pdf"
+
+    def too_big(u, **k):
+        raise ClientError("response exceeded max_bytes", context={"url": u, "max_bytes": 25})
+
+    monkeypatch.setattr(http, "fetch_text", too_big)
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda u, **k: (u, b"%PDF-1.7 body", {"etag": None, "last_modified": None}),
+    )
+
+    acq = DocsProbePattern().acquire(url, tmp_path)
+
+    assert acq.kind == "pdf"
+
+
+def test_a_spec_ui_page_ingests_the_spec_it_names(tmp_path, monkeypatch):
+    spec = "https://docs.vendor.example/api/openapi.yaml"
+    home = f'<html><head><title>API</title></head><body><redoc spec-url="{spec}"></redoc></body></html>'
+    spec_text = (
+        "openapi: 3.0.0\ninfo:\n  title: Vendor API\n  version: '2'\n"
+        "paths:\n  /ping:\n    get:\n      summary: Ping\n"
+    )
+    monkeypatch.setattr(
+        http, "fetch_text", lambda url, **k: (url, spec_text if url == spec else home)
+    )
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    probe = DocsProbePattern()
+
+    acq = probe.acquire("https://docs.vendor.example/api/", tmp_path)
+    out = probe.normalize(acq, tmp_path)
+
+    assert (acq.kind, acq.slug, acq.single_document) == ("markdown", "vendor-api-2", True)
+    assert "/ping" in out.read_text(encoding="utf-8")
+
+
+def test_a_spec_ui_page_naming_no_spec_is_refused_by_name(tmp_path, monkeypatch):
+    home = '<html><body><div id="swagger-ui"></div><script src="./swagger-ui-bundle.js"></script></body></html>'
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
+
+    with pytest.raises(InvalidInputError, match="swagger-ui page"):
+        DocsProbePattern().acquire("https://api.vendor.example/docs", tmp_path)
+
+
+_OPENAPI_BODY = '{"openapi": "3.0.0", "info": {"title": "Vendor API"}, "paths": {}}'
+
+
+@pytest.mark.parametrize(
+    ("home", "files", "dispatch"),
+    [
+        (
+            '<meta name="generator" content="Mintlify"><main id="content-container"></main>',
+            {"https://docs.vendor.example/docs/llms.txt": "https://docs.vendor.example/docs/a.md"},
+            ("gitbook", "https://docs.vendor.example/docs", False),
+        ),
+        (
+            '<meta name="generator" content="https://buildwithfern.com"><main class="fern-main">',
+            {"https://docs.vendor.example/docs/llms.txt": "https://docs.vendor.example/docs/a.md"},
+            ("gitbook", "https://docs.vendor.example/docs", False),
+        ),
+        (
+            '<main id="content" class="rm-Guides"><article class="rm-Article"></article></main>',
+            {"https://docs.vendor.example/docs/llms.txt": "https://docs.vendor.example/docs/a.md"},
+            ("gitbook", "https://docs.vendor.example/docs", True),
+        ),
+        (
+            '<article id="nd-page" class="flex flex-col"></article>',
+            {"https://docs.vendor.example/llms.txt": "https://docs.vendor.example/docs/a.md"},
+            ("gitbook", "https://docs.vendor.example", True),
+        ),
+        (
+            '<meta name="generator" content="Hugo 0.99.1"><body class="td-section"><main></main>',
+            {},
+            ("hugo", "https://docs.vendor.example/docs", None),
+        ),
+        (
+            '<meta name="generator" content="Hugo 0.165.0">'
+            '<article class="gdoc-markdown" id="main-content"></article>',
+            {},
+            ("hugo", "https://docs.vendor.example/docs", None),
+        ),
+        (
+            '<redoc spec-url="/openapi.json"></redoc>',
+            {"https://docs.vendor.example/openapi.json": _OPENAPI_BODY},
+            ("api_spec", "https://docs.vendor.example/openapi.json", None),
+        ),
+        (
+            '<div id="swagger-ui"></div><script src="./swagger-ui-bundle.js"></script>'
+            "<script>SwaggerUIBundle({ url: '/openapi.json', dom_id: '#swagger-ui' })</script>",
+            {"https://docs.vendor.example/openapi.json": _OPENAPI_BODY},
+            ("api_spec", "https://docs.vendor.example/openapi.json", None),
+        ),
+        (
+            '<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>'
+            "<script>Scalar.createApiReference('#app', { url: '/openapi.json' })</script>",
+            {"https://docs.vendor.example/openapi.json": _OPENAPI_BODY},
+            ("api_spec", "https://docs.vendor.example/openapi.json", None),
+        ),
+    ],
+    ids=[
+        "mintlify",
+        "fern",
+        "readme",
+        "fumadocs",
+        "docsy-hugo",
+        "geekdoc",
+        "redoc",
+        "swagger-ui",
+        "scalar",
+    ],
+)
+def test_platforms_without_a_pattern_of_their_own_route_through_existing_rungs(
+    tmp_path, monkeypatch, home, files, dispatch
+):
+    """These platforms need no pattern named for them: a generator tag, an llms.txt index,
+    or an API reference UI already routes them. Measured on live sites; before proposing a
+    pattern for a platform, check routing like this rather than searching src/ for its name."""
+    page = f"<html><head><title>Vendor Docs</title></head><body>{home}</body></html>"
+
+    def fetch(url, **kwargs):
+        if url in files:
+            return url, files[url]
+        if url.endswith(("llms.txt", "search_index.json", ".json")):
+            raise OSError("404")
+        return url, page
+
+    seen = []
+
+    def record(name):
+        def spy(*args, **kwargs):
+            url = next(a for a in args if isinstance(a, str))
+            seen.append((name, url.rstrip("/"), kwargs.get("rendered")))
+            raise _Dispatched
+
+        return spy
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    monkeypatch.setattr(_hugo, "acquire", record("hugo"))
+    monkeypatch.setattr(gitbook.GitBookPattern, "acquire", record("gitbook"))
+    monkeypatch.setattr(docs_probe.ApiSpecPattern, "acquire", record("api_spec"))
+
+    with pytest.raises(_Dispatched):
+        DocsProbePattern().acquire("https://docs.vendor.example/docs", tmp_path)
+
+    assert seen == [dispatch]
+
+
+class _Dispatched(Exception):
+    pass
+
+
+def test_a_trailing_slash_seed_resolves_relative_spec_urls_below_it(tmp_path, monkeypatch):
+    """The ladder fetches the seed without its trailing slash; with no redirect to put it
+    back, a relative spec URL would resolve one directory too high."""
+    spec = "https://api.vendor.example/docs/openapi.json"
+    home = '<html><body><redoc spec-url="openapi.json"></redoc></body></html>'
+    spec_text = '{"openapi": "3.0.0", "info": {"title": "Vendor API"}, "paths": {}}'
+    events = []
+
+    def fetch(url, **kwargs):
+        events.append(url)
+        return url, spec_text if url == spec else home
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: events.append("sleep"))
+
+    DocsProbePattern().acquire("https://api.vendor.example/docs/", tmp_path)
+
+    assert events == ["https://api.vendor.example/docs", "sleep", spec]
+
+
+def test_a_swagger_ui_page_ingests_the_spec_its_url_query_names(tmp_path, monkeypatch):
+    """A stock Swagger UI dist is pointed at a spec by its page query; the initializer
+    it ships still names Swagger's demo spec."""
+    page = "https://api.vendor.example/swagger/index.html?url=/api/openapi.json"
+    home = (
+        '<html><body><div id="swagger-ui"></div><script src="./swagger-ui-bundle.js"></script>'
+        '<script src="./swagger-initializer.js"></script></body></html>'
+    )
+    bodies = {
+        page: home,
+        "https://api.vendor.example/swagger/swagger-initializer.js": (
+            'window.ui = SwaggerUIBundle({ url: "https://petstore.swagger.io/v2/swagger.json" });'
+        ),
+        "https://petstore.swagger.io/v2/swagger.json": (
+            '{"swagger": "2.0", "info": {"title": "Swagger Petstore", "version": "1.0.7"}}'
+        ),
+        "https://api.vendor.example/api/openapi.json": (
+            '{"openapi": "3.0.0", "info": {"title": "Vendor API", "version": "2"}, "paths": {}}'
+        ),
+    }
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, bodies[url]))
+
+    acq = DocsProbePattern().acquire(page, tmp_path)
+
+    assert (acq.slug, acq.title) == ("vendor-api-2", "Vendor API 2")
+
+
+def test_the_llms_txt_route_paces_every_request(tmp_path, monkeypatch):
+    home = "<html><head><title>Acme Docs</title></head><body>x</body></html>"
+    index = "- [Intro](https://acme.example/docs/intro.md)\n"
+    events = []
+
+    def fetch(url, **kwargs):
+        events.append(url)
+        if url == "https://acme.example/llms.txt":
+            return url, index
+        if url.endswith(("llms.txt", "search_index.json")):
+            raise OSError("404")
+        return url, home
+
+    def gitbook_acquire(self, url, workdir, **kwargs):
+        events.append("gitbook")
+        raw = workdir / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        return AcquireResult(raw_dir=raw, kind="markdown", slug="acme", pages=1, title="Acme")
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: events.append("sleep"))
+    monkeypatch.setattr(gitbook.GitBookPattern, "acquire", gitbook_acquire)
+
+    DocsProbePattern().acquire("https://acme.example/docs/intro", tmp_path)
+
+    assert events[-1] == "gitbook"
+    unpaced = [e for i, e in enumerate(events) if i and e != "sleep" and events[i - 1] != "sleep"]
+    assert unpaced == [], events
+
+
+def test_llms_txt_rung_skips_an_html_page_served_at_a_candidate_path(tmp_path, monkeypatch):
+    home = "<html><head><title>Acme Docs</title></head><body>x</body></html>"
+    indexes = {
+        "https://acme.example/docs/llms.txt": (
+            '<!DOCTYPE html><html><body><a href="https://acme.example/docs/x.md">x</a>'
+            "</body></html>"
+        ),
+        "https://acme.example/llms.txt": "- [Intro](https://acme.example/docs/intro.md)\n",
+    }
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    monkeypatch.setattr(docs_probe, "_fetch_or_none", indexes.get)
+    called = {}
+    monkeypatch.setattr(gitbook.GitBookPattern, "acquire", _spy_gitbook_acquire(called))
+
+    DocsProbePattern().acquire("https://acme.example/docs/intro", tmp_path)
+
+    assert called["url"] == "https://acme.example"
+
+
+def test_an_oversize_body_that_is_not_a_pdf_reports_the_size_limit(tmp_path, monkeypatch):
+    """A single-page HTML manual can outgrow the text budget too; the useful error is
+    the budget, not "not a PDF"."""
+    oversize = ClientError("response exceeded max_bytes", context={"url": "u", "max_bytes": 25})
+
+    def too_big(u, **k):
+        raise oversize
+
+    monkeypatch.setattr(http, "fetch_text", too_big)
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda u, **k: (
+            u,
+            b"<!DOCTYPE html><html>" + b"x" * 64,
+            {"etag": None, "last_modified": None},
+        ),
+    )
+
+    with pytest.raises(ClientError, match="max_bytes"):
+        DocsProbePattern().acquire("https://vendor.example/manual/all-in-one", tmp_path)

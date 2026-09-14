@@ -13,7 +13,7 @@ import urllib.error
 import pytest
 from pf_core.exceptions import ClientError, InvalidInputError, PreconditionError
 
-from pagespring import http, manifest, orchestrate
+from pagespring import _staging, http, manifest, orchestrate
 from pagespring.base import AcquireResult
 from pagespring.patterns.docs_probe import DocsProbePattern
 from pagespring.patterns.microsoft_support import MicrosoftSupportPattern
@@ -343,6 +343,54 @@ def test_if_changed_restages_when_the_deliverable_is_gone(tmp_path, monkeypatch)
     assert (slug_dir / "fakeapp.html").exists(), "the deliverable was not restored"
 
 
+def test_if_changed_restages_a_truncated_deliverable(tmp_path, monkeypatch):
+    """A file cut short keeps its name and a non-zero size, so only its hash tells."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://x")
+    deliverable = tmp_path / "incoming" / "fakeapp" / "fakeapp.html"
+    deliverable.write_text("<h1>Fa", encoding="utf-8")
+
+    res = orchestrate.run_ingest("https://x", if_changed=True)
+
+    assert res["changed"] is True
+    assert deliverable.read_text(encoding="utf-8") == "<h1>Fake</h1>"
+
+
+def test_if_changed_leaves_an_intact_localized_deliverable_alone(tmp_path, monkeypatch):
+    """A localized file hashes to its localized_sha256, never to the staged sha256."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _RemoteImagePattern())
+    _mock_image_fetch(monkeypatch)
+    orchestrate.run_ingest("https://x", download_images=True)
+    deliverable = tmp_path / "incoming" / "fakeapp" / "fakeapp.html"
+    localized = deliverable.read_text(encoding="utf-8")
+
+    res = orchestrate.run_ingest("https://x", if_changed=True)
+
+    assert res["changed"] is False
+    assert deliverable.read_text(encoding="utf-8") == localized
+
+
+def test_if_changed_keeps_a_localized_deliverable_that_recorded_no_localized_sha(
+    tmp_path, monkeypatch
+):
+    """A pass that recorded no localized_sha256 left nothing to compare against;
+    re-staging would put back remote refs whose tokens may have expired."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _RemoteImagePattern())
+    _mock_image_fetch(monkeypatch)
+    orchestrate.run_ingest("https://x", download_images=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    m = manifest.read_manifest(slug_dir)
+    m["localized_sha256"] = None
+    manifest.write_manifest(slug_dir, m)
+    deliverable = slug_dir / "fakeapp.html"
+    localized = deliverable.read_text(encoding="utf-8")
+
+    res = orchestrate.run_ingest("https://x", if_changed=True)
+
+    assert res["changed"] is False
+    assert deliverable.read_text(encoding="utf-8") == localized
+
+
 def test_if_changed_restages_when_content_differs(tmp_path, monkeypatch):
     """Changed content → full replace: new deliverable, sentinel wiped."""
     p = _BodyPattern("<h1>One</h1>")
@@ -414,12 +462,20 @@ def _write_manifest(slug_dir, **over):
     manifest.write_manifest(slug_dir, manifest.build_manifest(**fields))
 
 
+def _seal(slug_dir):
+    """Record the deliverable written after `_write_manifest` as the staged content."""
+    m = manifest.read_manifest(slug_dir)
+    m["sha256"] = manifest.sha256_file(slug_dir / m["deliverable"])
+    manifest.write_manifest(slug_dir, m)
+
+
 def test_localize_images_localizes_and_updates_manifest(tmp_path, monkeypatch):
     """localize_images grabs a staged deliverable's remote images (no re-crawl),
     re-points refs, and writes the new image count back to the manifest."""
     slug_dir = tmp_path / "incoming" / "bk"
     _write_manifest(slug_dir)
     (slug_dir / "bk.html").write_text('<img src="https://x.com/a.png">', encoding="utf-8")
+    _seal(slug_dir)
     monkeypatch.setattr(
         http,
         "fetch_bytes_meta",
@@ -461,6 +517,94 @@ def test_localize_images_without_manifest_raises(tmp_path):
     (tmp_path / "incoming" / "bk").mkdir(parents=True)
     with pytest.raises(PreconditionError):
         orchestrate.localize_images("bk")
+
+
+def test_localize_images_refuses_a_manifest_missing_fields(tmp_path):
+    slug_dir = tmp_path / "incoming" / "bk"
+    slug_dir.mkdir(parents=True)
+    (slug_dir / manifest.MANIFEST_NAME).write_text('{"pages": 3}\n', encoding="utf-8")
+
+    with pytest.raises(PreconditionError, match="missing required fields"):
+        orchestrate.localize_images("bk")
+
+
+@pytest.mark.parametrize("localized", [True, False], ids=["localized", "never-localized"])
+def test_localize_refuses_to_stamp_a_damaged_deliverable_as_verified(
+    tmp_path, monkeypatch, localized
+):
+    """Recording the damaged bytes' hash would turn audit's sha_mismatch into ok."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _RemoteImagePattern())
+    _mock_image_fetch(monkeypatch)
+    orchestrate.run_ingest("https://x", download_images=localized)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    before = manifest.read_manifest(slug_dir)
+    deliverable = slug_dir / "fakeapp.html"
+    deliverable.write_text("<h1>v1</h1><img src=", encoding="utf-8")
+
+    with pytest.raises(PreconditionError, match="re-ingest"):
+        orchestrate.localize_images("fakeapp")
+
+    assert manifest.read_manifest(slug_dir) == before
+    assert deliverable.read_text(encoding="utf-8") == "<h1>v1</h1><img src="
+
+
+def test_localize_proceeds_on_a_deliverable_localized_without_a_record(tmp_path, monkeypatch):
+    """An image pass that recorded no localized_sha256 left nothing to check against;
+    localize warns and records one, as audit's sha_unverified advice expects."""
+    from structlog.testing import capture_logs
+
+    slug_dir = tmp_path / "incoming" / "bk"
+    _write_manifest(slug_dir, images=1)
+    (slug_dir / "images").mkdir()
+    (slug_dir / "images" / "a.png").write_bytes(b"\x89PNG\r\n\x1a\nx")
+    (slug_dir / "bk.html").write_text('<img src="images/a.png">', encoding="utf-8")
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    with capture_logs() as logs:
+        orchestrate.localize_images("bk")
+
+    assert ("localize.unverifiable", "warning") in [(e["event"], e["log_level"]) for e in logs]
+    m = manifest.read_manifest(slug_dir)
+    assert m["localized_sha256"] == manifest.sha256_file(slug_dir / "bk.html")
+
+
+def test_a_localize_killed_mid_pass_can_be_resumed(tmp_path, monkeypatch):
+    """The pass checkpoints the deliverable as images land, so a kill leaves bytes the
+    manifest never recorded; the re-run must resume rather than refuse."""
+    from pagespring import images
+
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _RemoteImagePattern())
+    _mock_image_fetch(monkeypatch)
+    orchestrate.run_ingest("https://x", download_images=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    deliverable = slug_dir / "fakeapp.html"
+    deliverable.write_text(
+        deliverable.read_text(encoding="utf-8") + '<img src="https://img.example/new.png">',
+        encoding="utf-8",
+    )
+    m = manifest.read_manifest(slug_dir)
+    m["localized_sha256"] = manifest.sha256_file(deliverable)
+    manifest.write_manifest(slug_dir, m)
+    real_download = images.download_images
+
+    def killed_after_a_checkpoint(doc_path, images_dir, **kwargs):
+        (images_dir / "new.png").write_bytes(b"\x89PNG\r\n\x1a\nx")
+        text = doc_path.read_text(encoding="utf-8")
+        doc_path.write_text(
+            text.replace("https://img.example/new.png", "images/new.png"), encoding="utf-8"
+        )
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(images, "download_images", killed_after_a_checkpoint)
+    with pytest.raises(KeyboardInterrupt):
+        orchestrate.localize_images("fakeapp")
+    monkeypatch.setattr(images, "download_images", real_download)
+
+    res = orchestrate.localize_images("fakeapp")
+
+    assert res["remaining"] == 0
+    after = manifest.read_manifest(slug_dir)
+    assert after["localized_sha256"] == manifest.sha256_file(deliverable)
 
 
 class _RawDrivenPattern(_FakePattern):
@@ -524,6 +668,57 @@ def test_renormalize_unchanged_output_leaves_slug_dir_untouched(tmp_path, monkey
     assert res["changed"] is False
     assert deliverable.stat().st_mtime_ns == before_mtime
     assert (slug_dir / "images" / "a.png").read_bytes() == b"png"
+
+
+@pytest.mark.parametrize("damage", ["deleted", "truncated"])
+def test_renormalize_restages_an_identical_replay_over_a_damaged_file(
+    tmp_path, monkeypatch, damage
+):
+    """The recorded sha matching the replay says nothing about the file on disk."""
+    p = _RawDrivenPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    deliverable = tmp_path / "incoming" / "fakeapp" / "fakeapp.html"
+    if damage == "deleted":
+        deliverable.unlink()
+    else:
+        deliverable.write_text("v1:<ht", encoding="utf-8")
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: p)
+
+    res = orchestrate.run_renormalize("fakeapp")
+
+    assert res["changed"] is True
+    assert deliverable.read_text(encoding="utf-8") == "v1:<html></html>"
+
+
+class _LossCountingPattern(_RawDrivenPattern):
+    """Normalize derives page loss on top of what acquire recorded."""
+
+    def __init__(self, prefix: str = "v1", drops: int = 0):
+        super().__init__(prefix)
+        self.drops = drops
+        self.seen_lost: list[int] = []
+
+    def normalize(self, acq, workdir):
+        self.seen_lost.append(acq.lost)
+        acq.lost = 3 + self.drops
+        return super().normalize(acq, workdir)
+
+
+@pytest.mark.parametrize("prefix", ["v1", "v2"], ids=["identical-replay", "changed-replay"])
+def test_renormalize_records_the_lost_count_normalize_derives(tmp_path, monkeypatch, prefix):
+    p = _LossCountingPattern()
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    assert manifest.read_manifest(slug_dir)["lost"] == 3
+
+    p.prefix, p.drops = prefix, 2
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: p)
+    orchestrate.run_renormalize("fakeapp")
+
+    assert p.seen_lost[-1] == 3, "the replay must start from the recorded loss"
+    assert manifest.read_manifest(slug_dir)["lost"] == 5
 
 
 def test_renormalize_without_manifest_raises(tmp_path):
@@ -760,6 +955,7 @@ def test_localize_images_reuses_unchanged_before_downloading(tmp_path, monkeypat
     (slug_dir / "bk.html").write_text(
         '<img src="https://x.com/a.png"><img src="https://x.com/new.png">', encoding="utf-8"
     )
+    _seal(slug_dir)
     imgs = slug_dir / "images"
     imgs.mkdir()
     (imgs / "a.png").write_bytes(b"\x89PNG\r\n\x1a\nold")
@@ -793,6 +989,43 @@ def test_localize_images_reuses_unchanged_before_downloading(tmp_path, monkeypat
     assert fetched == ["https://x.com/new.png"]  # the unchanged image never re-downloaded
     assert (imgs / "a.png").read_bytes() == b"\x89PNG\r\n\x1a\nold"  # original kept
     assert res["remaining"] == 0
+
+
+def test_localize_during_an_outage_keeps_every_cached_image(tmp_path, monkeypatch):
+    """Probe and download both fail: the cached file and its provenance must survive
+    the pass, not be deleted before a replacement is in hand."""
+    from pagespring import images
+
+    slug_dir = tmp_path / "incoming" / "bk"
+    _write_manifest(slug_dir)
+    (slug_dir / "bk.html").write_text('<img src="https://x.com/a.png?token=t">', encoding="utf-8")
+    _seal(slug_dir)
+    imgs = slug_dir / "images"
+    imgs.mkdir()
+    cached = b"\x89PNG\r\n\x1a\nold"
+    (imgs / "a.png").write_bytes(cached)
+    record = {
+        "local": "a.png",
+        "source_url": "https://x.com/a.png?token=t",
+        "etag": '"a"',
+        "last_modified": None,
+        "sha256": "unused",
+        "bytes": len(cached),
+    }
+    images.write_sidecar(slug_dir, [record])
+
+    def down(url, **kwargs):
+        raise urllib.error.URLError("network is unreachable")
+
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
+    monkeypatch.setattr(http, "fetch_bytes_meta", down)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    res = orchestrate.localize_images("bk")
+
+    assert (imgs / "a.png").read_bytes() == cached
+    assert images.read_sidecar(slug_dir) == [record]
+    assert (res["remaining"], res["pruned"], res["images_total"]) == (1, 0, 1)
 
 
 def test_reingest_preserves_images_and_sidecar(tmp_path, monkeypatch):
@@ -840,6 +1073,7 @@ def test_localize_prunes_orphans_once_fully_localized(tmp_path, monkeypatch):
     slug_dir = tmp_path / "incoming" / "bk"
     _write_manifest(slug_dir)
     (slug_dir / "bk.html").write_text('<img src="https://x.com/keep.png">', encoding="utf-8")
+    _seal(slug_dir)
     imgs = slug_dir / "images"
     imgs.mkdir()
     (imgs / "dropped.png").write_bytes(b"\x89PNG\r\n\x1a\nold")
@@ -983,6 +1217,7 @@ def test_reingest_with_images_keeps_one_copy_of_each_image(tmp_path, monkeypatch
     slug_dir = tmp_path / "incoming" / "fakeapp"
     assert sorted(p.name for p in (slug_dir / "images").iterdir()) == ["logo.png"]
     assert res["images"] == 1
+    assert res["images_downloaded"] == 0, "a reused image is not a download"
     # the deliverable points at the file that is actually there
     assert 'src="images/logo.png"' in (slug_dir / "fakeapp.html").read_text(encoding="utf-8")
 
@@ -1113,51 +1348,103 @@ def test_an_ingest_killed_during_the_image_pass_still_leaves_provenance(tmp_path
     assert m["sha256"] == manifest.sha256_file(slug_dir / "fakeapp.html")
 
 
-def test_a_reingest_keeps_a_manifest_through_a_death_before_restaging(tmp_path, monkeypatch):
-    """The clear-before-restage must not take the manifest with it: an ingest that
-    dies before staging leaves a record of the same source, which `refresh` can act on."""
-    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+def _die_writing_the_deliverable(mp, exc):
+    """Fail the deliverable write partway, the way a full disk or a kill does."""
+
+    def die_writing(path, data, **kwargs):
+        path.with_name(f".{path.name}.k1ll3d.tmp").write_bytes(data[:3])
+        raise exc
+
+    mp.setattr(_staging, "atomic_write_bytes", die_writing)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [OSError(28, "No space left on device"), KeyboardInterrupt()],
+    ids=["disk-full", "killed"],
+)
+def test_a_reingest_whose_write_fails_keeps_the_previous_deliverable(tmp_path, monkeypatch, exc):
+    p = _BodyPattern("<h1>Good</h1>")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
     orchestrate.run_ingest("https://first")
-
     slug_dir = tmp_path / "incoming" / "fakeapp"
-    assert manifest.read_manifest(slug_dir)["source_url"] == "https://first"
+    (slug_dir / "stale.html").write_text("stale", encoding="utf-8")
 
-    def die_after_clear(src, dst, *args, **kwargs):
-        raise OSError("killed just after the clear")
-
-    monkeypatch.setattr(orchestrate.shutil, "copy2", die_after_clear)
-    with pytest.raises(OSError):
+    p.body = "<h1>Newer</h1>"
+    with pytest.MonkeyPatch.context() as mp, pytest.raises(type(exc)):
+        _die_writing_the_deliverable(mp, exc)
         orchestrate.run_ingest("https://first")
 
+    assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "<h1>Good</h1>"
+    assert (slug_dir / "stale.html").exists(), "cleared before the new deliverable landed"
     survived = manifest.read_manifest(slug_dir)
-    assert survived is not None, "the clear destroyed the manifest before restaging"
-    assert survived["source_url"] == "https://first"
+    assert survived is not None and survived["source_url"] == "https://first"
 
 
-def test_a_failed_takeover_leaves_no_manifest_for_the_displaced_manual(tmp_path, monkeypatch):
-    """--replace deletes the displaced manual, so its manifest goes with it: kept,
-    it describes files that are gone — `audit` blames the wrong source, and the
-    next plain ingest of the new URL is refused over a manual no longer there."""
+def test_a_partial_write_is_swept_by_the_next_ingest(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://x")
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    (slug_dir / ".fakeapp.html.k1ll3d.tmp").write_text("<h1>Fa", encoding="utf-8")
+
+    orchestrate.run_ingest("https://x")
+
+    assert sorted(p.name for p in slug_dir.iterdir()) == ["fakeapp.html", "manifest.json"]
+
+
+def test_renormalize_whose_write_fails_keeps_the_staged_deliverable(tmp_path, monkeypatch):
+    p = _RawDrivenPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    deliverable = tmp_path / "incoming" / "fakeapp" / "fakeapp.html"
+
+    p.prefix = "v2"
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: p)
+    with pytest.MonkeyPatch.context() as mp, pytest.raises(OSError):
+        _die_writing_the_deliverable(mp, OSError(28, "No space left on device"))
+        orchestrate.run_renormalize("fakeapp")
+
+    assert deliverable.read_text(encoding="utf-8") == "v1:<html></html>"
+
+
+def test_a_takeover_killed_before_its_provenance_leaves_the_displaced_manual_whole(
+    tmp_path, monkeypatch
+):
+    """Nothing of the displaced manual is removed before the new one lands, so its
+    manifest still describes files that are there, and taking over needs --replace again."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
+    orchestrate.run_ingest("https://vendor-a.example/manual")
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    before = (slug_dir / "fakeapp.html").read_bytes()
+
+    def die(*args, **kwargs):
+        raise OSError("killed before the new manifest was written")
+
+    with pytest.MonkeyPatch.context() as mp, pytest.raises(OSError):
+        mp.setattr(orchestrate.manifest, "write_manifest", die)
+        orchestrate.run_ingest("https://vendor-b.example/manual", replace=True)
+
+    assert manifest.read_manifest(slug_dir)["source_url"] == "https://vendor-a.example/manual"
+    assert (slug_dir / "fakeapp.html").read_bytes() == before
+    with pytest.raises(InvalidInputError):
+        orchestrate.run_ingest("https://vendor-b.example/manual")
+
+
+def test_a_takeover_whose_deliverable_write_dies_keeps_the_displaced_record(tmp_path, monkeypatch):
+    """The displaced manual's file is still on disk, so its record must still name it —
+    the new source's record would describe bytes that never landed."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     orchestrate.run_ingest("https://vendor-a.example/manual")
     slug_dir = tmp_path / "incoming" / "fakeapp"
 
-    real_write = orchestrate.manifest.write_manifest
-    writes = []
-
-    def die_before_the_first_provenance(*args, **kwargs):
-        writes.append(args)
-        if len(writes) == 1:
-            raise OSError("killed before the new manifest was written")
-        return real_write(*args, **kwargs)
-
-    monkeypatch.setattr(orchestrate.manifest, "write_manifest", die_before_the_first_provenance)
-    with pytest.raises(OSError):
+    with pytest.MonkeyPatch.context() as mp, pytest.raises(KeyboardInterrupt):
+        _die_writing_the_deliverable(mp, KeyboardInterrupt())
         orchestrate.run_ingest("https://vendor-b.example/manual", replace=True)
 
-    assert manifest.read_manifest(slug_dir) is None, "the displaced manual's manifest survived"
-
-    orchestrate.run_ingest("https://vendor-b.example/manual")  # no second --replace
+    assert manifest.read_manifest(slug_dir)["source_url"] == "https://vendor-a.example/manual"
+    with pytest.raises(InvalidInputError):
+        orchestrate.run_ingest("https://vendor-b.example/manual")
+    orchestrate.run_ingest("https://vendor-b.example/manual", replace=True)
     assert manifest.read_manifest(slug_dir)["source_url"] == "https://vendor-b.example/manual"
 
 
@@ -1411,7 +1698,7 @@ def test_same_source_truth_table(held, new, same):
     non-http scheme), so they compare by resolved path — comparing them canonically
     made every saved spec equal to every other, and comparing the raw strings
     refused the same file typed a different way."""
-    assert orchestrate._same_source(held, new) is same
+    assert _staging._same_source(held, new) is same
 
 
 def test_reingest_refuses_a_manifest_missing_its_source_url(tmp_path, monkeypatch):
@@ -1502,3 +1789,239 @@ def test_a_relative_local_source_is_recorded_absolutely(tmp_path, monkeypatch):
     with pytest.raises(InvalidInputError) as exc:
         orchestrate.run_ingest("./openapi.json")
     assert "vendor-a" in str(exc.value), "the refusal must name what it protected"
+
+
+class _SizedPattern(_FakePattern):
+    """Fake whose crawl size and normalized body change between ingests."""
+
+    def __init__(self, pages, body):
+        self.pages = pages
+        self.body = body
+
+    def acquire(self, url, workdir):
+        acq = super().acquire(url, workdir)
+        acq.pages = self.pages
+        return acq
+
+    def normalize(self, acq, workdir):
+        clean = workdir / f"{acq.slug}.html"
+        clean.write_text(self.body, encoding="utf-8")
+        return clean
+
+
+def test_a_collapsed_recrawl_is_refused_and_keeps_the_staged_manual(tmp_path, monkeypatch):
+    """A source that changed shape still normalizes to a non-empty shell; staging it
+    clears the manual it replaces."""
+    p = _SizedPattern(pages=200, body="full guide")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://docs.example.com/")
+    p.pages, p.body = 2, "welcome only"
+
+    with pytest.raises(InvalidInputError, match="found 2 of the 200 pages"):
+        orchestrate.run_ingest("https://docs.example.com/")
+
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    assert (slug_dir / "fakeapp.html").read_text(encoding="utf-8") == "full guide"
+    assert manifest.read_manifest(slug_dir)["pages"] == 200
+
+
+def test_a_collapsed_single_fetch_is_refused_as_a_document_not_a_crawl(tmp_path, monkeypatch):
+    """A stub PDF replacing a manual is a real collapse, but nothing was crawled."""
+    p = _SizedPattern(pages=200, body="full guide")
+    p.single_fetch = True
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://docs.example.com/manual.pdf")
+    p.pages, p.body = 2, "this manual has moved"
+
+    with pytest.raises(InvalidInputError) as exc:
+        orchestrate.run_ingest("https://docs.example.com/manual.pdf")
+
+    message = str(exc.value)
+    assert "crawl" not in message
+    assert "2" in message and "200" in message
+    assert "--slug fakeapp --replace" in message
+
+
+@pytest.mark.parametrize("keep_raw", [True, False])
+def test_the_collapse_hint_keeps_raw_only_when_the_slug_holds_it(tmp_path, monkeypatch, keep_raw):
+    """A --replace re-ingest without --keep-raw deletes the raw/ the slug holds."""
+    p = _SizedPattern(pages=200, body="full guide")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://docs.example.com/", keep_raw=keep_raw)
+    p.pages, p.body = 2, "welcome only"
+
+    with pytest.raises(InvalidInputError) as exc:
+        orchestrate.run_ingest("https://docs.example.com/")
+
+    assert ("--replace --keep-raw" in str(exc.value)) is keep_raw
+
+
+def test_replace_accepts_a_collapsed_recrawl(tmp_path, monkeypatch):
+    p = _SizedPattern(pages=200, body="full guide")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://docs.example.com/")
+    p.pages, p.body = 2, "smaller edition"
+
+    res = orchestrate.run_ingest("https://docs.example.com/", replace=True)
+
+    assert res["pages"] == 2
+    staged = tmp_path / "incoming" / "fakeapp" / "fakeapp.html"
+    assert staged.read_text(encoding="utf-8") == "smaller edition"
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [(9, 1), (200, 100), (200, None), (None, 1)],
+    ids=["small-manual", "half-kept", "unknown-now", "unknown-before"],
+)
+def test_the_guard_leaves_small_modest_and_unknown_counts_alone(
+    tmp_path, monkeypatch, before, after
+):
+    p = _SizedPattern(pages=before, body="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://docs.example.com/")
+    p.pages, p.body = after, "v2"
+
+    assert orchestrate.run_ingest("https://docs.example.com/")["changed"] is True
+
+
+def test_a_zero_keep_pct_disables_the_guard(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrate.cfg, "COLLAPSE_KEEP_PCT", 0)
+    p = _SizedPattern(pages=200, body="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://docs.example.com/")
+    p.pages, p.body = 1, "v2"
+
+    assert orchestrate.run_ingest("https://docs.example.com/")["changed"] is True
+
+
+def test_a_capped_recrawl_does_not_replace_a_complete_larger_manual(tmp_path, monkeypatch):
+    """A crawl that stopped at its page cap proves nothing about the source shrinking,
+    even when it kept more than COLLAPSE_KEEP_PCT of the staged pages."""
+    p = _SizedPattern(pages=1500, body="all 1500 pages")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://docs.example.com/")
+
+    def capped(url, workdir):
+        acq = _SizedPattern.acquire(p, url, workdir)
+        acq.truncated = True
+        return acq
+
+    p.pages, p.body = 1000, "first 1000 pages"
+    monkeypatch.setattr(p, "acquire", capped)
+
+    with pytest.raises(InvalidInputError, match="page cap with 1000 pages") as exc:
+        orchestrate.run_ingest("https://docs.example.com/")
+
+    assert "--slug fakeapp --replace" in str(exc.value)
+    staged = tmp_path / "incoming" / "fakeapp" / "fakeapp.html"
+    assert staged.read_text(encoding="utf-8") == "all 1500 pages"
+
+
+def test_a_capped_recrawl_may_replace_a_manual_that_was_capped_too(tmp_path, monkeypatch):
+    p = _SizedPattern(pages=1000, body="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://docs.example.com/")
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    m = manifest.read_manifest(slug_dir)
+    m["truncated"] = True
+    manifest.write_manifest(slug_dir, m)
+
+    def capped(url, workdir):
+        acq = _SizedPattern.acquire(p, url, workdir)
+        acq.truncated = True
+        return acq
+
+    p.body = "v2"
+    monkeypatch.setattr(p, "acquire", capped)
+
+    assert orchestrate.run_ingest("https://docs.example.com/")["changed"] is True
+
+
+def _localized_slug(tmp_path, monkeypatch):
+    p = _RemoteImagePattern("v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    _mock_image_fetch(monkeypatch)
+    orchestrate.run_ingest("https://x", download_images=True)
+    return p, tmp_path / "incoming" / "fakeapp"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [OSError(28, "No space left on device"), KeyboardInterrupt()],
+    ids=["disk-full", "killed"],
+)
+def test_a_failed_restage_never_labels_the_old_file_with_the_new_record(tmp_path, monkeypatch, exc):
+    """The old localized file must not survive under a manifest describing content that
+    never landed — the next refresh would call it unchanged."""
+    p, slug_dir = _localized_slug(tmp_path, monkeypatch)
+    p.prefix = "v2"
+    with pytest.MonkeyPatch.context() as mp, pytest.raises(type(exc)):
+        _die_writing_the_deliverable(mp, exc)
+        orchestrate.run_ingest("https://x", if_changed=True)
+
+    res = orchestrate.run_ingest("https://x", if_changed=True)
+
+    assert res["changed"] is True
+    assert "<h1>v2</h1>" in (slug_dir / "fakeapp.html").read_text(encoding="utf-8")
+
+
+def test_a_restage_killed_before_its_record_is_restaged_again(tmp_path, monkeypatch):
+    p, slug_dir = _localized_slug(tmp_path, monkeypatch)
+    p.prefix = "v2"
+    real_stage = orchestrate._stage_file
+
+    def stage_then_die(src, dst):
+        real_stage(src, dst)
+        raise KeyboardInterrupt
+
+    with pytest.MonkeyPatch.context() as mp, pytest.raises(KeyboardInterrupt):
+        mp.setattr(orchestrate, "_stage_file", stage_then_die)
+        orchestrate.run_ingest("https://x", if_changed=True)
+    p.prefix = "v1"
+
+    res = orchestrate.run_ingest("https://x", if_changed=True)
+
+    assert res["changed"] is True
+    assert "<h1>v1</h1>" in (slug_dir / "fakeapp.html").read_text(encoding="utf-8")
+
+
+def test_an_interrupted_localize_keeps_the_integrity_record(tmp_path, monkeypatch):
+    from pagespring import audit, images
+
+    _p, slug_dir = _localized_slug(tmp_path, monkeypatch)
+    recorded = manifest.read_manifest(slug_dir)["localized_sha256"]
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    with pytest.MonkeyPatch.context() as mp, pytest.raises(KeyboardInterrupt):
+        mp.setattr(images, "reuse_unchanged", interrupted)
+        orchestrate.localize_images("fakeapp")
+
+    assert manifest.read_manifest(slug_dir)["localized_sha256"] == recorded
+    deliverable = slug_dir / "fakeapp.html"
+    deliverable.write_text(deliverable.read_text(encoding="utf-8")[:12], encoding="utf-8")
+    assert ("sha_mismatch", "error") in [
+        (f["check"], f["level"]) for f in audit.audit_slug("fakeapp")
+    ]
+    with pytest.raises(PreconditionError):
+        orchestrate.localize_images("fakeapp")
+
+
+def test_renormalize_restoring_a_damaged_file_keeps_the_image_cache(tmp_path, monkeypatch):
+    """A byte-identical replay names the same image URLs the cache was fetched from;
+    those files may be the only copies of images behind expired tokens."""
+    p = _RawDrivenPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    (slug_dir / "images").mkdir()
+    (slug_dir / "images" / "a.png").write_bytes(b"\x89PNG\r\n\x1a\ncached")
+    (slug_dir / "fakeapp.html").write_text("v1:<ht", encoding="utf-8")
+    monkeypatch.setattr(orchestrate, "pattern_by_name", lambda name: p)
+
+    res = orchestrate.run_renormalize("fakeapp")
+
+    assert res["changed"] is True
+    assert (slug_dir / "images" / "a.png").read_bytes() == b"\x89PNG\r\n\x1a\ncached"

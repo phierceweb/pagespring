@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from pf_core.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.base import AcquireResult
@@ -16,10 +17,59 @@ FIXTURE = Path(__file__).parent / "fixtures" / "apple_help" / "numbers"
     [
         ("https://support.apple.com/guide/numbers/welcome/mac", "numbers", "mac"),
         ("https://support.apple.com/guide/imovie/welcome/macos", "imovie", "macos"),
+        ("https://support.apple.com/guide/iphone/welcome/ios", "iphone", "ios"),
+        (
+            "https://support.apple.com/guide/logicpro-ipad/welcome/ipados",
+            "logicpro-ipad",
+            "ipados",
+        ),
+        ("https://support.apple.com/guide/watch/welcome/watchos", "watch", "watchos"),
+        (
+            "https://support.apple.com/guide/numbers/intro-tables-num456/13.0/mac/14.0",
+            "numbers",
+            "mac",
+        ),
+        ("https://support.apple.com/guide/logicpro/", "logicpro", None),
+        ("https://support.apple.com/en-gb/guide/watch/welcome", "watch", None),
     ],
 )
 def test_parse_apple_url(url, slug, platform):
     assert _parse_apple_url(url) == (slug, platform)
+
+
+@pytest.mark.parametrize(
+    "seed, first_fetch, final",
+    [
+        ("/guide/iphone/", "/guide/iphone/", "/guide/iphone/welcome/ios"),
+        ("/guide/iphone/welcome", "/guide/iphone/welcome", "/guide/iphone/welcome/ios"),
+        ("/guide/iphone/set-up-iph3a1b2c3d4", "/guide/iphone/welcome", "/guide/iphone/welcome/ios"),
+        ("/en-gb/guide/watch/", "/en-gb/guide/watch/", "/en-gb/guide/watch/welcome/watchos"),
+    ],
+)
+def test_a_seed_naming_no_platform_crawls_the_platform_it_redirects_to(
+    tmp_path, monkeypatch, seed, first_fetch, final
+):
+    host = "https://support.apple.com"
+    prefix = final.partition("/guide/")[0]
+    guide, platform = final.split("/")[-3], final.rsplit("/", 1)[1]
+    topic = f"{prefix}/guide/{guide}/set-up-iph3a1b2c3d4/{platform}"
+    welcome = f'<html><body><a href="{topic}">Set up</a></body></html>'
+    fetched: list[str] = []
+
+    def fetch(url, **kwargs):
+        fetched.append(url)
+        if "set-up" in url:
+            return f"{host}{topic}", "<html><body>topic</body></html>"
+        return f"{host}{final}", welcome
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = AppleHelpPattern().acquire(f"{host}{seed}", tmp_path)
+
+    assert fetched[0] == f"{host}{first_fetch}"
+    names = sorted(p.name for p in acq.raw_dir.glob("*.html"))
+    assert names == ["set-up-iph3a1b2c3d4.html", "welcome.html"]
 
 
 def test_acquire_crawls_and_saves(tmp_path, monkeypatch):
@@ -181,6 +231,77 @@ def test_same_topic_under_short_and_long_url_is_fetched_once(tmp_path, monkeypat
     assert "aaf-files-lgcp6f2262ba.html" in [p.name for p in acq.raw_dir.glob("*.html")]
 
 
+def test_crawl_follows_version_less_topic_links(tmp_path, monkeypatch):
+    """Guide TOCs link topics as /<topic>/<platform>. Versioned links on a welcome
+    page name older releases' welcome pages, which are not topics."""
+    welcome = (
+        "<html><body>"
+        '<a href="/guide/logicpro/aaf-files-lgcp6f2262ba/mac">topic</a>'
+        '<a href="/guide/logicpro/welcome/10.5/mac/10.14.6">Logic Pro 10.5</a>'
+        '<a href="/guide/logicpro/other-platform-lgcp00000001/macos">other platform</a>'
+        "</body></html>"
+    )
+    fetched: list[str] = []
+
+    def fetch(url, **kwargs):
+        fetched.append(url)
+        return url, welcome if "/welcome/" in url else "<html><body>topic</body></html>"
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = AppleHelpPattern().acquire(
+        "https://support.apple.com/guide/logicpro/welcome/mac", tmp_path
+    )
+
+    assert fetched == [
+        "https://support.apple.com/guide/logicpro/welcome/mac",
+        "https://support.apple.com/guide/logicpro/aaf-files-lgcp6f2262ba/mac",
+    ]
+    assert acq.pages == 2
+
+
+def test_an_ipados_guide_crawls_its_own_platform(tmp_path, monkeypatch):
+    welcome = (
+        '<html><body><a href="/guide/logicpro-ipad/adaptive-limiter-lpip6fcabd78/ipados">'
+        "Adaptive Limiter</a></body></html>"
+    )
+
+    def fetch(url, **kwargs):
+        return url, welcome if "/welcome/" in url else "<html><body>topic</body></html>"
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = AppleHelpPattern().acquire(
+        "https://support.apple.com/guide/logicpro-ipad/welcome/ipados", tmp_path
+    )
+
+    names = sorted(p.name for p in acq.raw_dir.glob("*.html"))
+    assert names == ["adaptive-limiter-lpip6fcabd78.html", "welcome.html"]
+
+
+def test_a_topic_seeded_crawl_fetches_the_welcome_page_first(tmp_path, monkeypatch):
+    """The merge takes its outline and title from welcome.html, which no topic links to.
+    The seed topic, linked again from welcome, is fetched once."""
+    seed = "https://support.apple.com/guide/numbers/intro-tables-num456/mac"
+    welcome = '<html><body><a href="/guide/numbers/intro-tables-num456/mac">t</a></body></html>'
+    fetched: list[str] = []
+
+    def fetch(url, **kwargs):
+        fetched.append(url)
+        return url, welcome if "/welcome/" in url else "<html><body>topic</body></html>"
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = AppleHelpPattern().acquire(seed, tmp_path)
+
+    assert fetched == ["https://support.apple.com/guide/numbers/welcome/mac", seed]
+    names = sorted(p.name for p in acq.raw_dir.glob("*.html"))
+    assert names == ["intro-tables-num456.html", "welcome.html"]
+
+
 def test_a_topic_whose_fetch_raises_counts_as_lost(tmp_path, monkeypatch):
     """A discovered topic that never staged is reported as lost, and the crawl continues."""
     welcome = (
@@ -316,3 +437,129 @@ def test_a_topic_with_no_extractable_body_is_reported_as_lost(tmp_path):
     assert "real body" in merged
     assert "gallery only" not in merged, "fixture assumption: the hollow topic is skipped"
     assert acq.lost == 1, f"a dropped topic was not reported as lost (lost={acq.lost})"
+
+
+def test_a_crawl_with_no_topic_refuses_to_normalize(tmp_path):
+    """The titled wrapper alone is non-empty, so staging would accept a welcome-only
+    crawl and clear the guide it replaces."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "welcome.html").write_text(
+        (FIXTURE / "welcome.html").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    acq = AcquireResult(raw_dir=raw, kind="html", slug="numbers", pages=1)
+
+    with pytest.raises(InvalidInputError, match="no topic page"):
+        AppleHelpPattern().normalize(acq, tmp_path)
+
+
+def test_a_topic_token_with_an_underscore_is_crawled(tmp_path, monkeypatch):
+    welcome = (
+        '<html><body><a href="/guide/logicpro-ipad/beat-breaker-tips-lpip_bbtips01/ipados">'
+        "Beat Breaker tips</a></body></html>"
+    )
+
+    def fetch(url, **kwargs):
+        return url, welcome if "/welcome/" in url else "<html><body>topic</body></html>"
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = AppleHelpPattern().acquire(
+        "https://support.apple.com/guide/logicpro-ipad/welcome/ipados", tmp_path
+    )
+
+    assert "beat-breaker-tips-lpip_bbtips01.html" in [p.name for p in acq.raw_dir.glob("*.html")]
+
+
+def test_a_locale_seed_keeps_its_locale_and_saves_welcome(tmp_path, monkeypatch):
+    seed = "https://support.apple.com/en-gb/guide/numbers/intro-tables-num456/mac"
+    welcome = (
+        "<html><body>"
+        '<a href="/en-gb/guide/numbers/intro-tables-num456/mac">t</a>'
+        '<a href="/en-gb/guide/numbers/whats-new-num123/mac">n</a>'
+        "</body></html>"
+    )
+    fetched: list[str] = []
+
+    def fetch(url, **kwargs):
+        fetched.append(url)
+        return url, welcome if "/welcome/" in url else "<html><body>topic</body></html>"
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = AppleHelpPattern().acquire(seed, tmp_path)
+
+    assert fetched == [
+        "https://support.apple.com/en-gb/guide/numbers/welcome/mac",
+        seed,
+        "https://support.apple.com/en-gb/guide/numbers/whats-new-num123/mac",
+    ]
+    names = sorted(p.name for p in acq.raw_dir.glob("*.html"))
+    assert names == ["intro-tables-num456.html", "welcome.html", "whats-new-num123.html"]
+
+
+def test_a_versioned_topic_seed_fetches_that_releases_welcome_page(tmp_path, monkeypatch):
+    fetched: list[str] = []
+
+    def fetch(url, **kwargs):
+        fetched.append(url)
+        return url, "<html><body>no links</body></html>"
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    AppleHelpPattern().acquire(
+        "https://support.apple.com/guide/numbers/intro-tables-num456/13.0/mac/14.0", tmp_path
+    )
+
+    assert fetched[0] == "https://support.apple.com/guide/numbers/welcome/13.0/mac/14.0"
+
+
+@pytest.mark.parametrize("crawl_lost", [0, 1], ids=["never-queued", "fetch-failed"])
+def test_a_toc_topic_the_crawl_never_saved_counts_as_lost_once(tmp_path, crawl_lost):
+    """A link shape the crawl cannot follow leaves TOC entries unfetched; the merge skips
+    them silently, so they are reported against the TOC — without counting a topic
+    whose failed fetch the crawl already reported."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    for name in ("welcome.html", "whats-new-num123.html"):
+        (raw / name).write_text((FIXTURE / name).read_text(encoding="utf-8"), encoding="utf-8")
+    acq = AcquireResult(raw_dir=raw, kind="html", slug="numbers", pages=2, lost=crawl_lost)
+
+    AppleHelpPattern().normalize(acq, tmp_path)
+
+    assert acq.lost == 1  # intro-tables-num456 is in the TOC but was never saved
+
+
+def test_normalizing_again_with_the_reported_lost_reports_the_same_lost(tmp_path):
+    """A replay seeds `lost` from the manifest, which already holds this normalize's count."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    for name in ("welcome.html", "whats-new-num123.html"):
+        (raw / name).write_text((FIXTURE / name).read_text(encoding="utf-8"), encoding="utf-8")
+    (raw / "hollow.html").write_text(
+        '<html><body><div id="article-section"><p>gallery only</p></div></body></html>',
+        encoding="utf-8",
+    )
+    first = AcquireResult(raw_dir=raw, kind="html", slug="numbers", pages=3)
+    AppleHelpPattern().normalize(first, tmp_path)
+    replay = AcquireResult(raw_dir=raw, kind="html", slug="numbers", pages=3, lost=first.lost)
+
+    AppleHelpPattern().normalize(replay, tmp_path)
+
+    assert first.lost == 2  # intro-tables-num456 never saved + hollow has no body
+    assert replay.lost == first.lost
+
+
+def test_a_seed_redirected_off_the_guide_does_not_crash(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        http, "fetch_text", lambda url, **k: ("https://support.apple.com/", "<html></html>")
+    )
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = AppleHelpPattern().acquire("https://support.apple.com/guide/aperture/", tmp_path)
+
+    with pytest.raises(InvalidInputError, match="no topic page"):
+        AppleHelpPattern().normalize(acq, tmp_path)

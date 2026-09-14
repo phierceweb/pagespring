@@ -64,3 +64,8 @@ bin/lint    # ruff check + ruff format --check + mypy (strict) + structural gate
 See [docs/usage.md](https://github.com/phierceweb/pagespring/blob/main/docs/usage.md) for the full command set and
 [docs/architecture.md](https://github.com/phierceweb/pagespring/blob/main/docs/architecture.md) for the acquire → normalize flow
 and how to add a new source pattern.
+
+## License
+
+Apache-2.0 — see [LICENSE](https://github.com/phierceweb/pagespring/blob/main/LICENSE). Releases through
+0.11.0 were published under the MIT license and stay MIT.

@@ -27,12 +27,95 @@ def test_match():
     assert not p.match("https://docs.python.org/3/")
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://foo.readthedocs.io/en/latest/_static/openapi.yaml",
+        "https://foo.readthedocs.io/en/latest/_static/swagger.json",
+        "https://foo.readthedocs.io/en/latest/_static/api.YML",
+        "https://foo.readthedocs.io/en/latest/_downloads/abc123/examples.zip",
+        "https://foo.readthedocs.io/en/latest/_downloads/abc123/source.tar.gz",
+        "https://foo.readthedocs.io/en/latest/_downloads/abc123/guide.pdf",
+    ],
+)
+def test_a_url_naming_a_file_is_declined(url):
+    """The file named is the document; the project's PDF build is a different one."""
+    assert not ReadTheDocsPattern().match(url)
+
+
 def test_lang_version():
     assert _lang_version("/en/latest/") == ("en", "latest")
     assert _lang_version("/en/stable/intro.html") == ("en", "stable")
     assert _lang_version("/pt-br/v2.0/") == ("pt-br", "v2.0")
     assert _lang_version("/") == ("en", "latest")
     assert _lang_version("/intro.html") == ("en", "latest")
+
+
+def test_subproject_acquire_downloads_the_subproject_build(tmp_path, monkeypatch):
+    """RTD serves a subproject's build at /_/downloads/<alias>/<lang>/<version>/pdf/."""
+    seen = {}
+
+    def fake_fetch_bytes(url, **kwargs):
+        seen["url"] = url
+        return url, _PDF
+
+    monkeypatch.setattr(http, "fetch_bytes", fake_fetch_bytes)
+    acq = ReadTheDocsPattern().acquire(
+        "https://parent.readthedocs.io/projects/child/en/stable/usage.html", tmp_path
+    )
+    assert seen["url"] == "https://parent.readthedocs.io/_/downloads/child/en/stable/pdf/"
+    assert acq.slug == "parent-child"
+
+
+@pytest.mark.parametrize(
+    ("url", "download"),
+    [
+        (
+            "https://parent.readthedocs.io/projects/child/",
+            "https://parent.readthedocs.io/_/downloads/child/en/latest/pdf/",
+        ),
+        (
+            "https://parent.readthedocs.io/projects/api/python/ja/v2.1/",
+            "https://parent.readthedocs.io/_/downloads/api/python/ja/v2.1/pdf/",
+        ),
+        (
+            "https://parent.readthedocs.io/projects/ui/en/latest/",
+            "https://parent.readthedocs.io/_/downloads/ui/en/latest/pdf/",
+        ),
+    ],
+)
+def test_subproject_alias_language_and_version_come_from_the_path(
+    tmp_path, monkeypatch, url, download
+):
+    seen = {}
+
+    def fake_fetch_bytes(u, **kwargs):
+        seen["url"] = u
+        return u, _PDF
+
+    monkeypatch.setattr(http, "fetch_bytes", fake_fetch_bytes)
+    ReadTheDocsPattern().acquire(url, tmp_path)
+    assert seen["url"] == download
+
+
+def test_subproject_without_a_build_crawls_the_subproject(tmp_path, monkeypatch):
+    def fake_fetch_bytes(url, **kwargs):
+        raise urllib.error.HTTPError(url, 404, "Not Found", None, None)  # type: ignore[arg-type]
+
+    called = {}
+
+    def fake_sphinx_acquire(base_url, workdir, *, slug, title):
+        called["base"] = base_url
+        called["slug"] = slug
+        raw = workdir / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        return AcquireResult(raw_dir=raw, kind="html", slug=slug, pages=3, title=title)
+
+    monkeypatch.setattr(http, "fetch_bytes", fake_fetch_bytes)
+    monkeypatch.setattr(_sphinx, "acquire", fake_sphinx_acquire)
+    ReadTheDocsPattern().acquire("https://parent.readthedocs.io/projects/child/en/v3/", tmp_path)
+    assert called["base"] == "https://parent.readthedocs.io/projects/child/en/v3/"
+    assert called["slug"] == "parent-child"
 
 
 def test_acquire_downloads_pdf_build(tmp_path, monkeypatch):

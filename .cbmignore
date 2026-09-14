@@ -1,0 +1,3 @@
+# Prose lives in qmd. Section nodes are not filtered from search_graph BM25,
+# so indexing docs here only dilutes symbol search.
+docs/

@@ -2,14 +2,16 @@
 
 RTD projects publish downloadable builds at
 ``https://<proj>.readthedocs.io/_/downloads/<lang>/<version>/pdf/`` (an
-extensionless URL that serves the PDF). acquire derives ``<lang>/<version>``
-from the page URL (default ``en/latest``), downloads that build, and passes the
-PDF through — the same deliverable shape as pdf_url. A 404 at the download URL
-(no build published) falls back to a Sphinx crawl of the rendered docs; any
-other fetch failure propagates (exit 4).
+extensionless URL that serves the PDF); a subproject served at
+``/projects/<alias>/<lang>/<version>/`` publishes its own at
+``/_/downloads/<alias>/<lang>/<version>/pdf/``. acquire derives the alias,
+language and version from the page URL (default ``en/latest``), downloads that
+build, and passes the PDF through — the same deliverable shape as pdf_url. A 404
+at the download URL (no build published) falls back to a Sphinx crawl of the
+rendered docs; any other fetch failure propagates (exit 4).
 
-Explicit download URLs (path ending ``.pdf``/``/pdf``, or any path under
-``/_/downloads/``) are declined so they keep routing to pdf_url unchanged.
+Declined, so the patterns that own them claim them: any path under
+``/_/downloads/``, and a URL naming a PDF, API spec or archive file.
 """
 
 from __future__ import annotations
@@ -21,15 +23,20 @@ from urllib.parse import urlparse
 
 from pf_core.exceptions import InvalidInputError
 from pf_core.log import get_logger
+from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.patterns import _pdf, _sphinx
+from pagespring.patterns.archive_download import ArchiveDownloadPattern
 from pagespring.patterns.docs_probe import DocsProbePattern
+from pagespring.patterns.pdf_url import PdfUrlPattern
 
 log = get_logger(__name__)
 
 _LANG_RE = re.compile(r"^[a-z]{2}(?:-[a-z]{2,4})?$")
+# Suffixes only: api_spec's name tokens would also claim a docs page like openapi.html.
+_SPEC_SUFFIXES = (".json", ".yaml", ".yml")
 
 
 def _lang_version(path: str) -> tuple[str, str]:
@@ -40,24 +47,54 @@ def _lang_version(path: str) -> tuple[str, str]:
     return "en", "latest"
 
 
+def _subproject(path: str) -> tuple[str, str, str] | None:
+    """(alias, lang, version) for a ``/projects/<alias>/…`` path, else None.
+
+    An alias may span segments (``api/python``); it runs up to the first
+    language segment that has a version after it.
+    """
+    segs = [s for s in path.split("/") if s]
+    if len(segs) < 2 or segs[0] != "projects":
+        return None
+    rest = segs[1:]
+    for i in range(1, len(rest) - 1):
+        if _LANG_RE.match(rest[i]):
+            return "/".join(rest[:i]), rest[i], rest[i + 1]
+    return rest[0], "en", "latest"
+
+
+def _names_a_file(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return (
+        path.endswith(_SPEC_SUFFIXES)
+        or ArchiveDownloadPattern().match(url)
+        or PdfUrlPattern().match(url)
+    )
+
+
 class ReadTheDocsPattern:
     name = "readthedocs"
 
     def match(self, url: str) -> bool:
         p = urlparse(url)
-        path = p.path.lower().rstrip("/")
-        if path.endswith(".pdf") or path.endswith("/pdf"):
-            return False  # explicit download links keep routing to pdf_url
-        if "/_/downloads/" in p.path.lower():
-            return False  # any explicit RTD download build (pdf, htmlzip, epub, …)
+        if "/_/downloads/" in p.path.lower() or _names_a_file(url):
+            return False
         return p.netloc.lower().endswith(".readthedocs.io")
 
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         p = urlparse(url)
         host = p.netloc.lower()
         slug = host.split(".")[0]
-        lang, version = _lang_version(p.path)
-        dl = f"{p.scheme}://{host}/_/downloads/{lang}/{version}/pdf/"
+        sub = _subproject(p.path)
+        if sub is None:
+            lang, version = _lang_version(p.path)
+            dl = f"{p.scheme}://{host}/_/downloads/{lang}/{version}/pdf/"
+            base = f"{p.scheme}://{host}/{lang}/{version}/"
+        else:
+            alias, lang, version = sub
+            slug = slugify(f"{slug}-{alias}")
+            dl = f"{p.scheme}://{host}/_/downloads/{alias}/{lang}/{version}/pdf/"
+            base = f"{p.scheme}://{host}/projects/{alias}/{lang}/{version}/"
         try:
             _final, data = http.fetch_bytes(dl)
         except urllib.error.HTTPError as exc:
@@ -65,7 +102,6 @@ class ReadTheDocsPattern:
                 raise  # fetch failed — orchestrate reports it honestly (exit 4)
             # No PDF build published — crawl the rendered docs instead.
             log.info("readthedocs.no_pdf_build", download=dl, status=exc.code)
-            base = f"{p.scheme}://{host}/{lang}/{version}/"
             return _sphinx.acquire(base, workdir, slug=slug, title=None)
         if not data.startswith(b"%PDF"):
             raise InvalidInputError(f"{dl} did not serve a PDF — unexpected RTD response")

@@ -25,6 +25,8 @@ from pagespring.patterns import _gitbook
 
 log = get_logger(__name__)
 
+_MAX_PAGES = 1000  # a capped crawl sets truncated
+
 
 def _slug(url: str) -> str:
     host = urlparse(url).netloc.lower()
@@ -48,7 +50,13 @@ class GitBookPattern:
         return urlparse(url).netloc.lower().endswith(".gitbook.io")
 
     def acquire(
-        self, url: str, workdir: Path, *, slug: str | None = None, title: str | None = None
+        self,
+        url: str,
+        workdir: Path,
+        *,
+        slug: str | None = None,
+        title: str | None = None,
+        rendered: bool = True,
     ) -> AcquireResult:
         base = url.rstrip("/")
         p = urlparse(base)
@@ -56,6 +64,10 @@ class GitBookPattern:
 
         _f, llms = http.fetch_text(f"{base}/llms.txt")
         pages = _gitbook.discover_pages(llms)
+        truncated = len(pages) > _MAX_PAGES
+        if truncated:
+            log.warning("gitbook.truncated", found=len(pages), cap=_MAX_PAGES)
+            pages = pages[:_MAX_PAGES]
 
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
@@ -64,14 +76,15 @@ class GitBookPattern:
         for i, page in enumerate(pages):
             try:
                 _m, md = http.fetch_text(page)
-                try:
-                    _h, html = http.fetch_text(page[:-3])  # rendered page (drop ".md")
-                except Exception as exc:
-                    # Not a lost page — the markdown carries the text. Only the
-                    # image refs stay unresolved at their /files/<id> form.
-                    log.warning("gitbook.render_fetch_error", url=page[:-3], error=str(exc))
-                    html = ""
-                clean = _gitbook.process_page(md, html, origin)
+                html = ""
+                if rendered:
+                    try:
+                        _h, html = http.fetch_text(page[:-3])  # rendered page (drop ".md")
+                    except Exception as exc:
+                        # Not a lost page — the markdown carries the text. Only the
+                        # image refs stay unresolved at their /files/<id> form.
+                        log.warning("gitbook.render_fetch_error", url=page[:-3], error=str(exc))
+                clean = _gitbook.process_page(md, html, origin, page_url=page)
             except Exception as exc:
                 lost += 1
                 log.warning("gitbook.fetch_error", url=page, error=str(exc))
@@ -90,7 +103,13 @@ class GitBookPattern:
         slug = slug or _slug(url)
         log.info("gitbook.acquire", base=base, pages=saved, slug=slug, lost=lost)
         return AcquireResult(
-            raw_dir=raw_dir, kind="markdown", slug=slug, pages=saved, lost=lost, title=title
+            raw_dir=raw_dir,
+            kind="markdown",
+            slug=slug,
+            pages=saved,
+            lost=lost,
+            title=title,
+            truncated=truncated,
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:

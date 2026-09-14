@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Literal, TypedDict, TypeGuard
+from typing import Literal, TypedDict
 
 from pf_core.log import get_logger
 
 from pagespring import manifest
+from pagespring._integrity import LOCAL_IMG_RE, image_pass_ran, usable
 from pagespring.config import cfg
 from pagespring.paths import slug_dir
 from pagespring.registry import pattern_by_name
@@ -24,7 +25,6 @@ log = get_logger(__name__)
 
 Level = Literal["error", "warning"]
 
-_LOCAL_IMG_RE = re.compile(r'(?:src=["\']|\]\()(images/[^"\')\s]+)')
 # Deliberately not the localizer's matcher: a ref it declines to claim is one it
 # never downloads and never counts, so borrowing its count would report clean on
 # the one deliverable still remote.
@@ -47,22 +47,13 @@ def _f(check: str, level: Level, detail: str) -> Finding:
     return {"check": check, "level": level, "detail": detail}
 
 
-# read_manifest returns any parseable JSON as-is, so a truncated file reaches the
-# checks missing the fields they index — and must not abort the corpus sweep.
-_REQUIRED_FIELDS = ("source_url", "pattern", "kind", "deliverable", "pages", "sha256", "images")
-
-
-def _usable(m: object) -> TypeGuard[manifest.Manifest]:
-    return isinstance(m, dict) and all(k in m for k in _REQUIRED_FIELDS)
-
-
 def audit_slug(slug: str) -> list[Finding]:
     """Audit one ``incoming/<slug>/``; empty list ⇒ healthy."""
     incoming_dir = slug_dir(slug)
     m = manifest.read_manifest(incoming_dir)
     if m is None:
         return [_f("manifest_missing", "error", f"no manifest.json in {incoming_dir}/")]
-    if not _usable(m):
+    if not usable(m):
         return [
             _f(
                 "manifest_missing",
@@ -80,16 +71,13 @@ def audit_slug(slug: str) -> list[Finding]:
     findings: list[Finding] = []
 
     # Localize re-points refs, so `localized_sha256` — not `sha256` — describes a
-    # localized file. A pass ran if images>0 (0 after a kill mid-pass), or images/
-    # exists *and* the file still carries a local ref (a re-ingest keeps the dir).
+    # localized file.
     doc_text = (
         deliverable.read_text(encoding="utf-8", errors="replace")
         if m["kind"] in ("markdown", "html")
         else ""
     )
-    localized = m["images"] > 0 or (
-        (incoming_dir / "images").is_dir() and bool(_LOCAL_IMG_RE.search(doc_text))
-    )
+    localized = image_pass_ran(incoming_dir, m, doc_text)
     expected = m.get("localized_sha256") or (None if localized else m["sha256"])
     actual = manifest.sha256_file(deliverable)
     if expected is not None:
@@ -104,7 +92,7 @@ def audit_slug(slug: str) -> list[Finding]:
                 "sha_unverified",
                 "warning",
                 "localized deliverable carries no localized_sha256 — integrity "
-                "unverifiable; re-run localize to record one",
+                "unverifiable; re-ingest with --download-images to record one",
             )
         )
 
@@ -181,7 +169,7 @@ def audit_slug(slug: str) -> list[Finding]:
         # check sees it: the check above counts only REMOTE refs, so a fully
         # localized deliverable with a dead local ref audits clean.
         dangling = sorted(
-            ref for ref in set(_LOCAL_IMG_RE.findall(doc_text)) if not (incoming_dir / ref).exists()
+            ref for ref in set(LOCAL_IMG_RE.findall(doc_text)) if not (incoming_dir / ref).exists()
         )
         if dangling:
             findings.append(
@@ -221,7 +209,7 @@ def _corpus_findings(slugs: list[str]) -> dict[str, list[Finding]]:
     by_url: dict[str, list[str]] = {}
     for slug in slugs:
         m = manifest.read_manifest(incoming / slug)
-        if _usable(m):
+        if usable(m):
             by_sha.setdefault(m["sha256"], []).append(slug)
             by_url.setdefault(m["source_url"], []).append(slug)
 

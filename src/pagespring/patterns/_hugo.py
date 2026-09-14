@@ -6,8 +6,8 @@ sitemap is discovered by walking up from the given URL. Keep only pages under
 that URL's directory, so pointing at one product on a shared host doesn't drag
 in its siblings. Content lives in ``<main>`` across the Hugo docs themes.
 
-Hugo also publishes a ``/print/`` view holding the whole site concatenated;
-including it would duplicate every other page.
+Hugo also publishes a ``/print/`` view holding the whole site concatenated at
+the site root; including it would duplicate every other page.
 """
 
 from __future__ import annotations
@@ -42,20 +42,18 @@ _SITEMAP_EL = f"{_NS}sitemap"
 _CHROME_CSS = (
     "nav, header, footer, div.drawer, div.book-menu, div.td-sidebar, aside.sidebar, #sidebar"
 )
-_PRINT_SEG = "/print/"
-# Hugo auto-generates taxonomy list pages. They index the manual rather than
-# belonging to it, and their list-page shell duplicates the home page verbatim.
-_TAXONOMY_SEGS = ("/categories/", "/tags/")
+# The print view, and the taxonomy list pages Hugo auto-generates: those index the
+# manual rather than belonging to it, and their shell duplicates the home page.
+_GENERATED_SEGS = ("print", "categories", "tags")
 
 
-def _is_content_page(url: str, base: str) -> bool:
-    """True when ``url`` is a real topic under ``base`` — not print or taxonomy."""
+def _is_content_page(url: str, base: str, roots: set[str]) -> bool:
+    """True when ``url`` is a real topic under ``base`` — not a print or taxonomy
+    page directly under one of the site ``roots``."""
     if url != base and not url.startswith(base + "/"):
         return False
-    path = urlparse(url).path
-    if not path.endswith("/"):
-        path += "/"
-    return _PRINT_SEG not in path and not any(seg in path for seg in _TAXONOMY_SEGS)
+    generated = [f"{root}/{seg}" for root in roots for seg in _GENERATED_SEGS]
+    return not any(url == g or url.startswith(g + "/") for g in generated)
 
 
 def _base_dir(url: str) -> str:
@@ -102,20 +100,22 @@ def _extract(page_html: str, page_url: str) -> str | None:
     return str(main)
 
 
-def _page_locs(sitemap_url: str, sitemap: str) -> tuple[list[str], bool]:
-    """Page URLs from a sitemap, and whether any child sitemap was unreadable.
+def _page_locs(sitemap_url: str, sitemap: str) -> tuple[list[str], set[str], bool]:
+    """Page URLs from a sitemap, the site roots (sitemap directories) it spans, and
+    whether any child sitemap was unreadable.
 
     A multilingual Hugo site publishes an index whose ``<loc>``s are child
-    *sitemaps*, not pages — crawling those directly collects nothing. An
-    unreadable child takes its whole page block with it, and those pages are
-    never discovered, so only ``truncated`` can carry the loss.
+    *sitemaps*, one per language root, not pages — crawling those directly
+    collects nothing. An unreadable child takes its whole page block with it,
+    and those pages are never discovered, so only ``truncated`` can carry the loss.
     """
     try:
         root = ET.fromstring(sitemap)
     except ET.ParseError as exc:
         raise InvalidInputError(f"{sitemap_url} is not a valid sitemap") from exc
+    roots = {sitemap_url.rsplit("/", 1)[0]}
     if root.find(_SITEMAP_EL) is None:
-        return [el.text.strip() for el in root.iter(_LOC) if el.text], False
+        return [el.text.strip() for el in root.iter(_LOC) if el.text], roots, False
 
     locs: list[str] = []
     child_failed = False
@@ -127,19 +127,20 @@ def _page_locs(sitemap_url: str, sitemap: str) -> tuple[list[str], bool]:
         try:
             _f, body = http.fetch_text(child_url)
             locs.extend(x.text.strip() for x in ET.fromstring(body).iter(_LOC) if x.text)
+            roots.add(child_url.rsplit("/", 1)[0])
         except (OSError, ET.ParseError) as exc:
             child_failed = True
             log.warning("hugo.child_sitemap_error", url=child_url, error=str(exc))
         http.polite_sleep()
-    return locs, child_failed
+    return locs, roots, child_failed
 
 
 def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> AcquireResult:
     base = _base_dir(base_url)
     sitemap_url, sitemap = _find_sitemap(base)
-    locs, child_failed = _page_locs(sitemap_url, sitemap)
+    locs, roots, child_failed = _page_locs(sitemap_url, sitemap)
 
-    pages = [u for u in locs if _is_content_page(u, base)]
+    pages = [u for u in locs if _is_content_page(u, base, roots | {base})]
     truncated = child_failed or len(pages) > _MAX_PAGES
     if len(pages) > _MAX_PAGES:
         log.warning("hugo.capped", found=len(pages), cap=_MAX_PAGES)

@@ -1,17 +1,20 @@
-"""Sphinx acquisition for docs_probe — same-prefix BFS crawl.
+"""Sphinx acquisition for docs_probe — same-prefix breadth-first crawl.
 
 Sphinx exposes no machine index that works generically across themes
 (RTD-hosted projects route to the readthedocs pattern and its PDF build
-instead), so crawl: BFS same-host links under the start URL's directory
+instead), so crawl: breadth-first same-host links under the start URL's directory
 prefix, extract the ``div[role=main]`` content root (fallbacks: ``div.body``,
-``main``), strip headerlink anchors, absolutize refs. Capped; a capped crawl
-warns — a silently truncated crawl reads as a complete one.
+``main``), strip headerlink anchors, absolutize refs, and stage pages in the
+toctree order themes render into each page. Capped; a capped crawl warns — a
+silently truncated crawl reads as a complete one.
 """
 
 from __future__ import annotations
 
+import re
 import time
 from collections import deque
+from heapq import heapify, heappop, heappush
 from pathlib import Path
 from urllib.parse import urldefrag, urljoin, urlparse
 
@@ -43,6 +46,9 @@ _MAX_PAGES = 1000
 # that a same-prefix crawl must skip.
 _SKIP_DIRS = {"_static", "_sources", "_modules", "_images", "_downloads"}
 _SKIP_PAGES = {"genindex", "genindex-all", "search", "py-modindex"}
+_TOC_ITEM = re.compile(r"^toctree-l\d+$")
+# One toctree sibling list: (the parent's URL, or None when unknown; member URLs).
+_Siblings = tuple[str | None, tuple[str, ...]]
 
 
 def is_sphinx(html: str) -> bool:
@@ -76,14 +82,18 @@ def _wanted(url: str, host: str, prefix: str) -> bool:
     return p.path.endswith("/") or last.endswith(".html") or "." not in last
 
 
-def _extract(html: str, page_url: str) -> str | None:
-    soup = BeautifulSoup(html, "html.parser")
+def _content_root(soup: BeautifulSoup) -> Tag | None:
     root = (
         soup.find(True, attrs={"role": "main"})
         or soup.find("div", class_="body")
         or soup.find("main")
     )
-    if not isinstance(root, Tag):
+    return root if isinstance(root, Tag) else None
+
+
+def _extract(html: str, page_url: str) -> str | None:
+    root = _content_root(BeautifulSoup(html, "html.parser"))
+    if root is None:
         return None
     for el in root.select("a.headerlink"):
         el.decompose()
@@ -91,6 +101,120 @@ def _extract(html: str, page_url: str) -> str | None:
     flatten_responsive_images(root)
     absolutize_refs(root, page_url)
     return str(root)
+
+
+def _entry_url(li: Tag, page_url: str) -> str | None:
+    a = li.find("a", href=True)
+    return urldefrag(urljoin(page_url, str(a["href"]))).url if isinstance(a, Tag) else None
+
+
+def _toc_siblings(soup: BeautifulSoup, page_url: str) -> list[_Siblings]:
+    """The page's toctree sibling lists. A nested list's parent is its enclosing
+    entry, and a content-root toctree's is the page; a sidebar's top level is None
+    — themes root it at the site or at the current section."""
+    root = _content_root(soup)
+    lists: dict[int, tuple[str | None, list[str]]] = {}
+    for li in soup.find_all("li", class_=_TOC_ITEM):
+        url = _entry_url(li, page_url)
+        if url is None:
+            continue
+        outer = li.find_parent("li", class_=_TOC_ITEM)
+        if outer is not None:
+            key, parent = id(outer), _entry_url(outer, page_url)
+        elif root is not None and any(p is root for p in li.parents):
+            key, parent = id(root), page_url
+        else:
+            key, parent = id(li.parent.parent if li.parent else li), None
+        lists.setdefault(key, (parent, []))[1].append(url)
+    return [(parent, tuple(urls)) for parent, urls in lists.values()]
+
+
+def _merge(nodes: list[str], pairs: set[tuple[str, str]], rank: dict[str, int]) -> list[str]:
+    """``nodes`` honouring each (before, after) pair, lowest rank first among the
+    unconstrained; a cycle breaks at its lowest-ranked node."""
+    succ: dict[str, list[str]] = {n: [] for n in nodes}
+    blocked = dict.fromkeys(nodes, 0)
+    for a, b in pairs:
+        succ[a].append(b)
+        blocked[b] += 1
+    free = [(rank[n], n) for n in nodes if not blocked[n]]
+    heapify(free)
+    out: dict[str, None] = {}
+    while len(out) < len(nodes):
+        if not free:
+            n = min((x for x in nodes if x not in out), key=rank.__getitem__)
+            free.append((rank[n], n))
+        _r, n = heappop(free)
+        if n in out:
+            continue
+        out[n] = None
+        for m in succ[n]:
+            blocked[m] -= 1
+            if not blocked[m]:
+                heappush(free, (rank[m], m))
+    return list(out)
+
+
+def _reading_order(
+    ranked: list[str],
+    alias: dict[str, str],
+    found_on: dict[str, str],
+    tocs: dict[_Siblings, str | None],
+) -> list[str]:
+    """Staged pages (``ranked`` in crawl order) in toctree order.
+
+    ``alias`` maps every fetched URL to the staged page holding its content, and
+    ``tocs`` each distinct sibling list to the first page rendering it that is
+    not one of its members. A page
+    nests under its toctree parent, else under the nearest staged page that
+    linked to it; siblings follow the toctrees, then crawl order."""
+    rank = {u: i for i, u in enumerate(ranked)}
+    parent: dict[str, str] = {}  # first claim wins: toctree, then sidebar top level, then link
+
+    def claim(kids: list[str], par: str | None) -> None:
+        for kid in kids:
+            if par is not None and kid != par and rank[kid]:
+                parent.setdefault(kid, par)
+
+    sibling_lists: list[list[str]] = []
+    unrooted: list[tuple[str | None, list[str]]] = []
+    for (hint, members), page in tocs.items():
+        kids = list(dict.fromkeys(alias[m] for m in members if m in alias))
+        sibling_lists.append(kids)
+        if hint is None:
+            unrooted.append((alias.get(page) if page else None, kids))
+        else:
+            claim(kids, alias.get(hint))
+    for page_url, kids in unrooted:
+        claim(kids, next((parent[k] for k in kids if k in parent), page_url))
+    for url, finder in found_on.items():
+        while finder not in alias and finder in found_on:
+            finder = found_on[finder]
+        if url in alias:
+            claim([alias[url]], alias.get(finder))
+
+    children: dict[str, list[str]] = {}
+    for kid in ranked:
+        if kid in parent:
+            children.setdefault(parent[kid], []).append(kid)
+    pairs: dict[str, set[tuple[str, str]]] = {}
+    for kids in sibling_lists:
+        prev: dict[str, str] = {}
+        for kid in (k for k in kids if k in parent):
+            if parent[kid] in prev:
+                pairs.setdefault(parent[kid], set()).add((prev[parent[kid]], kid))
+            prev[parent[kid]] = kid
+
+    order: dict[str, None] = {}
+    for start in ranked:
+        stack = [start]
+        while stack:
+            node = stack.pop()
+            if node not in order:
+                order[node] = None
+                kids = _merge(children.get(node, []), pairs.get(node, set()), rank)
+                stack.extend(reversed(kids))
+    return list(order)
 
 
 def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> AcquireResult:
@@ -107,15 +231,19 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     raw_dir.mkdir(parents=True, exist_ok=True)
     seen: set[str] = {base}
     queue: deque[str] = deque([base])
-    staged_hashes: set[str] = set()
-    saved = 0
+    found_on: dict[str, str] = {}
+    pages: dict[str, str] = {}  # staged URL -> raw file body, in crawl order
+    by_digest: dict[str, str] = {}
+    alias: dict[str, str] = {}
+    tocs: dict[_Siblings, str | None] = {}
     lost = 0
     watchdog = ProgressWatchdog(stall_after_s=cfg.CRAWL_STALL_AFTER_S, now=time.monotonic)
-    while queue and saved < _MAX_PAGES:
+    # Breadth-first, so a cap keeps the manual's upper levels rather than one
+    # cross-reference chain; _reading_order sets the staged order.
+    while queue and len(pages) < _MAX_PAGES:
         if watchdog.stalled():
-            log.warning(
-                "sphinx.stalled", saved=saved, idle_s=round(watchdog.idle_s()), queued=len(queue)
-            )
+            idle = round(watchdog.idle_s())
+            log.warning("sphinx.stalled", saved=len(pages), idle_s=idle, queued=len(queue))
             break
         url = queue.popleft()
         try:
@@ -130,38 +258,45 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
             # A directory URL and its index.html are one page under two names, as
             # are redirect aliases; identical content is the only reliable tell.
             digest = content_hash(fragment)
-            if digest in staged_hashes:
+            if digest in by_digest:
                 log.info("sphinx.duplicate_page", url=url)
             else:
-                staged_hashes.add(digest)
-                stem = urlparse(url).path[len(prefix) :].strip("/").replace("/", "-") or "index"
-                (raw_dir / f"{saved:04d}-{stem}.html").write_text(
-                    f"<!-- source: {url} -->\n<section>\n{fragment}\n</section>\n",
-                    encoding="utf-8",
-                )
-                saved += 1
+                by_digest[digest] = url
+                pages[url] = f"<!-- source: {url} -->\n<section>\n{fragment}\n</section>\n"
                 watchdog.progress()
+            alias[url] = by_digest[digest]
+            alias.setdefault(final, by_digest[digest])
         else:
             lost += 1
             log.warning("sphinx.no_content_root", url=url)
-        for a in BeautifulSoup(body, "html.parser").find_all("a"):
+        soup = BeautifulSoup(body, "html.parser")
+        for sib in _toc_siblings(soup, final):
+            if tocs.get(sib) is None:
+                tocs[sib] = None if url in sib[1] or final in sib[1] else final
+        found: list[str] = []
+        for a in soup.find_all("a"):
             href = a.get("href")
             if not isinstance(href, str) or not href:
                 continue
             nxt = urldefrag(urljoin(final, href)).url
             if nxt not in seen and _wanted(nxt, host, prefix):
                 seen.add(nxt)
-                queue.append(nxt)
+                found_on[nxt] = url
+                found.append(nxt)
+        queue.extend(found)
         http.polite_sleep()
     if queue:
-        log.warning("sphinx.capped", saved=saved, cap=_MAX_PAGES, queued=len(queue))
+        log.warning("sphinx.capped", saved=len(pages), cap=_MAX_PAGES, queued=len(queue))
     truncated = bool(queue)
-    log.info("sphinx.acquire", base=base, pages=saved, slug=slug)
+    for i, url in enumerate(_reading_order(list(pages), alias, found_on, tocs)):
+        stem = urlparse(url).path[len(prefix) :].strip("/").replace("/", "-") or "index"
+        (raw_dir / f"{i:04d}-{stem}.html").write_text(pages[url], encoding="utf-8")
+    log.info("sphinx.acquire", base=base, pages=len(pages), slug=slug)
     return AcquireResult(
         raw_dir=raw_dir,
         kind="html",
         slug=slug,
-        pages=saved,
+        pages=len(pages),
         title=title,
         truncated=truncated,
         lost=lost,

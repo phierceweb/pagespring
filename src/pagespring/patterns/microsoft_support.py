@@ -38,11 +38,13 @@ _CHROME_RE = re.compile(
 )
 _SITEMAP_TPL = "https://support.microsoft.com/_sitemaps/{product}_{locale}_{n}.xml"
 _LOC_RE = re.compile(r"<loc>([^<]+)</loc>")
+_URLSET_RE = re.compile(r"<urlset\b")
 _MAX = 2000  # per-product sitemap scale (excel ≈ 1700)
 _MAX_SITEMAP_PAGES = 50  # the largest product publishes a single sitemap page
 _MIN_BODY = 200  # below this, a title-less page is a chrome shell — skip it
+_PACE = 1.0  # seconds between requests — the site quota-blocks bursts with 403s
 _COOLDOWN = 60.0  # seconds to back off when the site throttles (it 403s, not 429s)
-_MAX_FAILED_COOLDOWNS = 3  # consecutive failed retries → sustained block; stop paying cooldowns
+_MAX_FAILED_COOLDOWNS = 3  # consecutive failed retries → sustained block; the crawl stops
 
 
 def _title_and_body(page_html: str, page_url: str) -> tuple[str | None, str | None]:
@@ -104,16 +106,33 @@ def _sitemap_articles(product: str, locale: str) -> tuple[list[str], bool]:
         except Exception as exc:  # network/timeout mid-crawl — truncation, not the end
             log.warning("microsoft_support.sitemap_error", url=url, error=str(exc), pages=n - 1)
             return links, True
+        finally:
+            http.polite_sleep(_PACE)
         found = _LOC_RE.findall(xml)
         if not found:
-            # A soft-404 landing page, CDN error page or WAF interstitial answers
-            # 200 with no <loc>; without this the walk never reaches its 404 end.
-            break
+            if _URLSET_RE.search(xml):
+                break
+            # A WAF interstitial or CDN error page answers 200; the catalog continues past it.
+            log.warning("microsoft_support.sitemap_not_xml", url=url, pages=n - 1)
+            return links, True
         links.extend(found)
     else:
         log.warning("microsoft_support.sitemap_capped", product=product, cap=_MAX_SITEMAP_PAGES)
         return links, True
     return links, False
+
+
+def _blocked(probe: str) -> bool:
+    """Whether ``probe`` is refused now."""
+    try:
+        http.fetch_text(probe)
+    except urllib.error.HTTPError as exc:
+        return exc.code == 403
+    except Exception:
+        return False
+    finally:
+        http.polite_sleep(_PACE)
+    return False
 
 
 class MicrosoftSupportPattern:
@@ -145,12 +164,21 @@ class MicrosoftSupportPattern:
         saved = 0
         lost = 0
         failed_cooldowns = 0  # consecutive cooldown-retries that still 403'd
-        for i, link in enumerate(links[:_MAX]):
+        last_good: str | None = None
+        todo = links[:_MAX]
+        for i, link in enumerate(todo):
+            # A retired or restricted article also answers 403, so a block counts only
+            # once an article that loaded before — or, with none yet, this one — is refused.
+            if failed_cooldowns >= _MAX_FAILED_COOLDOWNS and _blocked(last_good or link):
+                lost += len(todo) - i
+                log.warning("microsoft_support.blocked", unfetched=len(todo) - i, lost=lost)
+                break
+            failed_cooldowns = min(failed_cooldowns, _MAX_FAILED_COOLDOWNS - 1)
             try:
                 try:
                     _ff, art = http.fetch_text(link)
                 except urllib.error.HTTPError as exc:
-                    if exc.code != 403 or failed_cooldowns >= _MAX_FAILED_COOLDOWNS:
+                    if exc.code != 403:
                         raise
                     # The site throttles with 403: cool down, then retry once.
                     log.warning("microsoft_support.throttled", url=link, cooldown=_COOLDOWN)
@@ -160,12 +188,15 @@ class MicrosoftSupportPattern:
                     except urllib.error.HTTPError:
                         failed_cooldowns += 1
                         raise
-                    failed_cooldowns = 0  # recovered — the block was a burst
+                failed_cooldowns = 0
+                last_good = link
                 title, body = _title_and_body(art, link)
             except Exception as exc:
                 lost += 1
                 log.warning("microsoft_support.fetch_error", url=link, error=str(exc))
                 continue
+            finally:
+                http.polite_sleep(_PACE)
             if body is None:
                 lost += 1
                 log.warning("microsoft_support.no_content", url=link)
@@ -179,7 +210,6 @@ class MicrosoftSupportPattern:
                 encoding="utf-8",
             )
             saved += 1
-            http.polite_sleep(1.0)  # gentle pace — the site quota-blocks bursts with 403s
 
         log.info("microsoft_support.acquire", url=url, mode=mode, articles=saved, slug=slug)
         return AcquireResult(

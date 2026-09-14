@@ -373,6 +373,62 @@ def test_localize_requires_slug_or_all():
     assert r.exit_code == 2
 
 
+def test_localize_all_reports_an_unreadable_manifest_and_sweeps_on(monkeypatch, tmp_path):
+    monkeypatch.setattr(climod.cfg, "INCOMING_DIR", str(tmp_path / "incoming"))
+    bad = tmp_path / "incoming" / "aaa-bad"
+    bad.mkdir(parents=True)
+    (bad / manifest.MANIFEST_NAME).write_text('{"pages": 3}\n', encoding="utf-8")
+    good = tmp_path / "incoming" / "bbb-good"
+    _write_manifest(good, kind="pdf", deliverable="bbb-good.pdf")
+    (good / "bbb-good.pdf").write_bytes(b"%PDF-1.7")
+
+    r = runner.invoke(app, ["localize", "--all"])
+
+    assert r.exit_code == 0, r.output
+    assert "skip aaa-bad" in r.output
+    assert "bbb-good: +0 images" in r.output
+
+
+def test_localize_of_one_slug_it_refuses_exits_2(monkeypatch, tmp_path):
+    from pf_core.exceptions import PreconditionError
+
+    def refuse(slug):
+        raise PreconditionError("fakeapp.html no longer matches its manifest — re-ingest")
+
+    monkeypatch.setattr(climod, "localize_images", refuse)
+
+    r = runner.invoke(app, ["localize", "fakeapp"])
+
+    assert r.exit_code == 2
+    assert "re-ingest" in r.output
+
+
+def test_ingest_reports_images_downloaded_this_run_apart_from_the_total(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        climod,
+        "run_ingest",
+        lambda url, **kw: {
+            "pattern": "gitbook",
+            "slug": "docs",
+            "kind": "markdown",
+            "clean": str(tmp_path / "docs.md"),
+            "pages": 12,
+            "bytes": 2048,
+            "images": 40,
+            "images_downloaded": 3,
+            "changed": True,
+            "duplicate_of": None,
+        },
+    )
+
+    r = runner.invoke(app, ["ingest", "https://docs.example.com/", "--download-images"])
+
+    assert r.exit_code == 0
+    [line] = [ln for ln in r.output.splitlines() if ln.startswith("images")]
+    assert "40" in line and "3 downloaded" in line
+    assert "40 downloaded" not in line
+
+
 def _write_manifest(slug_dir, **over):
     slug_dir.mkdir(parents=True, exist_ok=True)
     fields = {

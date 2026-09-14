@@ -12,7 +12,7 @@ import conftest
 import pf_core.fetch.images as core_images
 import pytest
 
-from pagespring import images, manifest, orchestrate
+from pagespring import _staging, images, manifest, orchestrate
 
 _DOC = "<h1>real</h1>"
 
@@ -57,6 +57,8 @@ def test_overwriting_inside_the_corpus_is_refused(stand_in_corpus, tmp_path):
         doc.write_text("<h1>DIFFERENT</h1>", encoding="utf-8")
     with pytest.raises(AssertionError, match="real corpus"):
         (stand_in_corpus / "precious" / "images" / "fig1.png").write_bytes(b"x")
+    with pytest.raises(AssertionError, match="real corpus"):
+        _staging._stage_file(replacement, doc)
 
     assert doc.read_text(encoding="utf-8") == _DOC
 

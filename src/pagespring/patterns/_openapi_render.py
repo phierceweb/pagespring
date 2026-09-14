@@ -1,26 +1,23 @@
 """Render an OpenAPI 3.x / Swagger 2.0 spec to clean markdown — one section per
 operation, with params, request body, responses, and resolved ``$ref`` schemas.
 
-Pure transformation over a parsed dict; no network, no file I/O.
+Pure transformation over a parsed dict; no network, no file I/O. Fields of the
+wrong type are ignored rather than raised on.
 """
 
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import unquote
 
 _METHODS = ("get", "post", "put", "patch", "delete", "head", "options", "trace")
 
 
 def count_operations(spec: dict[str, Any]) -> int:
     """Number of HTTP operations across all paths."""
-    n = 0
-    # An explicit `paths:` with nothing under it parses as None, not a missing
-    # key, so the `{}` default never applies; a YAML list is the same trap.
-    paths = spec.get("paths")
-    for item in (paths if isinstance(paths, dict) else {}).values():
-        if isinstance(item, dict):
-            n += sum(1 for m in _METHODS if isinstance(item.get(m), dict))
-    return n
+    return sum(
+        sum(1 for m in _METHODS if isinstance(item.get(m), dict)) for _, item in _path_items(spec)
+    )
 
 
 def render(spec: dict[str, Any], title: str) -> str:
@@ -33,39 +30,72 @@ def render(spec: dict[str, Any], title: str) -> str:
     base = _base_url(spec, is_v2)
     if base:
         out.append(f"**Base URL:** `{base}`")
+    out.append(_tags(spec))
 
-    rendered = spec.get("paths")
-    for path, item in (rendered if isinstance(rendered, dict) else {}).items():
-        if not isinstance(item, dict):
-            continue
-        common = item.get("parameters", []) if isinstance(item.get("parameters"), list) else []
+    for path, item in _path_items(spec):
+        common = _as_list(item.get("parameters"))
         for method in _METHODS:
             op = item.get(method)
             if isinstance(op, dict):
-                out.append(_render_operation(spec, is_v2, method, str(path), op, common))
-    return "\n\n".join(out) + "\n"
+                out.append(_render_operation(spec, is_v2, method, path, op, common))
+    return "\n\n".join(s for s in out if s) + "\n"
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _path_items(spec: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """``(path, item)`` pairs, a ``$ref`` item resolved with its own keys taking precedence."""
+    # An explicit `paths:` with nothing under it parses as None, not a missing key.
+    paths = spec.get("paths")
+    pairs: list[tuple[str, dict[str, Any]]] = []
+    for path, item in (paths if isinstance(paths, dict) else {}).items():
+        if not isinstance(item, dict):
+            continue
+        if "$ref" in item:
+            local = {k: v for k, v in item.items() if k != "$ref"}
+            item = {**_resolve_ref(spec, item), **local}
+        pairs.append((str(path), item))
+    return pairs
 
 
 def _base_url(spec: dict[str, Any], is_v2: bool) -> str | None:
     if is_v2:
-        host = spec.get("host", "")
-        base = spec.get("basePath", "")
-        schemes = spec.get("schemes") or ["https"]
-        return f"{schemes[0]}://{host}{base}" if host else (base or None)
-    servers = spec.get("servers") or []
-    if servers and isinstance(servers[0], dict):
-        return servers[0].get("url")
+        host = spec.get("host") or ""
+        base = spec.get("basePath") or ""
+        schemes = spec.get("schemes")
+        if isinstance(schemes, list) and schemes and isinstance(schemes[0], str):
+            scheme = schemes[0]
+        else:
+            scheme = schemes if isinstance(schemes, str) and schemes else "https"
+        return f"{scheme}://{host}{base}" if host else (str(base) or None)
+    servers = _as_list(spec.get("servers"))
+    if servers and isinstance(servers[0], dict) and servers[0].get("url"):
+        return str(servers[0]["url"])
     return None
 
 
 def _resolve_ref(spec: dict[str, Any], node: Any) -> dict[str, Any]:
-    """Follow a single ``{"$ref": "#/a/b/c"}`` one level into the spec."""
-    if isinstance(node, dict) and "$ref" in node:
-        target: Any = spec
-        for part in str(node["$ref"]).split("/")[1:]:  # drop leading '#'
-            target = target.get(part, {}) if isinstance(target, dict) else {}
-        return target if isinstance(target, dict) else {}
+    """Follow a chain of local ``{"$ref": "#/a/b"}`` pointers; external or cyclic refs → ``{}``."""
+    seen: set[str] = set()
+    while isinstance(node, dict) and "$ref" in node:
+        ref = node["$ref"]
+        if not isinstance(ref, str) or not ref.startswith("#/") or ref in seen:
+            return {}
+        seen.add(ref)
+        node = spec
+        for part in ref[2:].split("/"):
+            key = unquote(part).replace("~1", "/").replace("~0", "~")
+            node = node.get(key, {}) if isinstance(node, dict) else {}
     return node if isinstance(node, dict) else {}
+
+
+def _type_name(schema: dict[str, Any]) -> str:
+    typ = schema.get("type")
+    if isinstance(typ, list):
+        return " | ".join(str(t) for t in typ)
+    return str(typ) if typ else ""
 
 
 def _schema_lines(spec: dict[str, Any], schema: Any) -> list[str]:
@@ -73,13 +103,13 @@ def _schema_lines(spec: dict[str, Any], schema: Any) -> list[str]:
     schema = _resolve_ref(spec, schema)
     props = schema.get("properties")
     if not isinstance(props, dict):
-        t = schema.get("type")
+        t = _type_name(schema)
         return [f"- _{t}_"] if t else []
-    required = set(schema.get("required", []))
+    required = {r for r in _as_list(schema.get("required")) if isinstance(r, str)}
     lines: list[str] = []
     for name, prop in props.items():
         prop = _resolve_ref(spec, prop)
-        typ = prop.get("type", "object")
+        typ = _type_name(prop) or "object"
         req = " (required)" if name in required else ""
         desc = f" — {str(prop['description'])}" if prop.get("description") else ""
         lines.append(f"- `{name}` _{typ}_{req}{desc}")
@@ -94,10 +124,10 @@ def _render_params(spec: dict[str, Any], params: list[Any]) -> str:
             continue
         if not p.get("name"):
             continue  # unresolved/nameless param → skip the empty row
-        typ = (p.get("schema") or {}).get("type") or p.get("type") or ""
+        typ = _type_name(_resolve_ref(spec, p.get("schema"))) or _type_name(p)
         req = "yes" if p.get("required") else "no"
         desc = str(p.get("description") or "").replace("\n", " ")
-        rows.append(f"| `{p.get('name', '')}` | {p.get('in', '')} | {typ} | {req} | {desc} |")
+        rows.append(f"| `{p['name']}` | {p.get('in', '')} | {typ} | {req} | {desc} |")
     if not rows:
         return ""
     head = "| Name | In | Type | Required | Description |\n| --- | --- | --- | --- | --- |"
@@ -106,19 +136,17 @@ def _render_params(spec: dict[str, Any], params: list[Any]) -> str:
 
 def _request_body(spec: dict[str, Any], is_v2: bool, op: dict[str, Any], params: list[Any]) -> str:
     if is_v2:
-        body = next((p for p in params if _resolve_ref(spec, p).get("in") == "body"), None)
-        schema = _resolve_ref(spec, body).get("schema") if body else None
+        resolved = (_resolve_ref(spec, p) for p in params)
+        body = next((p for p in resolved if p.get("in") == "body"), {})
     else:
-        rb = op.get("requestBody", {})
-        content = rb.get("content", {}) if isinstance(rb, dict) else {}
-        first: dict[str, Any] = (
-            next(iter(content.values()), {}) if isinstance(content, dict) else {}
-        )
-        schema = first.get("schema") if isinstance(first, dict) else None
-    if not schema:
-        return ""
-    lines = _schema_lines(spec, schema)
-    return "**Request body:**\n\n" + "\n".join(lines) if lines else ""
+        body = _resolve_ref(spec, op.get("requestBody"))
+        content = body.get("content")
+        media: Any = next(iter(content.values()), {}) if isinstance(content, dict) else {}
+        body = {**body, "schema": media.get("schema") if isinstance(media, dict) else None}
+    desc = str(body["description"]).strip() if body.get("description") else ""
+    lines = _schema_lines(spec, body.get("schema")) if body.get("schema") else []
+    parts = [p for p in (desc, "\n".join(lines)) if p]
+    return "**Request body:**\n\n" + "\n\n".join(parts) if parts else ""
 
 
 def _responses(spec: dict[str, Any], op: dict[str, Any]) -> str:
@@ -136,6 +164,15 @@ def _responses(spec: dict[str, Any], op: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+def _tags(spec: dict[str, Any]) -> str:
+    sections = [
+        f"### {tag['name']}\n\n{str(tag['description']).strip()}"
+        for tag in _as_list(spec.get("tags"))
+        if isinstance(tag, dict) and tag.get("name") and tag.get("description")
+    ]
+    return "\n\n".join(["## Tags", *sections]) if sections else ""
+
+
 def _render_operation(
     spec: dict[str, Any],
     is_v2: bool,
@@ -151,9 +188,7 @@ def _render_operation(
         parts.append(summary)
     if description and description != summary:
         parts.append(description)
-    op_params = op.get("parameters")
-    op_params = op_params if isinstance(op_params, list) else []
-    params = list(common) + op_params
+    params = common + _as_list(op.get("parameters"))
     parts.append(_render_params(spec, params))
     parts.append(_request_body(spec, is_v2, op, params))
     parts.append(_responses(spec, op))

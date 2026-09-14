@@ -14,9 +14,10 @@ from pathlib import Path
 from typing import Literal, TypedDict
 
 from pf_core.exceptions import InvalidInputError
-from pf_core.log import get_logger
+from pf_core.log import get_logger, log_exception
 
 from pagespring import http, manifest
+from pagespring._integrity import deliverable_intact
 from pagespring.config import cfg
 from pagespring.orchestrate import AcquireError, EmptyOutputError, NoPatternError, run_ingest
 from pagespring.paths import slug_dir
@@ -45,13 +46,13 @@ def refresh_slug(slug: str) -> RefreshOutcome:
         return {"slug": slug, "status": "skipped", "detail": "unreadable manifest — re-ingest"}
 
     # Fast path: only single-fetch patterns may trust stored validators — a
-    # crawl's entry-page 304 proves nothing about the rest of the site.
+    # crawl's entry-page 304 proves nothing about the rest of the site. A 304
+    # vouches for the source, never for the staged copy.
     pattern = pattern_by_name(m.get("pattern") or "")
     if pattern is not None and getattr(pattern, "single_fetch", False):
         etag, last_modified = m.get("etag"), m.get("last_modified")
-        if (etag or last_modified) and http.not_modified(
-            m["source_url"], etag=etag, last_modified=last_modified
-        ):
+        intact = (etag or last_modified) and deliverable_intact(incoming_dir, m)
+        if intact and http.not_modified(m["source_url"], etag=etag, last_modified=last_modified):
             log.info("refresh.not_modified", slug=slug)
             return {"slug": slug, "status": "unchanged", "detail": "not modified (validator probe)"}
 
@@ -82,4 +83,13 @@ def refresh_all() -> list[RefreshOutcome]:
     """Sweep every ``incoming/<slug>/`` in sorted order."""
     incoming = Path(cfg.INCOMING_DIR)
     slugs = sorted(p.name for p in incoming.glob("*") if p.is_dir()) if incoming.is_dir() else []
-    return [refresh_slug(s) for s in slugs]
+    return [_refresh_isolated(s) for s in slugs]
+
+
+def _refresh_isolated(slug: str) -> RefreshOutcome:
+    """``refresh_slug``, with an exception no handler names reported as ``failed``."""
+    try:
+        return refresh_slug(slug)
+    except Exception as exc:
+        log_exception(exc, message_prepend="refresh.unexpected", additional_context={"slug": slug})
+        return {"slug": slug, "status": "failed", "detail": f"{type(exc).__name__}: {exc}"}

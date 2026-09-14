@@ -188,6 +188,31 @@ def test_refresh_fast_path_probes_validators_instead_of_recrawling(tmp_path, mon
     assert probed == [("https://x/manual.pdf", '"abc123"', "Sat, 18 Jul 2026 10:00:00 GMT")]
 
 
+@pytest.mark.parametrize("damage", ["deleted", "truncated"])
+def test_refresh_fast_path_never_calls_a_damaged_deliverable_unchanged(
+    tmp_path, monkeypatch, damage
+):
+    """A 304 proves the source is unchanged, not that the staged copy still is."""
+    d = _seed_validator_manifest(tmp_path)
+    if damage == "deleted":
+        (d / "fakeapp.pdf").unlink()
+    else:
+        (d / "fakeapp.pdf").write_bytes(b"%P")
+    monkeypatch.setattr(refresh, "pattern_by_name", lambda name: _SingleFetchPattern())
+    monkeypatch.setattr(refresh.http, "not_modified", lambda url, **k: True)
+    reingested: list = []
+    monkeypatch.setattr(
+        refresh,
+        "run_ingest",
+        lambda url, **k: (reingested.append(url), {"changed": True, "duplicate_of": None})[1],
+    )
+
+    out = refresh.refresh_slug("fakeapp")
+
+    assert reingested == ["https://x/manual.pdf"]
+    assert out["status"] == "changed"
+
+
 def test_refresh_fast_path_miss_falls_through_to_full_reingest(tmp_path, monkeypatch):
     """A failed probe (changed content, error, whatever) falls through to the
     normal re-ingest path — the probe is an optimization, never a gate."""
@@ -334,3 +359,63 @@ def test_refresh_single_fetch_without_validators_skips_the_probe(tmp_path, monke
 
     assert reingested == [str(spec)]
     assert out["status"] == "changed"
+
+
+class _SizedBodyPattern(_BodyPattern):
+    def __init__(self, body, pages):
+        super().__init__(body)
+        self.pages = pages
+
+    def acquire(self, url, workdir):
+        acq = super().acquire(url, workdir)
+        acq.pages = self.pages
+        return acq
+
+
+def test_refresh_keeps_a_manual_whose_recrawl_collapsed(tmp_path, monkeypatch):
+    p = _SizedBodyPattern("full guide", pages=1971)
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://support.example.com/guide/")
+    p.body, p.pages = "welcome only", 1
+
+    out = refresh.refresh_slug("fakeapp")
+
+    assert out["status"] == "failed"
+    assert "found 1 of the 1971 pages" in out["detail"]
+    assert "--keep-raw" not in out["detail"]
+    staged = tmp_path / "incoming" / "fakeapp" / "fakeapp.html"
+    assert staged.read_text(encoding="utf-8") == "full guide"
+
+
+class _SlugPattern(_BodyPattern):
+    """Fake with its own slug, raising ``error`` from acquire when set."""
+
+    def __init__(self, slug):
+        super().__init__("v1")
+        self.slug = slug
+        self.error = None
+
+    def acquire(self, url, workdir):
+        if self.error is not None:
+            raise self.error
+        raw = workdir / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        return AcquireResult(raw_dir=raw, kind="html", slug=self.slug, pages=1)
+
+
+def test_refresh_all_reports_a_slug_that_raises_and_sweeps_on(tmp_path, monkeypatch):
+    """An exception no handler names must not end the sweep and discard every
+    outcome already collected."""
+    first, second = _SlugPattern("aaa"), _SlugPattern("bbb")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: first if "aaa" in url else second)
+    orchestrate.run_ingest("https://aaa.example.com/")
+    orchestrate.run_ingest("https://bbb.example.com/")
+    first.error = KeyError("renderer bug")
+
+    outcomes = refresh.refresh_all()
+
+    assert [(o["slug"], o["status"]) for o in outcomes] == [
+        ("aaa", "failed"),
+        ("bbb", "unchanged"),
+    ]
+    assert "KeyError" in outcomes[0]["detail"]

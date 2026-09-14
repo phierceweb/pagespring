@@ -276,6 +276,55 @@ def test_reuse_unchanged_rewrites_refs_without_downloading(tmp_path, monkeypatch
     assert images.count_remote_images(doc) == 1
 
 
+def test_reuse_unchanged_paces_every_probe_it_sends(tmp_path, monkeypatch):
+    """A probe carrying validators is a request to the image host, paced like a
+    download; a record with none skips the probe for a full fetch, paced the same."""
+    imgs = tmp_path / "images"
+    imgs.mkdir()
+    records = []
+    for name, etag in (("a.png", '"aaa"'), ("b.png", '"bbb"'), ("c.png", None)):
+        (imgs / name).write_bytes(_PNG)
+        records.append(
+            {
+                "local": name,
+                "source_url": f"https://x.com/{name}",
+                "etag": etag,
+                "last_modified": None,
+                "sha256": hashlib.sha256(_PNG).hexdigest(),
+                "bytes": len(_PNG),
+            }
+        )
+    images.write_sidecar(tmp_path, records)
+    doc = tmp_path / "d.md"
+    doc.write_text(
+        "".join(f"![{r['local']}]({r['source_url']})\n" for r in records), encoding="utf-8"
+    )
+    events = []
+
+    def not_modified(url, *, etag, last_modified):
+        events.append(("probe", url))
+        return etag is not None
+
+    def fetch(url, **kwargs):
+        events.append(("fetch", url))
+        return url, _PNG, _meta()
+
+    monkeypatch.setattr(http, "not_modified", not_modified)
+    monkeypatch.setattr(http, "fetch_bytes_meta", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: events.append(("sleep", None)))
+
+    images.reuse_unchanged(doc, tmp_path)
+
+    assert events == [
+        ("probe", "https://x.com/a.png"),
+        ("sleep", None),
+        ("probe", "https://x.com/b.png"),
+        ("sleep", None),
+        ("fetch", "https://x.com/c.png"),
+        ("sleep", None),
+    ]
+
+
 def test_reuse_unchanged_does_not_corrupt_a_prefix_sibling_ref(tmp_path, monkeypatch):
     """CDN sizing variants make one image URL a prefix of another; rewriting the
     shorter ref with an unanchored replace mangles the longer one into a dangling
@@ -357,30 +406,107 @@ def test_reuse_unchanged_probes_the_decoded_url(tmp_path, monkeypatch):
     assert images.count_remote_images(doc) == 0
 
 
-def test_reuse_unchanged_refetches_when_server_says_changed(tmp_path, monkeypatch):
-    """A stable-name image (izotope's nectar-banner.png) keeps its URL when the
-    bytes change — a 200 instead of 304 must leave the ref remote."""
+def _cached(tmp_path, local, url, data, *, etag='"old"'):
+    """A localized image on disk, its sidecar record, and a doc whose ref is remote again."""
     imgs = tmp_path / "images"
-    imgs.mkdir()
-    (imgs / "banner.png").write_bytes(_PNG)
-    images.write_sidecar(
-        tmp_path,
-        [
-            {
-                "local": "banner.png",
-                "source_url": "https://x.com/banner.png",
-                "etag": '"old"',
-                "last_modified": None,
-                "sha256": hashlib.sha256(_PNG).hexdigest(),
-                "bytes": len(_PNG),
-            }
-        ],
-    )
+    imgs.mkdir(exist_ok=True)
+    (imgs / local).write_bytes(data)
+    record = {
+        "local": local,
+        "source_url": url,
+        "etag": etag,
+        "last_modified": None,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "bytes": len(data),
+    }
+    images.write_sidecar(tmp_path, [record])
     doc = tmp_path / "d.md"
-    doc.write_text("![b](https://x.com/banner.png)\n", encoding="utf-8")
+    doc.write_text(f"![i]({url})\n", encoding="utf-8")
+    return doc, record
+
+
+def _unreachable(url, **kwargs):
+    raise urllib.error.URLError("temporary failure in name resolution")
+
+
+def test_reuse_unchanged_refreshes_a_changed_image_in_place(tmp_path, monkeypatch):
+    """A stable-name image (izotope's nectar-banner.png) keeps its URL when the
+    bytes change: the new bytes take the cached file's name and record."""
+    doc, _rec = _cached(tmp_path, "banner.png", "https://x.com/banner.png", _PNG)
+    fresh = _PNG + b"-v2"
     monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, fresh, _meta(etag='"new"')))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert images.reuse_unchanged(doc, tmp_path) == 1
+
+    assert (tmp_path / "images" / "banner.png").read_bytes() == fresh
+    assert "](images/banner.png)" in doc.read_text(encoding="utf-8")
+    [rec] = images.read_sidecar(tmp_path)
+    assert rec["etag"] == '"new"'
+    assert rec["sha256"] == hashlib.sha256(fresh).hexdigest()
+    assert rec["bytes"] == len(fresh)
+
+
+@pytest.mark.parametrize("etag", ['"old"', None], ids=["probe-failed", "no-validators"])
+def test_reuse_unchanged_keeps_the_cached_image_when_its_source_is_unreachable(
+    tmp_path, monkeypatch, etag
+):
+    """The probe answers False for a network error as well as for changed content,
+    and always without validators. The cached copy may be the only one left — a
+    tokened URL does not come back."""
+    doc, rec = _cached(tmp_path, "fig.png", "https://x.com/fig.png?token=t", _PNG, etag=etag)
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
+    monkeypatch.setattr(http, "fetch_bytes_meta", _unreachable)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
     assert images.reuse_unchanged(doc, tmp_path) == 0
+
+    assert (tmp_path / "images" / "fig.png").read_bytes() == _PNG
+    assert images.read_sidecar(tmp_path) == [rec]
+    assert images.count_remote_images(doc) == 1  # still pending, so prune stays off
+
+
+def test_reuse_unchanged_keeps_the_cached_image_when_a_page_comes_back(tmp_path, monkeypatch):
+    """An expired token often answers 200 with a login page rather than an error."""
+    doc, rec = _cached(tmp_path, "fig.png", "https://x.com/fig.png", _PNG)
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
+    monkeypatch.setattr(
+        http, "fetch_bytes_meta", lambda u, **k: (u, b"<html>sign in</html>", _meta())
+    )
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert images.reuse_unchanged(doc, tmp_path) == 0
+
+    assert (tmp_path / "images" / "fig.png").read_bytes() == _PNG
+    assert images.read_sidecar(tmp_path) == [rec]
+
+
+def test_reuse_unchanged_reuses_identical_bytes_from_a_server_without_validators(
+    tmp_path, monkeypatch
+):
+    doc, _rec = _cached(tmp_path, "a.png", "https://x.com/a.png", _PNG, etag=None)
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"e1"')))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert images.reuse_unchanged(doc, tmp_path) == 1
+
+    assert "](images/a.png)" in doc.read_text(encoding="utf-8")
+    assert [r["etag"] for r in images.read_sidecar(tmp_path)] == ['"e1"']
+
+
+def test_reuse_unchanged_leaves_a_format_change_to_the_localizer(tmp_path, monkeypatch):
+    """An extensionless URL's name carries the sniffed type, so new bytes of another
+    type belong under another name — the old file stays until they land."""
+    doc, rec = _cached(tmp_path, "hero.png", "https://cdn.x.com/assets/hero", _PNG)
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _JPG, _meta()))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert images.reuse_unchanged(doc, tmp_path) == 0
+
+    assert (tmp_path / "images" / "hero.png").read_bytes() == _PNG
+    assert images.read_sidecar(tmp_path) == [rec]
     assert images.count_remote_images(doc) == 1
 
 
@@ -703,3 +829,42 @@ def test_a_killed_reuse_pass_leaves_the_deliverable_intact(tmp_path, monkeypatch
 
     assert doc.read_text(encoding="utf-8") == original, "the deliverable was destroyed"
     assert not list(tmp_path.glob(".d.md.*")), "temp file left behind"
+
+
+def test_an_interrupted_localize_records_every_image_that_landed(tmp_path, monkeypatch):
+    """The refs of landed images are already local, so the sidecar is their only
+    record of where they came from."""
+    doc = tmp_path / "d.md"
+    doc.write_text(
+        "".join(f"![{n}](https://x.com/{n}.png)\n" for n in range(1, 8)), encoding="utf-8"
+    )
+
+    def fetch(url, **kwargs):
+        if url.endswith("/7.png"):
+            raise KeyboardInterrupt
+        return url, _PNG + url.encode(), _meta(etag=f'"{url[-5]}"')
+
+    monkeypatch.setattr(http, "fetch_bytes_meta", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    with pytest.raises(KeyboardInterrupt):
+        images.download_images(doc, tmp_path / "images", checkpoint_every=1)
+
+    landed = sorted(p.name for p in (tmp_path / "images").glob("*"))
+    assert landed == [f"{n}.png" for n in range(1, 7)]
+    recs = {r["local"]: r for r in images.read_sidecar(tmp_path)}
+    assert sorted(recs) == landed
+    assert recs["3.png"]["source_url"] == "https://x.com/3.png"
+    assert recs["3.png"]["etag"] == '"3"'
+
+
+def test_reuse_unchanged_reuses_an_extensionless_url_with_a_dot_in_its_name(tmp_path, monkeypatch):
+    """``asset-v3.1-large`` has no image extension, so the localizer named it by the
+    sniffed type; a suffix check reading ``.1-large`` re-downloads it every pass."""
+    url = "https://cdn.example.com/assets/asset-v3.1-large"
+    doc, _rec = _cached(tmp_path, "asset-v3.1-large.png", url, _PNG, etag=None)
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta()))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert images.reuse_unchanged(doc, tmp_path) == 1
+    assert "](images/asset-v3.1-large.png)" in doc.read_text(encoding="utf-8")

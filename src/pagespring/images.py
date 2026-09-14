@@ -24,7 +24,7 @@ from pf_core.fetch import images as _core
 from pf_core.log import get_logger
 from pf_core.pipeline.run_record import file_sha256
 from pf_core.utils.hashing import content_hash
-from pf_core.utils.io import atomic_write_text
+from pf_core.utils.io import atomic_write_bytes, atomic_write_text
 
 from pagespring import http
 
@@ -166,24 +166,24 @@ def normalize_case(doc_path: Path, slug_dir: Path) -> int:
 
 
 def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
-    """Re-point refs whose image the sidecar holds and the server calls unchanged;
-    returns how many downloads that avoided.
+    """Re-point refs at the images the sidecar already holds; returns how many
+    refs that settled without ``download_images``.
 
     Run before ``download_images`` on a refreshed deliverable. A URL absent from
     the sidecar is never probed — it has to be fetched anyway.
 
-    A known URL the server reports as *changed* has its stale file deleted here so
-    the fresh download claims the same name. Without that, the localizer's
-    collision handling writes ``banner-2.png`` beside an orphaned ``banner.png``,
-    and every later refresh adds another suffix.
+    A 304 reuses the cached file. Anything else is ambiguous — the probe answers
+    False for a network error too — so the image is fetched: identical bytes reuse
+    the file, changed bytes replace it under the same name (a fresh download would
+    write ``banner-2.png`` beside an orphaned ``banner.png``). A failed fetch keeps
+    the file and its record and leaves the ref remote for the next pass.
     """
     records = {r["source_url"]: r for r in read_sidecar(slug_dir)}
     if not records:
         return 0
     images_dir = slug_dir / "images"
     text = doc_path.read_text(encoding="utf-8")
-    reused = 0
-    superseded: list[str] = []
+    reused = refreshed = 0
     for url in remote_image_urls(doc_path):
         # sidecar keys and the probe are the decoded URL actually fetched — a ref
         # carrying `&amp;` probed as-is is a different URL than the one the stored
@@ -193,24 +193,56 @@ def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
         rec = records.get(decoded)
         if rec is None or not (images_dir / rec["local"]).is_file():
             continue
-        if http.not_modified(decoded, etag=rec["etag"], last_modified=rec["last_modified"]):
-            # The localizer's own anchored rewriter, never a bare replace: CDN
-            # sizing variants make one image URL a prefix of another, and an
-            # unanchored replace corrupts the longer ref into a dangling local one.
-            text = _core._retarget(text, url, f"images/{rec['local']}")
-            reused += 1
-        else:
-            (images_dir / rec["local"]).unlink(missing_ok=True)
-            superseded.append(decoded)
+        unchanged = False
+        if rec["etag"] or rec["last_modified"]:
+            unchanged = http.not_modified(
+                decoded, etag=rec["etag"], last_modified=rec["last_modified"]
+            )
+            http.polite_sleep()
+        if not unchanged:
+            cached_sha = rec["sha256"]
+            if not _refetch_into(rec, images_dir, decoded):
+                continue
+            if rec["sha256"] != cached_sha:
+                refreshed += 1
+        # The localizer's own anchored rewriter, never a bare replace: CDN
+        # sizing variants make one image URL a prefix of another, and an
+        # unanchored replace corrupts the longer ref into a dangling local one.
+        text = _core._retarget(text, url, f"images/{rec['local']}")
+        reused += 1
     if reused:
         atomic_write_text(doc_path, text, encoding="utf-8")
-    if superseded:
-        for url in superseded:
-            records.pop(url, None)
         write_sidecar(slug_dir, sorted(records.values(), key=lambda r: r["source_url"]))
-    if reused or superseded:
-        log.info("images.reuse", slug=slug_dir.name, reused=reused, superseded=len(superseded))
+        log.info("images.reuse", slug=slug_dir.name, reused=reused, refreshed=refreshed)
     return reused
+
+
+def _refetch_into(rec: ImageRecord, images_dir: Path, url: str) -> bool:
+    """Fetch ``url`` and, when its bytes still belong under ``rec["local"]``, write
+    them there and update ``rec``; False leaves both untouched."""
+    try:
+        _final, data, meta = http.fetch_bytes_meta(url)
+    except Exception as exc:
+        log.warning("images.refetch_failed", url=url, error=str(exc))
+        return False
+    finally:
+        http.polite_sleep()
+    sniffed = _core.sniff_image_ext(data)
+    name = _legacy_name(url)
+    suffix = Path(name).suffix.lower()
+    # The localizer's own rule: only a known image extension is one.
+    expected_ext = suffix if suffix in _core._IMAGE_EXTENSIONS else sniffed
+    if sniffed is None or expected_ext != Path(rec["local"]).suffix:
+        # Not an image (an expired token's login page), or a type that the
+        # localizer would name differently; either way the cached copy stays.
+        log.warning("images.refetch_kept", url=url, sniffed=sniffed, local=rec["local"])
+        return False
+    digest = content_hash(data)
+    if digest != rec["sha256"]:
+        atomic_write_bytes(images_dir / rec["local"], data)
+        rec["sha256"], rec["bytes"] = digest, len(data)
+    rec["etag"], rec["last_modified"] = meta["etag"], meta["last_modified"]
+    return True
 
 
 def prune_orphans(doc_path: Path, slug_dir: Path) -> int:
@@ -286,17 +318,19 @@ def download_images(doc_path: Path, images_dir: Path, *, checkpoint_every: int =
     preexisting = (
         {p.name for p in images_dir.glob("*") if p.is_file()} if images_dir.is_dir() else set()
     )
-    downloaded = _core.localize_file(
-        doc_path,
-        images_dir,
-        checkpoint_every=checkpoint_every,
-        fetcher=fetcher,
-        namer=_legacy_name,
-        reuse_existing=False,
-    )
-    if fetcher.fetched:
-        _record_provenance(images_dir, fetcher.fetched, preexisting=preexisting)
-    return downloaded
+    try:
+        return _core.localize_file(
+            doc_path,
+            images_dir,
+            checkpoint_every=checkpoint_every,
+            fetcher=fetcher,
+            namer=_legacy_name,
+            reuse_existing=False,
+        )
+    finally:
+        # An interrupted run keeps its checkpointed local refs, so it keeps their records too.
+        if fetcher.fetched:
+            _record_provenance(images_dir, fetcher.fetched, preexisting=preexisting)
 
 
 def _record_provenance(

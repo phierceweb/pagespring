@@ -28,17 +28,33 @@ log = get_logger(__name__)
 _MAX_PAGES = 1000
 # Versioned-doc dir names: "2.4.1", "3.0.1-rc", "2.x", "next".
 _VERSION_SEG_RE = re.compile(r"^(?:\d+\.(?:\d+|x)[^/]*|next)$")
+# A name that is nothing but a version; "2.0-migration" starts like one but isn't.
+_BARE_VERSION_RE = re.compile(r"^(?:\d+(?:\.(?:\d+|x))+(?:-(?:alpha|beta|rc|pre)[\w.]*)?|next)$")
 _LOC = "{http://www.sitemaps.org/schemas/sitemap/0.9}loc"
 # Docusaurus in-article chrome: breadcrumbs / pagination navs, edit links, mobile TOC.
 _CHROME_CSS = "nav, a.theme-edit-this-page, div.theme-doc-toc-mobile"
 
 
-def _keep(url: str, base: str) -> bool:
+def _versions(urls: list[str], base: str) -> set[str]:
+    """First segments under ``base`` that name a docs version.
+
+    A bare version name always does, whether or not an old version's paths still
+    match the current docs. A name that only starts like one (``2.0-migration``)
+    does when it repeats a current page's path."""
+    rests = {u[len(base) :].strip("/") for u in urls if u.startswith(base + "/")}
+    heads = (r.split("/", 1) for r in rests if "/" in r)
+    return {
+        head
+        for head, tail in heads
+        if _BARE_VERSION_RE.match(head) or (_VERSION_SEG_RE.match(head) and tail in rests)
+    }
+
+
+def _keep(url: str, base: str, versions: set[str]) -> bool:
     """True for pages under base that are not versioned-doc siblings."""
     if url != base and not url.startswith(base + "/"):
         return False
-    first = url[len(base) :].strip("/").split("/")[0]
-    return not _VERSION_SEG_RE.match(first)
+    return url[len(base) :].strip("/").split("/")[0] not in versions
 
 
 def _extract(html: str, page_url: str) -> str | None:
@@ -64,7 +80,8 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
         locs = [el.text.strip() for el in ET.fromstring(sm).iter(_LOC) if el.text]
     except ET.ParseError as exc:
         raise InvalidInputError(f"{origin}/sitemap.xml is not a valid sitemap") from exc
-    urls = [u for u in locs if _keep(u, base)]
+    versions = _versions(locs, base)
+    urls = [u for u in locs if _keep(u, base, versions)]
     truncated = len(urls) > _MAX_PAGES
     if truncated:
         log.warning("docusaurus.truncated", found=len(urls), cap=_MAX_PAGES)

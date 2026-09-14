@@ -66,6 +66,11 @@ The full set lives in [`.ai/rules/`](.ai/rules/). The essentials:
 Pre-1.0: a minor bump (`0.X.0`) may include breaking changes, always called out
 in `CHANGELOG.md`; a patch bump is fixes only.
 
+## License
+
+Contributions are accepted under the Apache License 2.0. Opening a pull request
+licenses your work to the project under those terms.
+
 ## Questions
 
 Open an issue for bugs and feature requests. For anything security-sensitive,

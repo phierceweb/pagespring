@@ -39,16 +39,26 @@ def _last_segment(src: str) -> str:
     return path.rstrip("/").rsplit("/", 1)[-1].lower()
 
 
-def _load_raw(src: str) -> str:
-    """Raw spec text from an http(s) URL, a ``file://`` URL, or a local path."""
+def _load_raw(src: str) -> tuple[str, str]:
+    """(where it landed, raw spec text) from an http(s) URL, a ``file://`` URL, or a local path."""
     if src.startswith(("http://", "https://")):
-        _final, text = http.fetch_text(src)
-        return text
+        return http.fetch_text(src)
     path = src[7:] if src.startswith("file://") else src
     p = Path(path)
     if p.is_file():
-        return p.read_text(encoding="utf-8")
+        return src, p.read_text(encoding="utf-8")
     raise InvalidInputError(f"not a fetchable URL or existing file: {src}")
+
+
+def _spec_behind_ui(page_url: str, html: str) -> tuple[str, str]:
+    """(spec URL, spec text) for an API reference UI page whose path looked like a spec;
+    other HTML comes back unchanged for ``_load_data`` to refuse."""
+    from pagespring.patterns import _spec_ui  # lazy: _spec_ui imports this module
+
+    ui = _spec_ui.ui_name(html)
+    if ui is None:
+        return page_url, html
+    return _spec_ui.find_spec(page_url, html, ui)
 
 
 def _load_data(text: str) -> dict[str, Any]:
@@ -58,10 +68,26 @@ def _load_data(text: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         import yaml  # lazy: only YAML specs pull this in
 
-        data = yaml.safe_load(text)
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            # An HTML error page served in place of the spec lands here.
+            raise InvalidInputError("spec is neither JSON nor YAML") from exc
     if not isinstance(data, dict):
         raise InvalidInputError("spec did not parse to a JSON/YAML object")
     return data
+
+
+def is_openapi(text: str) -> bool:
+    """Whether ``text`` parses as an OpenAPI/Swagger document — a version and an API
+    body, not just a key naming where the spec lives (``{"openapi": "/openapi.json"}``)."""
+    try:
+        data = _load_data(text)
+    except InvalidInputError:
+        return False
+    version = str(data.get("openapi", data.get("swagger", "")))
+    body = any(isinstance(data.get(k), dict) for k in ("paths", "components", "webhooks"))
+    return version.startswith(("2.", "3.")) and body
 
 
 def sniff_format(data: dict[str, Any]) -> str | None:
@@ -101,8 +127,13 @@ class ApiSpecPattern:
             return True
         return any(tok in seg for tok in _TOKENS)
 
-    def acquire(self, url: str, workdir: Path) -> AcquireResult:
-        text = _load_raw(url)
+    def acquire(self, url: str, workdir: Path, *, text: str | None = None) -> AcquireResult:
+        """``text``, when given, is the spec already fetched from ``url``."""
+        spec_url = url
+        if text is None:
+            landed, text = _load_raw(url)
+            if url.startswith(("http://", "https://")) and text.lstrip()[:1] == "<":
+                spec_url, text = _spec_behind_ui(landed, text)
         data = _load_data(text)
         fmt = sniff_format(data)
         if fmt is None:
@@ -111,7 +142,7 @@ class ApiSpecPattern:
                 "OpenAPI/Swagger spec or Postman collection — point it at "
                 "the raw spec file, a .json/.yaml URL or a local path."
             )
-        title, slug = _title_slug(data, fmt, url)
+        title, slug = _title_slug(data, fmt, spec_url)
         pages = (
             _openapi_render.count_operations(data)
             if fmt == "openapi"

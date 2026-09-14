@@ -1,12 +1,13 @@
 """Shared helpers for generator-built docs sites (used by docs_probe and its
-strategy modules): host→slug, <title>, <meta generator>, path-segment tests, and
+strategy modules): host→slug, <title>, <meta generator>, path-segment tests, llms.txt
+index candidates, and
 in-place fragment surgery — absolutizing refs and flattening responsive images."""
 
 from __future__ import annotations
 
 import re
 from contextlib import suppress
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -22,6 +23,16 @@ def names_a_file(segment: str) -> bool:
     Crawl patterns strip a trailing filename to get the base directory; stripping
     a directory instead scopes the crawl one level too high."""
     return bool(_FILE_SUFFIX_RE.search(segment))
+
+
+def llms_index_candidates(url: str) -> list[str]:
+    """``llms.txt`` URLs from ``url``'s directory up to the site root, nearest first."""
+    p = urlparse(url)
+    segs = [s for s in p.path.split("/") if s]
+    if segs and names_a_file(segs[-1]):
+        segs.pop()
+    origin = f"{p.scheme}://{p.netloc}"
+    return ["/".join([origin, *segs[:depth], "llms.txt"]) for depth in range(len(segs), -1, -1)]
 
 
 def slug_from_host(host: str) -> str:

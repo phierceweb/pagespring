@@ -1,13 +1,39 @@
 """archive_download — match + download/extract/concat with a synthetic zip."""
 
 import io
+import os
+import tarfile
 import zipfile
 
 import pytest
 from pf_core.exceptions import InvalidInputError
 
 from pagespring import http
+from pagespring.patterns import archive_download
 from pagespring.patterns.archive_download import ArchiveDownloadPattern
+
+
+def _serve(monkeypatch, data: bytes, etag=None, last_modified=None) -> None:
+    meta = {"etag": etag, "last_modified": last_modified}
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda url, **kw: (url, data, meta))
+
+
+def _deflated_zip(members: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in members.items():
+            z.writestr(name, data)
+    return buf.getvalue()
+
+
+def _tgz(members: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        for name, data in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            t.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
 
 
 def _zip_bytes() -> bytes:
@@ -30,26 +56,14 @@ def test_match():
 def test_acquire_captures_response_validators(tmp_path, monkeypatch):
     """The single-fetch archive download records ETag/Last-Modified so a
     refresh can probe with a conditional GET instead of re-downloading."""
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda url, **kw: (
-            url,
-            _zip_bytes(),
-            {"etag": '"z9"', "last_modified": "Fri, 17 Jul 2026 09:00:00 GMT"},
-        ),
-    )
+    _serve(monkeypatch, _zip_bytes(), etag='"z9"', last_modified="Fri, 17 Jul 2026 09:00:00 GMT")
     acq = ArchiveDownloadPattern().acquire("https://x.com/docs.zip", tmp_path)
     assert acq.etag == '"z9"'
     assert acq.last_modified == "Fri, 17 Jul 2026 09:00:00 GMT"
 
 
 def test_acquire_extracts_and_concats(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda url, **kw: (url, _zip_bytes(), {"etag": None, "last_modified": None}),
-    )
+    _serve(monkeypatch, _zip_bytes())
     p = ArchiveDownloadPattern()
 
     acq = p.acquire("https://docs.python.org/3/archives/python-3.14-docs-text.zip", tmp_path)
@@ -96,11 +110,7 @@ def _epub_bytes() -> bytes:
 def test_epub_members_follow_the_spine_not_the_filename(tmp_path, monkeypatch):
     """Lexical sort put Alice's chapters in the order I, X, XI, XII, II, III …
     and the cover last. The OPF spine is the book's real reading order."""
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda url, **kw: (url, _epub_bytes(), {"etag": None, "last_modified": None}),
-    )
+    _serve(monkeypatch, _epub_bytes())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://www.gutenberg.org/cache/epub/11/pg11.epub", tmp_path)
     out = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
@@ -114,11 +124,7 @@ def test_epub_members_follow_the_spine_not_the_filename(tmp_path, monkeypatch):
 def test_html_members_contribute_body_not_whole_documents(tmp_path, monkeypatch):
     """Concatenating whole XHTML files nested 14 DOCTYPE/<html>/<head> blocks
     inside one deliverable — invalid, and it buried 14 duplicate <title>s."""
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda url, **kw: (url, _epub_bytes(), {"etag": None, "last_modified": None}),
-    )
+    _serve(monkeypatch, _epub_bytes())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://www.gutenberg.org/cache/epub/11/pg11.epub", tmp_path)
     out = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
@@ -161,11 +167,7 @@ def test_epub3_xhtml_chapters_are_the_deliverable(tmp_path, monkeypatch):
     """EPUB 3 names content documents .xhtml. Sniffing only .html/.htm classified
     the book as markdown, filtered every chapter out, and staged the stray
     COPYRIGHT.txt as the entire deliverable with a healthy-looking manifest."""
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda url, **kw: (url, _epub3_bytes(), {"etag": None, "last_modified": None}),
-    )
+    _serve(monkeypatch, _epub3_bytes())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://standardebooks.org/x/y/downloads/book.epub", tmp_path)
 
@@ -194,11 +196,7 @@ def test_stray_xhtml_does_not_flip_a_markdown_archive_to_html(tmp_path, monkeypa
     member everywhere flipped this archive's kind to html, filtered both .md docs
     out, and staged the boilerplate as the whole deliverable — silently, since
     `single_fetch` suppresses audit's single_page_crawl on the 1-page result."""
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda url, **kw: (url, _mixed_zip_bytes(), {"etag": None, "last_modified": None}),
-    )
+    _serve(monkeypatch, _mixed_zip_bytes())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/project-docs.zip", tmp_path)
 
@@ -227,11 +225,7 @@ def test_uppercase_html_members_are_sniffed_as_html(tmp_path, monkeypatch):
     """A case-sensitive sniff classified a zip of .HTML pages as markdown, filtered
     every page out, and staged the packaging README as the entire deliverable —
     with a healthy-looking manifest. pathlib globs case-sensitively even on APFS."""
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda url, **kw: (url, _uppercase_html_zip_bytes(), {"etag": None, "last_modified": None}),
-    )
+    _serve(monkeypatch, _uppercase_html_zip_bytes())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/manual.zip", tmp_path)
 
@@ -260,11 +254,7 @@ def test_one_stray_html_does_not_flip_a_text_archive_to_html(tmp_path, monkeypat
     """One .html member must not reclassify a text archive: the html filter then drops
     every .txt and stages the stub as the whole deliverable — the .xhtml case above,
     through the plain .html branch."""
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda url, **kw: (url, _text_zip_with_stray_html(), {"etag": None, "last_modified": None}),
-    )
+    _serve(monkeypatch, _text_zip_with_stray_html())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/python-3.14-docs-text.zip", tmp_path)
 
@@ -293,15 +283,7 @@ def test_an_equal_member_count_stages_the_html_manual_not_the_readme(tmp_path, m
     """A tie is an HTML archive: the text family here is the packaging README, and
     resolving to markdown filters the manual out and stages the README as the whole
     deliverable — with a valid manifest and a clean audit, so nothing else catches it."""
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda url, **kw: (
-            url,
-            _html_zip_with_packaging_readme(),
-            {"etag": None, "last_modified": None},
-        ),
-    )
+    _serve(monkeypatch, _html_zip_with_packaging_readme())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/manual.zip", tmp_path)
 
@@ -327,11 +309,7 @@ def test_a_lone_stub_does_not_outvote_a_lone_text_chapter(tmp_path, monkeypatch)
     """The mirror of the case above: breaking the tie on raw counts alone swings this
     one the wrong way, staging the stub and dropping the only chapter. Which family
     holds the junk is the signal, not how many members each has."""
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda url, **kw: (url, _text_zip_with_one_stub(), {"etag": None, "last_modified": None}),
-    )
+    _serve(monkeypatch, _text_zip_with_one_stub())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/docs.zip", tmp_path)
 
@@ -402,15 +380,7 @@ def test_spine_members_sharing_a_basename_are_not_confused(tmp_path, monkeypatch
     """Two chapters can share a basename in different folders. Matching the spine on
     basename alone collapses them onto one Path: one is emitted twice and the other
     pushed out of reading order to the end."""
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda url, **kw: (
-            url,
-            _epub_with_same_named_chapters(),
-            {"etag": None, "last_modified": None},
-        ),
-    )
+    _serve(monkeypatch, _epub_with_same_named_chapters())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/book.epub", tmp_path)
     out = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
@@ -418,3 +388,105 @@ def test_spine_members_sharing_a_basename_are_not_confused(tmp_path, monkeypatch
     assert out.count("PART ONE BODY") == 1, "part one duplicated"
     assert out.count("PART TWO BODY") == 1, "part two dropped or duplicated"
     assert out.index("PART ONE BODY") < out.index("PART TWO BODY"), "spine order lost"
+
+
+def _epub_with_escaped_hrefs() -> bytes:
+    """An EPUB whose manifest hrefs percent-encode spaces and carry a fragment,
+    both legal URL spellings of the extracted member names."""
+    opf = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="cv" href="Text/Cover.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c1" href="Text/Chapter%201.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c2" href="Text/Chapter%202.xhtml#start" media-type="application/xhtml+xml"/>
+    <item id="ap" href="Text/Appendix%20A.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="cv"/><itemref idref="c1"/><itemref idref="c2"/><itemref idref="ap"/></spine>
+</package>"""
+    return _deflated_zip(
+        {"OEBPS/content.opf": opf.encode()}
+        | {
+            f"OEBPS/Text/{name}.xhtml": f"<html><body><p>{name} BODY</p></body></html>".encode()
+            for name in ("Cover", "Chapter 1", "Chapter 2", "Appendix A")
+        }
+    )
+
+
+def test_percent_encoded_spine_hrefs_keep_reading_order(tmp_path, monkeypatch):
+    """`Chapter%201.xhtml` names the extracted `Chapter 1.xhtml`; compared raw, no
+    escaped chapter matched and the appendix sorted ahead of chapter one."""
+    _serve(monkeypatch, _epub_with_escaped_hrefs())
+    p = ArchiveDownloadPattern()
+    acq = p.acquire("https://x.com/book.epub", tmp_path)
+    out = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    bodies = ("Cover BODY", "Chapter 1 BODY", "Chapter 2 BODY", "Appendix A BODY")
+    assert all(out.count(b) == 1 for b in bodies)
+    order = [out.index(b) for b in bodies]
+    assert order == sorted(order), f"members out of spine order: {order}"
+
+
+@pytest.mark.parametrize("pack", [_deflated_zip, _tgz], ids=["zip", "tar.gz"])
+def test_an_implausible_compression_ratio_is_refused_before_extraction(tmp_path, monkeypatch, pack):
+    """About 40 KB of deflated zeros inflates to 42 MB, so the download cap alone
+    lets one archive expand a thousandfold onto disk."""
+    _serve(monkeypatch, pack({"docs/page.txt": bytes(42 * 1024 * 1024)}))
+    with pytest.raises(InvalidInputError, match="compression ratio"):
+        ArchiveDownloadPattern().acquire("https://x.com/docs.zip", tmp_path)
+    assert not any((tmp_path / "raw").rglob("*")), "members extracted before the refusal"
+
+
+@pytest.mark.parametrize("pack", [_deflated_zip, _tgz], ids=["zip", "tar.gz"])
+@pytest.mark.parametrize(
+    ("cap", "value", "why"),
+    [("_MAX_EXTRACT_BYTES", 150_000, "extract"), ("_MAX_MEMBERS", 1, "members")],
+)
+def test_an_archive_past_the_extraction_budget_is_refused(
+    tmp_path, monkeypatch, pack, cap, value, why
+):
+    monkeypatch.setattr(archive_download, cap, value)
+    _serve(monkeypatch, pack({"a.txt": os.urandom(100_000), "b.txt": os.urandom(100_000)}))
+    with pytest.raises(InvalidInputError, match=why):
+        ArchiveDownloadPattern().acquire("https://x.com/docs.zip", tmp_path)
+    assert not any((tmp_path / "raw").rglob("*"))
+
+
+@pytest.mark.parametrize("pack", [_deflated_zip, _tgz], ids=["zip", "tar.gz"])
+def test_a_small_highly_compressible_archive_still_extracts(tmp_path, monkeypatch, pack):
+    """Repetitive text compresses far past the ratio cap; below the floor the ratio
+    is no evidence of a bomb."""
+    _serve(monkeypatch, pack({"docs/page.txt": b"Lorem ipsum. " * 200_000}))
+    assert ArchiveDownloadPattern().acquire("https://x.com/docs.zip", tmp_path).pages == 1
+
+
+def _corrupt_deflate_zip() -> bytes:
+    data = bytearray(_deflated_zip({"docs/page.txt": b"page body " * 500}))
+    info = zipfile.ZipFile(io.BytesIO(bytes(data))).infolist()[0]
+    start = info.header_offset + 30 + len(info.filename)
+    data[start : start + info.compress_size] = b"\xff" * info.compress_size
+    return bytes(data)
+
+
+@pytest.mark.parametrize(
+    ("data", "why"),
+    [
+        pytest.param(b"<!DOCTYPE html><html><body>Sign in</body></html>", "HTML page", id="html"),
+        pytest.param(_zip_bytes().replace(b"Intro", b"INTRO"), "damaged", id="bad-crc"),
+        pytest.param(_corrupt_deflate_zip(), "damaged", id="corrupt-deflate"),
+        pytest.param(_tgz({"page.txt": b"x" * 5000})[:-40], "damaged", id="truncated-tgz"),
+        pytest.param(_tgz({"../evil.txt": b"escape"}), "outside", id="tar-member-escapes"),
+    ],
+)
+def test_an_unreadable_or_unsafe_archive_is_invalid_input(tmp_path, monkeypatch, data, why):
+    """A login page at a .zip URL, a damaged download or a member escaping the
+    extraction root is a bad source (exit 2), not a traceback."""
+    _serve(monkeypatch, data)
+    with pytest.raises(InvalidInputError, match=f"docs.zip: .*{why}"):
+        ArchiveDownloadPattern().acquire("https://x.com/docs.zip", tmp_path)
+
+
+def test_a_corrupt_local_archive_names_the_file(tmp_path):
+    archive = tmp_path / "broken-manual.zip"
+    archive.write_bytes(b"PK\x03\x04" + bytes(40))
+    with pytest.raises(InvalidInputError, match="broken-manual.zip: not a zip"):
+        ArchiveDownloadPattern().acquire(str(archive), tmp_path / "w")

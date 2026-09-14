@@ -436,6 +436,19 @@ def test_unverifiable_deliverable_is_not_reported_as_healthy(tmp_path):
     assert ("sha_mismatch", "error") not in findings
 
 
+def test_sha_unverified_advises_a_reingest_not_a_localize(tmp_path):
+    """localize would record whatever is on disk, damaged or not, as verified."""
+    d = _stage(tmp_path, images=5)
+    (d / "fakeapp.md").write_text("# Title\n\n![i](images/i.png)\n", encoding="utf-8")
+    (d / "images").mkdir()
+    (d / "images" / "i.png").write_bytes(b"png")
+
+    [detail] = [f["detail"] for f in audit.audit_slug("fakeapp") if f["check"] == "sha_unverified"]
+
+    assert "--download-images" in detail
+    assert "run localize" not in detail
+
+
 def test_ingest_killed_mid_image_pass_warns_instead_of_reporting_corruption(tmp_path):
     """A killed localize leaves images=0 and no localized_sha256 but a legitimately
     re-pointed deliverable; the divergence from the staged sha is the pass's own

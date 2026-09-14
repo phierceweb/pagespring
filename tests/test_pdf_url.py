@@ -12,6 +12,35 @@ def test_match_pdf_extension():
     assert not p.match("https://x.com/docs/")
 
 
+def test_a_path_merely_ending_in_pdf_is_not_claimed():
+    """A docs section named pdf is an HTML page; docs_probe sniffs real PDFs at any path."""
+    p = PdfUrlPattern()
+    assert not p.match("https://docs.aspose.com/pdf/")
+    assert not p.match("https://docs.aspose.com/pdf")
+    assert not p.match("https://vendor.com/manuals/pdf/")
+    assert not p.match("https://vendor.com/_/downloads/pdf/")
+
+
+def test_rtd_download_shapes_are_claimed():
+    p = PdfUrlPattern()
+    assert p.match("https://x.readthedocs.io/_/downloads/en/stable/pdf/")
+    assert p.match("https://x.readthedocs.io/_/downloads/en/stable/pdf")
+    assert p.match("https://x.readthedocs.io/_/downloads/child/pt-br/v2/pdf/")
+    assert p.match("https://x.readthedocs.io/_/downloads/api/python/en/latest/pdf/")
+    assert not p.match("https://x.readthedocs.io/_/downloads/en/latest/htmlzip/")
+
+
+def test_subproject_download_slug_names_the_subproject():
+    from pagespring.patterns.pdf_url import _slug_from_url
+
+    assert _slug_from_url("https://parent.readthedocs.io/_/downloads/child/en/latest/pdf/") == (
+        "parent-child"
+    )
+    assert _slug_from_url("https://parent.readthedocs.io/_/downloads/api/python/en/v1/pdf/") == (
+        "parent-api-python"
+    )
+
+
 def test_rtd_pdf_match_and_host_slug(tmp_path, monkeypatch):
     from pagespring.patterns.pdf_url import _slug_from_url
 

@@ -21,7 +21,7 @@ from pf_core.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._gitbook import strip_banner
+from pagespring.patterns._gitbook import absolutize, strip_boilerplate
 
 log = get_logger(__name__)
 
@@ -38,6 +38,7 @@ _MD_URL_RE = re.compile(r"https?://[^\s)\]\"'<>]+\.md")
 # Safety cap so a giant index (e.g. a 1600-page platform llms.txt) can't trigger
 # thousands of fetches by accident.
 _MAX_PAGES = 1000
+_SOURCE_RE = re.compile(r"\A<!-- source: (\S+) -->")
 
 
 def _is_llms(url: str, *names: str) -> bool:
@@ -60,6 +61,21 @@ def _under_section(md_url: str, section: str) -> bool:
     return origin == section_origin and (
         path == section_path or path.startswith(f"{section_path}/")
     )
+
+
+def _clean_page(raw: str) -> str:
+    """A saved page without its platform boilerplate, links absolute against its source.
+
+    An ``llms-full.txt`` inlines many pages under one URL that is none of theirs, so
+    only its root-relative links resolve."""
+    md = strip_boilerplate(raw)
+    source = _SOURCE_RE.match(md)
+    if source is None:
+        return md
+    url = source.group(1)
+    p = urlparse(url)
+    page_url = None if _is_llms(url, "llms-full.txt") else url
+    return absolutize(md, f"{p.scheme}://{p.netloc}", page_url)
 
 
 def _llms_url_and_section(url: str) -> tuple[str, str | None]:
@@ -163,7 +179,7 @@ class LlmsTxtPattern:
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         # The numeric filename prefix preserves llms.txt order under sort().
         parts = [
-            strip_banner(p.read_text(encoding="utf-8")) for p in sorted(acq.raw_dir.glob("*.md"))
+            _clean_page(p.read_text(encoding="utf-8")) for p in sorted(acq.raw_dir.glob("*.md"))
         ]
         out = workdir / f"{acq.slug}.md"
         out.write_text("\n\n---\n\n".join(parts), encoding="utf-8")

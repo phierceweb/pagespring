@@ -9,14 +9,18 @@ Sphinx ecosystem.
 
 from __future__ import annotations
 
+import gzip
 import html as _html
 import io
+import lzma
 import re
 import tarfile
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
+from collections.abc import Iterator
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
 from bs4 import BeautifulSoup
@@ -35,6 +39,22 @@ _PACKAGING = frozenset(
     {"readme", "license", "licence", "changelog", "contributing", "install", "notice", "authors"}
 )
 _HTMLY = (".html", ".htm")
+
+# Extraction budget, checked against declared member sizes before anything is written.
+_MAX_EXTRACT_BYTES = 2 * 1024 * 1024 * 1024
+_MAX_MEMBERS = 100_000
+_MAX_RATIO = 100
+# Below this many extracted bytes a high ratio is ordinary repetitive text, not a bomb.
+_RATIO_FLOOR_BYTES = 16 * 1024 * 1024
+_ARCHIVE_ERRORS = (
+    zipfile.BadZipFile,
+    tarfile.TarError,
+    EOFError,
+    zlib.error,
+    lzma.LZMAError,
+    gzip.BadGzipFile,
+    NotImplementedError,
+)
 
 
 def _html_exts(raw_dir: Path) -> tuple[str, ...]:
@@ -99,7 +119,8 @@ def _spine_order(raw_dir: Path) -> list[Path]:
     spine = [
         hrefs.get(ref.get("idref") or "") for ref in root.iterfind(".//opf:spine/opf:itemref", ns)
     ]
-    return [opf.parent / h for h in spine if h]
+    paths = (unquote(h.split("#", 1)[0]) for h in spine if h)
+    return [opf.parent / p for p in paths if p]
 
 
 def _ordered_members(raw_dir: Path, exts: tuple[str, ...]) -> list[Path]:
@@ -135,17 +156,42 @@ def _body_fragment(html: str) -> str:
     return "".join(str(c) for c in body.contents).strip()
 
 
-def _extract(data: bytes, dest: Path) -> None:
-    # Sources here are trusted docs archives (python.org, Read the Docs).
-    bio = io.BytesIO(data)
-    if zipfile.is_zipfile(bio):
-        bio.seek(0)
-        with zipfile.ZipFile(bio) as z:
-            z.extractall(dest)
-    else:
-        bio.seek(0)
-        with tarfile.open(fileobj=bio, mode="r:*") as t:
-            t.extractall(dest, filter="data")
+def _check_budget(sizes: Iterator[int], archive_bytes: int, src: str) -> None:
+    """Refuse a bomb from its declared member sizes before any member reaches disk."""
+    total = 0
+    for members, size in enumerate(sizes, start=1):
+        total += size
+        if members > _MAX_MEMBERS:
+            raise InvalidInputError(f"{src}: archive has more than {_MAX_MEMBERS} members")
+        if total > _MAX_EXTRACT_BYTES:
+            raise InvalidInputError(f"{src}: archive would extract past {_MAX_EXTRACT_BYTES} bytes")
+        ratio = total / max(archive_bytes, 1)
+        if total > _RATIO_FLOOR_BYTES and ratio > _MAX_RATIO:
+            raise InvalidInputError(
+                f"{src}: implausible compression ratio ({ratio:.0f}:1) for a docs archive"
+            )
+
+
+def _open_tar(data: bytes, src: str) -> tarfile.TarFile:
+    try:
+        return tarfile.open(fileobj=io.BytesIO(data), mode="r:*")
+    except tarfile.ReadError as exc:
+        got = " (got an HTML page)" if data.lstrip()[:1] == b"<" else ""
+        raise InvalidInputError(f"{src}: not a zip, tar or epub archive{got}") from exc
+
+
+def _extract(data: bytes, dest: Path, src: str) -> None:
+    try:
+        if zipfile.is_zipfile(io.BytesIO(data)):
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                _check_budget((i.file_size for i in z.infolist()), len(data), src)
+                z.extractall(dest)
+            return
+        with _open_tar(data, src) as tar:
+            _check_budget((m.size for m in tar), len(data), src)
+            tar.extractall(dest, filter="data")
+    except _ARCHIVE_ERRORS as exc:
+        raise InvalidInputError(f"{src}: damaged or unsafe archive: {exc}") from exc
 
 
 class ArchiveDownloadPattern:
@@ -160,7 +206,7 @@ class ArchiveDownloadPattern:
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
         data, meta = _load_bytes(url)
-        _extract(data, raw_dir)
+        _extract(data, raw_dir, url)
         htmly = _html_exts(raw_dir)
         members = [(p.suffix.lower(), p.stem.lower()) for p in raw_dir.rglob("*")]
         n_html = sum(1 for suffix, _ in members if suffix in htmly)

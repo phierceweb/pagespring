@@ -21,6 +21,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
+from pf_core.exceptions import InvalidInputError
 from pf_core.log import get_logger
 from pf_core.utils.slugify import slugify
 from pf_core.utils.url_parse import domain_of
@@ -84,6 +85,19 @@ def _slug(url: str) -> str:
     return host_slug
 
 
+def _api_page(api_url: str, body: str, url: str) -> dict[str, Any]:
+    try:
+        data = json.loads(body)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise InvalidInputError(
+            f"{api_url} did not answer with Help Center API JSON (starts {body[:40]!r}) — "
+            f"{url} is not a Zendesk help center, or its API refused the request."
+        )
+    return data
+
+
 class ZendeskHelpPattern:
     name = "zendesk_help"
 
@@ -91,7 +105,7 @@ class ZendeskHelpPattern:
         p = urlparse(url)
         if _ATTACHMENT_SEG in p.path:
             return False  # a file — docs_probe sniffs it and routes by content
-        return p.netloc.lower().endswith(".zendesk.com") or "/hc/" in p.path
+        return p.netloc.lower().endswith(".zendesk.com") or p.path.startswith("/hc/")
 
     def _clean_body(self, body: str, page_url: str) -> str:
         """Article bodies are author-supplied HTML — embeds, trackers and all."""
@@ -110,7 +124,7 @@ class ZendeskHelpPattern:
         pages = 0
         while page_url and pages < _MAX_PAGES:
             _f, body = http.fetch_text(page_url)
-            data = json.loads(body)
+            data = _api_page(page_url, body, url)
             # The single-article endpoint returns one "article"; the list ones "articles".
             single = data.get("article")
             articles.extend(data.get("articles") or ([single] if single else []))

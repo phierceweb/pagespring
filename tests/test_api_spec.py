@@ -53,7 +53,7 @@ def test_title_slug_from_info():
 def test_load_raw_local_file(tmp_path):
     f = tmp_path / "spec.json"
     f.write_text('{"openapi": "3.0.0"}', encoding="utf-8")
-    assert mod._load_raw(str(f)) == '{"openapi": "3.0.0"}'
+    assert mod._load_raw(str(f)) == (str(f), '{"openapi": "3.0.0"}')
 
 
 def test_load_raw_missing_file_is_clean_error():
@@ -352,6 +352,22 @@ def test_load_data_rejects_non_object():
         mod._load_data("- a\n- b\n")
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<!DOCTYPE html>\n<html><head><style>\nbody { margin: 0; }\n</style></head>"
+        "<body>Not Found</body></html>",
+        '<html><head><script type="application/ld+json">{"@type": "WebPage"}</script></head>\n'
+        "<body>404</body></html>",
+        "openapi: 3.0.0\n  info: bad: indent",
+    ],
+    ids=["html-soft-404", "json-ld-soft-404", "malformed-yaml"],
+)
+def test_load_data_refuses_text_that_is_neither_json_nor_yaml(text):
+    with pytest.raises(InvalidInputError, match="neither JSON nor YAML"):
+        mod._load_data(text)
+
+
 def test_normalize_rejects_unrecognized_raw(tmp_path):
     # normalize re-sniffs and must raise (not silently render as OpenAPI) if the
     # raw file isn't a recognizable spec.
@@ -377,3 +393,100 @@ def test_a_null_paths_block_counts_as_zero_operations():
     listy = {"openapi": "3.0.0", "info": {"title": "Odd API"}, "paths": []}
     assert _openapi_render.count_operations(listy) == 0
     assert "# Odd API" in _openapi_render.render(listy, "Odd API")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('{"openapi": "3.1.0", "info": {"title": "x"}, "paths": {}}', True),
+        ("swagger: '2.0'\ninfo:\n  title: x\npaths: {}\n", True),
+        ('{"info": {"_postman_id": "1", "name": "x"}, "item": []}', False),
+        (
+            "<!DOCTYPE html>\n<html><head><style>\nbody { margin: 0; }\n</style></head></html>",
+            False,
+        ),
+    ],
+    ids=["openapi-json", "swagger-yaml", "postman", "html"],
+)
+def test_is_openapi(text, expected):
+    assert mod.is_openapi(text) is expected
+
+
+@pytest.mark.parametrize(
+    "ui_url",
+    ["https://api.example.com/swagger-ui.html", "https://api.example.com/swagger/"],
+)
+def test_a_ui_page_claimed_by_its_path_ingests_the_spec_it_names(tmp_path, monkeypatch, ui_url):
+    """match claims any segment carrying a spec token, which includes the UI pages that
+    render specs; acquire hands those to spec discovery instead of refusing them."""
+    spec = "https://api.example.com/v3/openapi.json"
+    shell = (
+        '<html><body><div id="swagger-ui"></div><script src="./swagger-ui-bundle.js"></script>'
+        "<script>SwaggerUIBundle({ url: '/v3/openapi.json', dom_id: '#swagger-ui' })</script>"
+        "</body></html>"
+    )
+    body = (
+        '{"openapi": "3.0.0", "info": {"title": "Acme API", "version": "3"}, '
+        '"paths": {"/ping": {"get": {"summary": "Ping"}}}}'
+    )
+    requested = []
+
+    def fetch(url, **kwargs):
+        requested.append(url)
+        return url, body if url == spec else shell
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    pattern = ApiSpecPattern()
+
+    assert pattern.match(ui_url)
+    acq = pattern.acquire(ui_url, tmp_path)
+
+    assert (acq.slug, acq.pages) == ("acme-api-3", 1)
+    assert requested == [ui_url, spec], "the proven spec is not fetched again"
+
+
+def test_a_redirected_ui_page_resolves_its_spec_against_where_it_landed(tmp_path, monkeypatch):
+    """A springdoc app advertises /swagger-ui.html, which redirects to the UI directory
+    with a configUrl query; the initializer and config resolve against that page."""
+    seed = "https://api.example.com/swagger-ui.html"
+    landed = "https://api.example.com/swagger-ui/index.html?configUrl=/v3/api-docs/swagger-config"
+    shell = (
+        '<html><body><div id="swagger-ui"></div><script src="./swagger-ui-bundle.js"></script>'
+        '<script src="./swagger-initializer.js"></script></body></html>'
+    )
+    bodies = {
+        "https://api.example.com/swagger-ui/swagger-initializer.js": (
+            'SwaggerUIBundle({ url: "https://petstore.swagger.io/v2/swagger.json" });'
+        ),
+        "https://api.example.com/v3/api-docs/swagger-config": '{"url": "/v3/api-docs"}',
+        "https://api.example.com/v3/api-docs": (
+            '{"openapi": "3.0.1", "info": {"title": "Orders API", "version": "v1"}, '
+            '"paths": {"/orders": {"get": {"summary": "List"}}}}'
+        ),
+    }
+    events = []
+
+    def fetch(url, **kwargs):
+        events.append(url)
+        if url == seed:
+            return landed, shell
+        if url in bodies:
+            return url, bodies[url]
+        raise OSError("404")
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: events.append("sleep"))
+
+    acq = ApiSpecPattern().acquire(seed, tmp_path)
+
+    assert (acq.slug, acq.pages) == ("orders-api-v1", 1)
+    assert events == [
+        seed,
+        "sleep",
+        "https://api.example.com/swagger-ui/swagger-initializer.js",
+        "sleep",
+        "https://api.example.com/v3/api-docs/swagger-config",
+        "sleep",
+        "https://api.example.com/v3/api-docs",
+    ]

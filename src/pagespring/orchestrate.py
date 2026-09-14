@@ -21,7 +21,8 @@ from pf_core.utils.dates import now_iso
 
 from pagespring import images as images_mod
 from pagespring import manifest
-from pagespring._staging import _clear_except, _same_source
+from pagespring._integrity import deliverable_intact, open_for_image_pass, read_usable, usable
+from pagespring._staging import _clear_except, _guard_slug, _stage_file, _unchanged_record
 from pagespring.base import AcquireResult, SourceKind
 from pagespring.config import cfg
 from pagespring.paths import fold_slug, slug_dir
@@ -58,7 +59,8 @@ class IngestResult(TypedDict):
     clean: str
     pages: int | None
     bytes: int
-    images: int
+    images: int  # files in incoming/<slug>/images/
+    images_downloaded: int  # fetched by this run's image pass
     changed: bool  # False only when --if-changed found the deliverable already current
     duplicate_of: str | None  # another slug already holding byte-identical content
 
@@ -89,8 +91,8 @@ def run_ingest(
     filename), folded via slugify.
 
     Returns a stats dict: pattern, slug, kind, clean (the incoming file), pages,
-    bytes, images (count localized), changed, and duplicate_of (another slug
-    already holding byte-identical content, or None).
+    bytes, images (files in images/), images_downloaded (this run), changed, and
+    duplicate_of (another slug already holding byte-identical content, or None).
     """
     pattern = classify(url)
     if pattern is None:
@@ -135,54 +137,36 @@ def run_ingest(
 
         # --if-changed: an unchanged re-fetch preserves the existing deliverable,
         # its localized images, and its mtime — nothing is re-staged.
-        if if_changed:
-            prior = manifest.read_manifest(incoming_dir)
-            # Only a record naming this same source can answer "unchanged";
-            # another manual's belongs to the guard below.
-            prior_url = prior.get("source_url") if isinstance(prior, dict) else None
-            same_source = _same_source(prior_url, url) if prior_url else False
-            # The recorded sha answers "unchanged" only while the file it describes
-            # is still on disk; a slug that lost its deliverable must re-stage.
-            staged_name = prior.get("deliverable") if prior_url and prior else None
-            prior_file = incoming_dir / str(staged_name) if staged_name else None
-            on_disk = prior_file is not None and prior_file.is_file() and prior_file.stat().st_size
-            if prior is not None and same_source and prior.get("sha256") == sha256 and on_disk:
-                log.info("ingest.unchanged", pattern=pattern.name, slug=acq.slug, sha256=sha256)
-                return {
-                    "pattern": pattern.name,
-                    "slug": acq.slug,
-                    "kind": acq.kind,
-                    "clean": str(incoming_dir / prior["deliverable"]),
-                    "pages": acq.pages,
-                    "bytes": prior["bytes"],
-                    "images": prior["images"],
-                    "changed": False,
-                    "duplicate_of": duplicate_of,
-                }
+        prior = _unchanged_record(incoming_dir, url, sha256) if if_changed else None
+        if prior is not None:
+            log.info("ingest.unchanged", pattern=pattern.name, slug=acq.slug, sha256=sha256)
+            return {
+                "pattern": pattern.name,
+                "slug": acq.slug,
+                "kind": acq.kind,
+                "clean": str(incoming_dir / prior["deliverable"]),
+                "pages": acq.pages,
+                "bytes": prior.get("bytes", size_bytes),
+                "images": prior["images"],
+                "images_downloaded": 0,
+                "changed": False,
+                "duplicate_of": duplicate_of,
+            }
 
-        # A same-source re-ingest keeps its image cache — a refresh brings the same
-        # image URLs back. A takeover's cache and manifest describe the displaced manual.
-        if incoming_dir.exists():
-            # The clear below is unrecoverable: incoming/ is gitignored.
-            held = manifest.read_manifest(incoming_dir)
-            held_url = held.get("source_url") if isinstance(held, dict) else None
-            if held_url:
-                takeover = not _same_source(held_url, url)
-                holds = repr(held_url)
-            else:
-                # Nothing here can say what it holds, so content means refuse.
-                takeover = any(incoming_dir.iterdir())
-                holds = "an unidentified manual (no readable manifest)"
-            if takeover and not replace:
-                own_dir = "--slug to give this source its own directory"
-                escape = "a different --slug" if slug_override is not None else own_dir
-                raise InvalidInputError(
-                    f"slug {acq.slug!r} already holds {holds} — "
-                    f"ingesting {url!r} would delete it. Pass {escape}, or "
-                    "--replace to take the slug over."
-                )
-            same_manual = {manifest.MANIFEST_NAME, "images", images_mod.SIDECAR_NAME}
-            _clear_except(incoming_dir, keep=set() if takeover else same_manual)
+        # A slug whose record still describes its file keeps that record until the new
+        # file lands; replaced first, a failed write would label the old bytes as new.
+        held_record = (
+            usable(manifest.read_manifest(incoming_dir)) if incoming_dir.exists() else False
+        )
+        takeover = _guard_slug(
+            incoming_dir,
+            url,
+            replace=replace,
+            slug_override=slug_override,
+            pages=acq.pages,
+            truncated=acq.truncated,
+            single_fetch=getattr(pattern, "single_fetch", False),
+        )
         incoming_dir.mkdir(parents=True, exist_ok=True)
         # Stage as <slug>.<ext> regardless of what normalize called the file —
         # patterns that name output at acquire time can't see a --slug override.
@@ -210,11 +194,19 @@ def run_ingest(
             lost=acq.lost,
             localized_sha256=None,
         )
-        # Before the copies, so a kill anywhere below still leaves provenance —
-        # content with no manifest reads as a foreign manual on the next ingest.
+        # Otherwise before the copy, so a kill still leaves provenance — content with
+        # no manifest reads as a foreign manual on the next ingest.
+        if not held_record:
+            manifest.write_manifest(incoming_dir, record)
+        _stage_file(clean, staged)
         manifest.write_manifest(incoming_dir, record)
-
-        shutil.copy2(clean, staged)
+        # Only once the new deliverable is in place: the clear is unrecoverable.
+        # A same-source re-ingest keeps its image cache — a refresh brings the same
+        # image URLs back. A takeover's cache describes the displaced manual.
+        keep = {manifest.MANIFEST_NAME, staged.name}
+        if not takeover:
+            keep |= {"images", images_mod.SIDECAR_NAME}
+        _clear_except(incoming_dir, keep=keep)
         # A PDF's normalize is a passthrough, so a replay can only return the
         # bytes already staged — raw/ would duplicate the deliverable.
         if keep_raw and acq.kind == "pdf":
@@ -226,14 +218,10 @@ def run_ingest(
         record["kept_raw"] = (incoming_dir / "raw").is_dir()
         manifest.write_manifest(incoming_dir, record)
 
-        n_images = 0
+        n_images = n_downloaded = 0
         if download_images and acq.kind in ("html", "markdown"):
-            n_images = _image_pass(staged, incoming_dir).total
-            record["images"] = n_images
-            # The refs were re-pointed, so the staged sha no longer describes the
-            # file on disk; without this the deliverable has no integrity record.
-            record["localized_sha256"] = manifest.sha256_file(staged)
-            manifest.write_manifest(incoming_dir, record)
+            passed = _recorded_image_pass(staged, incoming_dir, record)
+            n_images, n_downloaded = passed.total, passed.localized
 
         log.info(
             "ingest.done",
@@ -251,6 +239,7 @@ def run_ingest(
             "pages": acq.pages,
             "bytes": size_bytes,
             "images": n_images,
+            "images_downloaded": n_downloaded,
             "changed": True,
             "duplicate_of": duplicate_of,
         }
@@ -278,9 +267,7 @@ def run_renormalize(slug: str) -> RenormalizeResult:
     kept copy; the ``AcquireResult`` is rebuilt from the manifest.
     """
     incoming_dir = slug_dir(slug)
-    m = manifest.read_manifest(incoming_dir)
-    if m is None:
-        raise PreconditionError(f"no manifest for {incoming_dir}/ — ingest it first")
+    m = read_usable(incoming_dir)
     raw_src = incoming_dir / "raw"
     if not raw_src.is_dir():
         raise PreconditionError(
@@ -303,6 +290,7 @@ def run_renormalize(slug: str) -> RenormalizeResult:
             slug=m["slug"],
             pages=m["pages"],
             title=m.get("title"),  # absent in schema-v1 manifests → slug-fallback heading
+            lost=m.get("lost") or 0,
         )
         clean = pattern.normalize(acq, work)
         if not clean.exists() or clean.stat().st_size == 0:
@@ -311,10 +299,13 @@ def run_renormalize(slug: str) -> RenormalizeResult:
         sha256 = manifest.sha256_file(clean)
         size_bytes = clean.stat().st_size
 
-        # Byte-identical replay: leave file, images, and mtime untouched — the
-        # refactor-was-safe signal.
-        if sha256 == m["sha256"]:
+        # Byte-identical replay over an intact file: leave file, images, and mtime
+        # untouched — the refactor-was-safe signal.
+        if sha256 == m["sha256"] and deliverable_intact(incoming_dir, m):
             log.info("renormalize.unchanged", pattern=pattern.name, slug=slug, sha256=sha256)
+            if acq.lost != (m.get("lost") or 0):
+                m["lost"] = acq.lost
+                manifest.write_manifest(incoming_dir, m)
             return {
                 "pattern": pattern.name,
                 "slug": slug,
@@ -327,18 +318,21 @@ def run_renormalize(slug: str) -> RenormalizeResult:
 
         old = incoming_dir / m["deliverable"]
         staged = incoming_dir / f"{m['slug']}{clean.suffix}"  # same naming rule as ingest
-        shutil.copy2(clean, staged)
+        _stage_file(clean, staged)
         if old.exists() and old.name != staged.name:
             old.unlink()
         # Stale localized images would poison the next localize: its collision
-        # set seeds from images/, forcing re-downloads onto suffixed names.
-        shutil.rmtree(incoming_dir / "images", ignore_errors=True)
+        # set seeds from images/, forcing re-downloads onto suffixed names. A
+        # byte-identical replay names the very URLs the cache was fetched from.
+        if sha256 != m["sha256"]:
+            shutil.rmtree(incoming_dir / "images", ignore_errors=True)
 
         m["deliverable"] = staged.name
         m["bytes"] = size_bytes
         m["sha256"] = sha256
         m["images"] = 0  # refs are absolute again; re-run localize to re-point them
         m["localized_sha256"] = None  # sha256 above describes the file on disk again
+        m["lost"] = acq.lost
         manifest.write_manifest(incoming_dir, m)
         log.info("renormalize.done", pattern=pattern.name, slug=slug, clean=str(staged))
         return {
@@ -388,6 +382,28 @@ def _image_pass(deliverable: Path, incoming_dir: Path) -> _ImagePass:
     return _ImagePass(localized, reused, pruned, remaining, total)
 
 
+def _recorded_image_pass(deliverable: Path, incoming_dir: Path, m: manifest.Manifest) -> _ImagePass:
+    """``_image_pass``, then the image count and the file's hash into ``m``.
+
+    Also when the pass is cut short: the file then holds the pass's own checkpoints,
+    or is untouched and keeps the hash it had. Without a record the next pass could
+    not tell damage from progress."""
+    finished = False
+    try:
+        passed = _image_pass(deliverable, incoming_dir)
+        finished = True
+        return passed
+    finally:
+        # The refs were re-pointed, so the staged sha no longer describes the file.
+        digest = manifest.sha256_file(deliverable)
+        images_dir = incoming_dir / "images"
+        m["images"] = (
+            sum(1 for f in images_dir.iterdir() if f.is_file()) if images_dir.is_dir() else 0
+        )
+        m["localized_sha256"] = digest if finished or digest != m["sha256"] else None
+        manifest.write_manifest(incoming_dir, m)
+
+
 class LocalizeResult(TypedDict):
     """Stats from one localize pass over an already-staged deliverable."""
 
@@ -408,13 +424,11 @@ def localize_images(slug: str) -> LocalizeResult:
     ``remaining`` is 0 (this is how a book whose image set exceeds a single run's
     time budget gets fully localized). Updates the manifest's image count.
 
-    Raises ``PreconditionError`` if the slug was never ingested (no manifest) or its
-    deliverable is missing.
+    Raises ``PreconditionError`` if the slug was never ingested (no readable
+    manifest), or its deliverable is missing or no longer matches its record.
     """
     incoming_dir = slug_dir(slug)
-    m = manifest.read_manifest(incoming_dir)
-    if m is None:
-        raise PreconditionError(f"no manifest for {incoming_dir}/ — ingest it first")
+    m = read_usable(incoming_dir)
     deliverable = incoming_dir / m["deliverable"]
     if not deliverable.exists():
         raise PreconditionError(f"deliverable missing: {deliverable}")
@@ -432,11 +446,8 @@ def localize_images(slug: str) -> LocalizeResult:
             "images_total": m["images"],
         }
 
-    p = _image_pass(deliverable, incoming_dir)
-
-    m["images"] = p.total
-    m["localized_sha256"] = manifest.sha256_file(deliverable)
-    manifest.write_manifest(incoming_dir, m)
+    open_for_image_pass(incoming_dir, m)
+    p = _recorded_image_pass(deliverable, incoming_dir, m)
     log.info(
         "localize.done",
         slug=slug,

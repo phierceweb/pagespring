@@ -213,3 +213,144 @@ def test_a_page_reachable_twice_is_staged_once(tmp_path, monkeypatch):
     assert merged.count("Index body.") == 1, "entry page staged twice under a second URL"
     assert merged.count("Usage body.") == 1
     assert acq.pages == 2, "pages counted the duplicate"
+
+
+_ROOT = "https://docs.ex.org/en/stable/"
+
+
+def _page(main="", sidebar=""):
+    return f'<html><body><div role="main"><h1>x</h1>{main}</div>{sidebar}</body></html>'
+
+
+def _link(path):
+    return f'<a href="/en/stable/{path}">{path}</a>'
+
+
+def _toc(*entries, level=1):
+    """A rendered toctree list; an entry is a path or (path, *child entries)."""
+    items = []
+    for entry in entries:
+        path, *kids = (entry,) if isinstance(entry, str) else entry
+        nested = _toc(*kids, level=level + 1) if kids else ""
+        items.append(f'<li class="toctree-l{level}">{_link(path)}{nested}</li>')
+    return f"<ul>{''.join(items)}</ul>"
+
+
+def _sidebar(*entries):
+    return f'<div class="sphinxsidebar">{_toc(*entries)}</div>'
+
+
+def _crawl(tmp_path, monkeypatch, site):
+    def fetch(url, **kwargs):
+        path = url[len(_ROOT) :]
+        return url, site[path].replace("<h1>x</h1>", f"<h1>{path or 'home'}</h1>", 1)
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    acq = _sphinx.acquire(_ROOT, tmp_path, slug="ex", title=None)
+    order = []
+    for f in sorted(acq.raw_dir.glob("*.html")):
+        first = f.read_text(encoding="utf-8").splitlines()[0]
+        order.append(first.removeprefix(f"<!-- source: {_ROOT}").removesuffix(" -->"))
+    return acq, order
+
+
+def test_a_child_page_stages_before_the_next_chapter(tmp_path, monkeypatch):
+    site = {
+        "": _page(_link("ch1.html") + _link("ch2.html")),
+        "ch1.html": _page(_link("ch1/s1.html")),
+        "ch2.html": _page(),
+        "ch1/s1.html": _page(),
+    }
+    _acq, order = _crawl(tmp_path, monkeypatch, site)
+    assert order == ["", "ch1.html", "ch1/s1.html", "ch2.html"]
+
+
+def test_toctree_order_beats_link_order(tmp_path, monkeypatch):
+    """A prose cross-reference ahead of the toctree must not pull a later chapter forward."""
+    site = {
+        "": _page(
+            _link("ch2.html") + f'<div class="toctree-wrapper">{_toc("ch1.html", "ch2.html")}</div>'
+        ),
+        "ch1.html": _page(f'<div class="toctree-wrapper">{_toc("ch1/s1.html")}</div>'),
+        "ch2.html": _page(),
+        "ch1/s1.html": _page(),
+    }
+    _acq, order = _crawl(tmp_path, monkeypatch, site)
+    assert order == ["", "ch1.html", "ch1/s1.html", "ch2.html"]
+
+
+def test_sidebar_toctree_nests_each_page_under_its_chapter(tmp_path, monkeypatch):
+    """The theme renders the global toctree outside the content root, expanding only
+    the current chapter; each page's sidebar supplies its own branch."""
+    ch1_open = _sidebar(("ch1.html", "ch1/a.html"), "ch2.html")
+    ch2_open = _sidebar("ch1.html", ("ch2.html", "ch2/b.html"))
+    site = {
+        "": _page(_link("ch2.html"), _sidebar("ch1.html", "ch2.html")),
+        "ch1.html": _page("", ch1_open),
+        "ch1/a.html": _page("", ch1_open),
+        "ch2.html": _page(_link("ch1/a.html"), ch2_open),
+        "ch2/b.html": _page("", ch2_open),
+    }
+    _acq, order = _crawl(tmp_path, monkeypatch, site)
+    assert order == ["", "ch1.html", "ch1/a.html", "ch2.html", "ch2/b.html"]
+
+
+def test_a_section_sidebar_nests_under_the_section_rendering_it(tmp_path, monkeypatch):
+    """Some themes render only the current section's toctree in the sidebar, so its
+    top level belongs to that section, not to the site root."""
+    guide = _sidebar("guide/a.html", "guide/b.html")
+    api = _sidebar("api/x.html")
+    site = {
+        "": _page(_link("guide.html") + _link("api.html")),
+        "guide.html": _page(_link("api/x.html"), guide),
+        "guide/a.html": _page("", guide),
+        "guide/b.html": _page("", guide),
+        "api.html": _page("", api),
+        "api/x.html": _page("", api),
+    }
+    _acq, order = _crawl(tmp_path, monkeypatch, site)
+    assert order == ["", "guide.html", "guide/a.html", "guide/b.html", "api.html", "api/x.html"]
+
+
+def test_a_capped_crawl_stages_up_to_the_cap_and_is_truncated(tmp_path, monkeypatch):
+    site = {
+        "": _page(_link("ch1.html") + _link("ch2.html")),
+        "ch1.html": _page(_link("ch1/s1.html")),
+        "ch2.html": _page(),
+        "ch1/s1.html": _page(),
+    }
+    monkeypatch.setattr(_sphinx, "_MAX_PAGES", 2)
+    acq, order = _crawl(tmp_path, monkeypatch, site)
+    assert acq.pages == 2 and acq.truncated
+    assert order == ["", "ch1.html"]
+
+
+def test_conflicting_toctrees_still_stage_every_page_once(tmp_path, monkeypatch):
+    site = {
+        "": _page(f'<div class="toctree-wrapper">{_toc("a.html", "b.html", "c.html")}</div>'),
+        "a.html": _page(),
+        "b.html": _page(),
+        "c.html": _page("", _sidebar("b.html", "a.html")),
+    }
+    acq, order = _crawl(tmp_path, monkeypatch, site)
+    assert sorted(order) == ["", "a.html", "b.html", "c.html"]
+    assert order[0] == "" and acq.pages == 4
+
+
+def test_a_capped_crawl_covers_the_top_level_before_one_deep_chain(tmp_path, monkeypatch):
+    """Discovery is breadth-first so a cap keeps the manual's chapters, not one
+    cross-reference chain; staging still follows reading order."""
+    site = {
+        "": _page(_link("ch1.html") + _link("ch2.html") + _link("ch3.html")),
+        "ch1.html": _page(_link("deep/a.html")),
+        "deep/a.html": _page(_link("deep/b.html")),
+        "deep/b.html": _page(_link("deep/c.html")),
+        "deep/c.html": _page(),
+        "ch2.html": _page(),
+        "ch3.html": _page(),
+    }
+    monkeypatch.setattr(_sphinx, "_MAX_PAGES", 4)
+    acq, order = _crawl(tmp_path, monkeypatch, site)
+    assert acq.truncated
+    assert sorted(order) == ["", "ch1.html", "ch2.html", "ch3.html"]

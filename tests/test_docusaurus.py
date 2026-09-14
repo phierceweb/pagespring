@@ -99,3 +99,69 @@ def test_extract_drops_scripts_and_styles():
     assert "Real content." in frag
     assert "<script" not in frag and "<style" not in frag and "<noscript" not in frag
     assert "__DOCUSAURUS_STATE__" not in frag
+
+
+_SLUG_SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://ex.io/docs/intro</loc></url>
+  <url><loc>https://ex.io/docs/2.0-migration</loc></url>
+  <url><loc>https://ex.io/docs/3.x-upgrade</loc></url>
+  <url><loc>https://ex.io/docs/1.5-release-notes/details</loc></url>
+  <url><loc>https://ex.io/docs/2.4.1</loc></url>
+  <url><loc>https://ex.io/docs/2.4.1/intro</loc></url>
+  <url><loc>https://ex.io/docs/next/intro</loc></url>
+</urlset>
+"""
+
+
+def test_a_doc_slug_that_starts_like_a_version_is_kept(tmp_path, monkeypatch):
+    """A version directory mirrors the current docs; a slug like 2.0-migration does not."""
+
+    def fetch(url, **kwargs):
+        if url.endswith("sitemap.xml"):
+            return url, _SLUG_SITEMAP
+        return url, _PAGE.format(title=url.rsplit("/", 1)[-1])
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    acq = _docusaurus.acquire("https://ex.io/docs", tmp_path, slug="ex", title=None)
+
+    sources = sorted(
+        p.read_text(encoding="utf-8").splitlines()[0] for p in acq.raw_dir.glob("*.html")
+    )
+    assert sources == [
+        "<!-- source: https://ex.io/docs/1.5-release-notes/details -->",
+        "<!-- source: https://ex.io/docs/2.0-migration -->",
+        "<!-- source: https://ex.io/docs/3.x-upgrade -->",
+        "<!-- source: https://ex.io/docs/intro -->",
+    ]
+
+
+_OLD_VERSION_SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://ex.io/docs/intro</loc></url>
+  <url><loc>https://ex.io/docs/guides/install</loc></url>
+  <url><loc>https://ex.io/docs/1.x/getting-started</loc></url>
+  <url><loc>https://ex.io/docs/1.x/configuration</loc></url>
+  <url><loc>https://ex.io/docs/2.x/intro</loc></url>
+</urlset>
+"""
+
+
+def test_a_version_directory_is_skipped_even_when_it_mirrors_no_current_page(tmp_path, monkeypatch):
+    def fetch(url, **kwargs):
+        if url.endswith("sitemap.xml"):
+            return url, _OLD_VERSION_SITEMAP
+        return url, _PAGE.format(title=url.rsplit("/", 1)[-1])
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    acq = _docusaurus.acquire("https://ex.io/docs", tmp_path, slug="ex", title=None)
+
+    sources = sorted(
+        p.read_text(encoding="utf-8").splitlines()[0] for p in acq.raw_dir.glob("*.html")
+    )
+    assert sources == [
+        "<!-- source: https://ex.io/docs/guides/install -->",
+        "<!-- source: https://ex.io/docs/intro -->",
+    ]

@@ -7,7 +7,8 @@ else by path, and download each raw ``.md``. normalize: concatenate in order.
 
 Point it at the repo: ``https://github.com/<owner>/<repo>`` — optionally
 ``/tree/<branch>`` or ``/tree/<branch>/<subdir>`` to scope a big/nested repo
-(e.g. a single product area of MicrosoftDocs/*).
+(e.g. a single product area of MicrosoftDocs/*), or a ``/blob/`` URL naming a
+``.md`` file to scope to its directory.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
+from pagespring.patterns.archive_download import _natural_key
 
 log = get_logger(__name__)
 
@@ -82,6 +84,13 @@ def _is_meta(path: str) -> bool:
     return name in _META or (name == "readme.md" and "/" not in path)
 
 
+def _reading_key(path: str) -> tuple[tuple[object, ...], ...]:
+    """Natural order per path segment, a directory's README ahead of its siblings."""
+    return tuple(
+        () if seg.lower() == "readme.md" else _natural_key(Path(seg)) for seg in path.split("/")
+    )
+
+
 def _ordered_content(md: dict[str, str]) -> list[str]:
     """Content paths in TOC order (via a root documentation.md if present, e.g.
     Laravel) else by path; meta excluded."""
@@ -96,7 +105,7 @@ def _ordered_content(md: dict[str, str]) -> list[str]:
             name = re.sub(r"\.md$", "", seg) + ".md"
             if name in md and not _is_meta(name) and name not in ordered:
                 ordered.append(name)
-    rest = sorted(p for p in md if p not in ordered and not _is_meta(p))
+    rest = sorted((p for p in md if p not in ordered and not _is_meta(p)), key=_reading_key)
     return ordered + rest
 
 
@@ -108,13 +117,13 @@ class GitHubMarkdownPattern:
         if p.netloc.lower() not in ("github.com", "www.github.com"):
             return False
         parts = [s for s in p.path.split("/") if s]
-        if len(parts) < 2:  # /<owner>/<repo>
-            return False
-        # A blob naming a non-markdown file is a spec, PDF or archive that its
-        # own pattern handles; claiming it here would crawl the whole repo.
-        return not (
-            len(parts) >= 5 and parts[2] == "blob" and not parts[-1].lower().endswith(".md")
-        )
+        # Release assets, raw files and source archives are single files their own
+        # pattern ingests; claiming them here would crawl the repo's markdown instead.
+        if len(parts) == 2:
+            return True
+        if len(parts) >= 4 and parts[2] == "tree":
+            return True
+        return len(parts) >= 5 and parts[2] == "blob" and parts[-1].lower().endswith(".md")
 
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         owner, repo, branch, subdir = _parse_repo(url)
@@ -136,12 +145,13 @@ class GitHubMarkdownPattern:
             except Exception as exc:
                 lost += 1
                 log.warning("github_markdown.fetch_error", file=path, error=str(exc))
-                continue
-            flat = path.replace("/", "__")
-            (raw_dir / f"{i:04d}-{flat}").write_text(
-                f"<!-- source: {md[path]} -->\n\n{body}\n", encoding="utf-8"
-            )
-            saved += 1
+            else:
+                # Any case of the extension is listed; normalize globs a lowercase one.
+                stem = path.replace("/", "__")[: -len(".md")]
+                (raw_dir / f"{i:04d}-{stem}.md").write_text(
+                    f"<!-- source: {md[path]} -->\n\n{body}\n", encoding="utf-8"
+                )
+                saved += 1
             http.polite_sleep()
 
         # A last segment alone collides: "docs" for every repo that keeps its manual

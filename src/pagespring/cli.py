@@ -65,7 +65,8 @@ def ingest(
     replace: bool = typer.Option(
         False,
         "--replace",
-        help="Allow this URL to take over a slug already holding a DIFFERENT source, deleting it.",
+        help="Take over a slug holding a DIFFERENT source (deleting it), or accept a "
+        "same-source re-crawl far smaller than the manual staged there.",
     ),
 ) -> None:
     """Acquire a manual from URL and normalize it into incoming/<slug>/."""
@@ -124,7 +125,8 @@ def ingest(
         typer.echo(f"pages    : {result['pages']}")
     typer.echo(f"size     : {_human_size(result['bytes'])}")
     if result.get("images"):
-        typer.echo(f"images   : {result['images']} downloaded → images/")
+        downloaded = result.get("images_downloaded", 0)
+        typer.echo(f"images   : {result['images']} in images/ ({downloaded} downloaded)")
 
 
 @app.command()
@@ -191,6 +193,8 @@ def localize(
             raise typer.Exit(2) from None
         except PreconditionError as exc:
             typer.echo(f"skip {s}: {exc}", err=True)
+            if not all_books:
+                raise typer.Exit(2) from None
             continue
         tail = "done" if r["remaining"] == 0 else f"{r['remaining']} remaining — re-run to continue"
         reused = f", {r['reused']} reused" if r["reused"] else ""

@@ -180,6 +180,28 @@ def test_acquire_paginates_and_merges(tmp_path, monkeypatch):
     assert "source: https://support.gingerlabs.com/hc/en-us/articles/2" in html
 
 
+@pytest.mark.parametrize(
+    "body",
+    ["<!DOCTYPE html><html><body>Help Center</body></html>", "[]", '"closed"'],
+)
+def test_an_api_answer_that_is_not_an_articles_object_is_invalid_input(tmp_path, monkeypatch, body):
+    """A /hc/ path on a site that is not Zendesk answers the API URL with its own page."""
+    from pf_core.exceptions import InvalidInputError
+
+    monkeypatch.setattr(http, "fetch_text", lambda url, **kw: (url, body))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    with pytest.raises(InvalidInputError, match=r"help\.acme\.com/api/v2/help_center/en-us"):
+        ZendeskHelpPattern().acquire("https://help.acme.com/hc/en-us", tmp_path)
+
+
+def test_hc_must_lead_the_path():
+    p = ZendeskHelpPattern()
+    assert not p.match("https://example.com/docs/hc/intro")
+    assert not p.match("https://example.com/manuals/hc/en-us")
+    assert p.match("https://example.com/hc/en-us/articles/1")
+
+
 def test_attachment_url_is_not_claimed():
     """`/hc/.../article_attachments/<id>` is a binary file, not an article.
 

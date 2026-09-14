@@ -105,38 +105,6 @@ def test_403_cools_down_and_retries_article(tmp_path, monkeypatch):
     assert "<h2>Create a PivotTable</h2>" in html
 
 
-def test_sustained_403_breaker_stops_cooldowns(tmp_path, monkeypatch):
-    """When cooldown-retries keep failing (sustained quota block, not a burst),
-    stop paying the cooldown after 3 consecutive failures — skip fast instead
-    of stretching the crawl by 30-60s per article."""
-    sitemap = (
-        "<urlset>"
-        + "".join(
-            f"<url><loc>https://support.microsoft.com/en-us/excel/a{i}</loc></url>"
-            for i in range(6)
-        )
-        + "</urlset>"
-    )
-    sleeps: list[float] = []
-
-    def fake_fetch(url, **kwargs):
-        if url.endswith("_sitemaps/excel_en-us_1.xml"):
-            return url, sitemap
-        if "_sitemaps/" in url:
-            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
-        raise urllib.error.HTTPError(url, 403, "Forbidden", None, None)
-
-    monkeypatch.setattr(http, "fetch_text", fake_fetch)
-    monkeypatch.setattr(http, "polite_sleep", lambda s=0.25: sleeps.append(s))
-    p = MicrosoftSupportPattern()
-
-    acq = p.acquire("https://support.microsoft.com/en-us/excel", tmp_path)
-
-    assert acq.pages == 0
-    cooldowns = [s for s in sleeps if s >= 30]
-    assert len(cooldowns) == 3  # breaker opened after 3 failed retries
-
-
 def test_acquire_uses_product_sitemap(tmp_path, monkeypatch):
     """With a per-product sitemap available, articles come from it — and
     chrome-shell pages (no title, trivial body) are skipped."""
@@ -374,30 +342,109 @@ def test_a_zero_article_crawl_refuses_to_normalize(tmp_path):
         MicrosoftSupportPattern().normalize(acq, tmp_path)
 
 
-def test_a_soft_404_sitemap_page_ends_pagination(tmp_path, monkeypatch):
-    """An origin that answers 200 with a landing page for an out-of-range sitemap never
-    reaches the 404 that ends the walk — one request per iteration, against a site
-    that quota-blocks bursts."""
+def _urlset(*names):
+    locs = "".join(
+        f"<url><loc>https://support.microsoft.com/en-us/excel/{n}</loc></url>" for n in names
+    )
+    return f"<urlset>{locs}</urlset>"
+
+
+def _recorded_crawl(monkeypatch, tmp_path, sitemap, article):
+    """Acquire from a one-page sitemap; returns the result and its fetches and sleeps in order."""
+    events: list[tuple[str, object]] = []
+
+    def fetch_text(url, **kw):
+        events.append(("fetch", url))
+        if url.endswith("_sitemaps/excel_en-us_1.xml"):
+            return url, sitemap
+        if "_sitemaps/" in url:
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+        return url, article(url)
+
+    monkeypatch.setattr(http, "fetch_text", fetch_text)
+    monkeypatch.setattr(http, "polite_sleep", lambda s=0.25: events.append(("sleep", s)))
+    acq = MicrosoftSupportPattern().acquire("https://support.microsoft.com/en-us/excel", tmp_path)
+    return acq, events
+
+
+def _forbidden(url):
+    raise urllib.error.HTTPError(url, 403, "Forbidden", None, None)
+
+
+@pytest.mark.parametrize(
+    ("page_two", "truncated"),
+    [
+        ("<html><body>Checking your browser</body></html>", True),
+        (
+            '<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>',
+            False,
+        ),
+    ],
+)
+def test_a_200_sitemap_page_without_loc_ends_the_walk(monkeypatch, page_two, truncated):
+    """The site ends pagination with a 404, and an empty <urlset> is a clean end too.
+    A WAF interstitial or CDN error page answering 200 hid the rest of the catalog."""
     from pagespring.patterns import microsoft_support as mod
 
     calls = []
 
     def fake_fetch(url, **kw):
         calls.append(url)
-        if url.endswith("_1.xml"):
-            return (
-                url,
-                "<urlset><url><loc>https://support.microsoft.com/en-us/office/a</loc></url></urlset>",
-            )
-        return url, "<html><body>Page not found</body></html>"  # soft 404, HTTP 200
+        return url, _urlset("a") if url.endswith("_1.xml") else page_two
 
     monkeypatch.setattr(mod.http, "fetch_text", fake_fetch)
+    monkeypatch.setattr(mod.http, "polite_sleep", lambda *a, **k: None)
 
-    links, truncated = mod._sitemap_articles("excel", "en-us")
+    links, was_truncated = mod._sitemap_articles("excel", "en-us")
 
-    assert links == ["https://support.microsoft.com/en-us/office/a"]
-    assert truncated is False, "a clean end of pagination is not truncation"
-    assert len(calls) == 2, f"walked past the empty page: {len(calls)} requests"
+    assert links == ["https://support.microsoft.com/en-us/excel/a"]
+    assert was_truncated is truncated
+    assert len(calls) == 2, f"walked past the page without <loc>: {len(calls)} requests"
+
+
+def test_every_request_is_paced_whatever_its_outcome(tmp_path, monkeypatch):
+    """Sitemap pages, fetch errors, content-less pages and chrome shells are requests too."""
+    answers = {"shell": _SHELL, "empty": "<html><body><h1>No body</h1></body></html>"}
+
+    def article(url):
+        name = url.rsplit("/", 1)[-1]
+        if name == "broken":
+            raise urllib.error.URLError("connection reset")
+        if name == "gone":
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+        return answers.get(name, _ART2)
+
+    sitemap = _urlset("broken", "shell", "empty", "good", "gone")
+    acq, events = _recorded_crawl(monkeypatch, tmp_path, sitemap, article)
+
+    assert acq.pages == 1
+    unpaced = [b for a, b in zip(events, events[1:], strict=False) if a[0] == b[0] == "fetch"]
+    assert unpaced == []
+
+
+def test_a_sustained_block_stops_the_crawl_and_counts_the_rest_lost(tmp_path, monkeypatch):
+    """After 3 consecutive failed cooldown-retries and a refused re-check, further
+    requests only feed the block."""
+    sitemap = _urlset(*(f"a{i}" for i in range(40)))
+    acq, events = _recorded_crawl(monkeypatch, tmp_path, sitemap, _forbidden)
+
+    articles = [e for e in events if e[0] == "fetch" and "_sitemaps/" not in str(e[1])]
+    assert len(articles) == 7, "three articles fetched and retried once, then one re-check"
+    assert events.count(("sleep", 60.0)) == 3
+    assert (acq.pages, acq.lost) == (0, 40)
+
+
+def test_a_direct_success_resets_the_block_breaker(tmp_path, monkeypatch):
+    """Failed cooldowns separated by articles that load are bursts, not a sustained block."""
+
+    def article(url):
+        return _forbidden(url) if url.rsplit("/", 1)[-1].startswith("b") else _ART2
+
+    sitemap = _urlset(*(f"{kind}{i}" for i in range(4) for kind in ("b", "ok")))
+    acq, events = _recorded_crawl(monkeypatch, tmp_path, sitemap, article)
+
+    assert (acq.pages, acq.lost) == (4, 4)
+    assert events.count(("sleep", 60.0)) == 4
 
 
 def test_the_sitemap_page_cap_stops_the_walk_and_reports_truncated(tmp_path, monkeypatch):
@@ -431,3 +478,32 @@ def test_the_sitemap_page_cap_stops_the_walk_and_reports_truncated(tmp_path, mon
     assert acq.truncated is True, "a capped walk left articles undiscovered"
     assert acq.pages == 3
     assert any(event == "microsoft_support.sitemap_capped" for event, _ in spy.warnings)
+
+
+def test_restricted_articles_in_a_row_do_not_stop_the_crawl(tmp_path, monkeypatch):
+    """The site also answers 403 for a retired or restricted article; the block is
+    confirmed against a request that should load before the crawl is stopped."""
+
+    def article(url):
+        return _forbidden(url) if url.rsplit("/", 1)[-1] in {"a0", "a1", "a2"} else _ART2
+
+    sitemap = _urlset(*(f"a{i}" for i in range(20)))
+    acq, _events = _recorded_crawl(monkeypatch, tmp_path, sitemap, article)
+
+    assert (acq.pages, acq.lost) == (17, 3)
+
+
+def test_a_block_that_spares_the_hub_still_stops_the_crawl(tmp_path, monkeypatch):
+    """Before any article has loaded, the upcoming article is the re-check: a hub page
+    answering 200 says nothing about whether articles are being refused."""
+    seed = "https://support.microsoft.com/en-us/excel"
+
+    def article(url):
+        return _ART2 if url == seed else _forbidden(url)
+
+    sitemap = _urlset(*(f"a{i}" for i in range(40)))
+    acq, events = _recorded_crawl(monkeypatch, tmp_path, sitemap, article)
+
+    articles = [e for e in events if e[0] == "fetch" and "_sitemaps/" not in str(e[1])]
+    assert len(articles) == 7
+    assert (acq.pages, acq.lost) == (0, 40)

@@ -261,3 +261,26 @@ def test_dead_build_metadata_is_dropped():
 
     assert "originalimagename" not in out
     assert "~dark" not in out
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://docs.tableplus.com", ["https://docs.tableplus.com/llms.txt"]),
+        (
+            "https://resend.com/docs/introduction",
+            [
+                "https://resend.com/docs/introduction/llms.txt",
+                "https://resend.com/docs/llms.txt",
+                "https://resend.com/llms.txt",
+            ],
+        ),
+        (
+            "https://vendor.example/manual/index.html?lang=en",
+            ["https://vendor.example/manual/llms.txt", "https://vendor.example/llms.txt"],
+        ),
+    ],
+    ids=["root", "docs-subpath", "file-and-query"],
+)
+def test_llms_index_candidates_run_from_the_seed_up_to_the_root(url, expected):
+    assert _site.llms_index_candidates(url) == expected

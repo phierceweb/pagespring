@@ -47,5 +47,11 @@ class PagespringConfig(AppConfig):
     # 0 disables.
     CRAWL_STALL_AFTER_S: int = 300
 
+    # A same-source re-crawl finding fewer than COLLAPSE_KEEP_PCT percent of the
+    # staged pages is refused unless --replace (COLLAPSE_KEEP_PCT=0 disables);
+    # manuals under COLLAPSE_MIN_PAGES pages are exempt.
+    COLLAPSE_KEEP_PCT: int = 50
+    COLLAPSE_MIN_PAGES: int = 10
+
 
 cfg = PagespringConfig(env_file=_env_file())

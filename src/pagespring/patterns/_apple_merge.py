@@ -40,6 +40,24 @@ def _slug_from(a: Tag) -> str | None:
     return None
 
 
+def toc_topic_slugs(welcome: Path, guide_slug: str) -> set[str]:
+    """Every topic of this guide that welcome's TOC links, saved or not."""
+    if not welcome.exists():
+        return set()
+    soup = BeautifulSoup(welcome.read_text(encoding="utf-8", errors="ignore"), _PARSER)
+    container = soup.find(id="modal-toc-container")
+    if not isinstance(container, Tag):
+        return set()
+    own = f"/guide/{guide_slug}/"
+    slugs: set[str] = set()
+    for a in container.find_all("a"):
+        href = a.get("href")
+        slug = _slug_from(a) if isinstance(href, str) and own in href else None
+        if slug and slug not in _SKIP_SLUGS:
+            slugs.add(slug)
+    return slugs
+
+
 def app_title(slug: str, welcome: Path) -> str:
     """Guide title from welcome.html's hero <h1>; fallback to the slug."""
     if welcome.exists():

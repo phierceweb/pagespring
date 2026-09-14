@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlparse
 
-from pf_core.exceptions import InvalidInputError
+from pf_core.exceptions import ClientError, InvalidInputError
 from pf_core.log import get_logger
 
 from pagespring import http
@@ -34,11 +34,19 @@ from pagespring.patterns import (
     _hugo,
     _mkdocs,
     _paligo,
+    _spec_ui,
     _sphinx,
     _st4,
     _wordpress,
 )
-from pagespring.patterns._site import generator_meta, page_title, slug_from_host
+from pagespring.patterns._site import (
+    generator_meta,
+    llms_index_candidates,
+    page_title,
+    slug_from_host,
+)
+from pagespring.patterns._spec_ui import fetch_or_none as _fetch_or_none
+from pagespring.patterns.api_spec import ApiSpecPattern, is_openapi
 from pagespring.patterns.gitbook import GitBookPattern
 from pagespring.patterns.pdf_url import PdfUrlPattern
 
@@ -47,14 +55,6 @@ log = get_logger(__name__)
 # Magic bytes survive the text decode (ASCII); a window allows leading whitespace/BOM.
 _PDF_MAGIC = "%PDF-"
 _MAGIC_WINDOW = 1024
-
-
-def _fetch_or_none(url: str) -> str | None:
-    try:
-        _final, body = http.fetch_text(url)
-    except Exception:
-        return None
-    return body
 
 
 def _is_mkdocs_index(body: str | None) -> bool:
@@ -71,6 +71,17 @@ def _is_mkdocs_index(body: str | None) -> bool:
         return False
 
 
+def _nearest_llms_base(base: str) -> str | None:
+    """Directory of the nearest ``llms.txt`` at or above ``base`` that lists pages."""
+    for candidate in llms_index_candidates(base):
+        http.polite_sleep()
+        body = _fetch_or_none(candidate)
+        # A soft-404 HTML page can carry .md links of its own; it is not an index.
+        if body is not None and not body.lstrip().startswith("<") and _gitbook.discover_pages(body):
+            return candidate.rsplit("/", 1)[0]
+    return None
+
+
 class DocsProbePattern:
     name = "docs_probe"
 
@@ -81,8 +92,19 @@ class DocsProbePattern:
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         base = url.rstrip("/")
         p = urlparse(base)
-        origin = f"{p.scheme}://{p.netloc}"
-        _final, home = http.fetch_text(base)
+        try:
+            final, home = http.fetch_text(base)
+        except ClientError as exc:
+            # Only a document download outgrows the text budget; pdf_url fetches it
+            # under the download budget and checks the magic bytes itself.
+            if "max_bytes" not in exc.context:
+                raise
+            try:
+                acq = PdfUrlPattern().acquire(base, workdir)
+            except InvalidInputError:
+                raise exc from None  # an oversize page, not a PDF: the budget is the news
+            log.info("docs_probe.detected", generator="pdf", base=base, via="oversize_body")
+            return acq
         slug = slug_from_host(p.netloc)
         title = page_title(home)
 
@@ -91,6 +113,23 @@ class DocsProbePattern:
         if _PDF_MAGIC in home[:_MAGIC_WINDOW]:
             log.info("docs_probe.detected", generator="pdf", base=base, via="magic_bytes")
             return PdfUrlPattern().acquire(base, workdir)
+        # A spec served from an extensionless path (springdoc's /v3/api-docs/<group>).
+        if not home.lstrip().startswith("<") and is_openapi(home):
+            log.info("docs_probe.detected", generator="openapi", base=base, via="content")
+            acq = ApiSpecPattern().acquire(final, workdir, text=home)
+            acq.single_document = True
+            return acq
+
+        # An API reference UI is a script shell; the spec it loads is the document.
+        ui = _spec_ui.ui_name(home)
+        if ui is not None:
+            # Relative refs resolve against the seed as typed when no redirect restored its slash.
+            page_url = url if final == base and url.endswith("/") else final
+            spec_url, spec = _spec_ui.find_spec(page_url, home, ui, fetch=_fetch_or_none)
+            log.info("docs_probe.detected", generator=ui, base=base, via="spec_url")
+            acq = ApiSpecPattern().acquire(spec_url, workdir, text=spec)
+            acq.single_document = True
+            return acq
 
         # Before the meta sniff: ClickHelp publishes no generator meta at all, so
         # it is only identifiable by its own asset tells.
@@ -131,17 +170,24 @@ class DocsProbePattern:
         if _sphinx.is_sphinx(home):
             log.info("docs_probe.detected", generator="sphinx", base=base, via="tells")
             return _sphinx.acquire(base, workdir, slug=slug, title=title)
+        http.polite_sleep()
         if _is_mkdocs_index(_fetch_or_none(f"{base}/search/search_index.json")):
             log.info("docs_probe.detected", generator="mkdocs", base=base, via="search_index")
             return _mkdocs.acquire(base, workdir, slug=slug, title=title)
-        llms = _fetch_or_none(f"{origin}/llms.txt")
-        if llms is not None and _gitbook.discover_pages(llms):
-            log.info("docs_probe.detected", generator="llms_txt", base=base, via="llms.txt")
-            return GitBookPattern().acquire(origin, workdir, slug=slug, title=title)
+        llms_base = _nearest_llms_base(base)
+        if llms_base is not None:
+            # Only a GitBook page needs its rendered twin, to resolve /files/<id> images.
+            rendered = not gen or "gitbook" in gen
+            log.info("docs_probe.detected", generator="llms_txt", base=base, via=llms_base)
+            http.polite_sleep()  # GitBook re-fetches the index it was handed
+            return GitBookPattern().acquire(
+                llms_base, workdir, slug=slug, title=title, rendered=rendered
+            )
         raise InvalidInputError(
-            f"unrecognized docs site: {base} — probed the generator meta tag "
+            f"unrecognized docs site: {base} — probed for an API reference UI "
+            "(Swagger UI/Redoc/Scalar), the generator meta tag "
             "(MkDocs/Docusaurus/Hugo/Asciidoctor/WordPress/Sphinx), ClickHelp + Paligo + SCHEMA ST4 tells, "
-            "_static/ assets (Sphinx), search/search_index.json (MkDocs), and /llms.txt; "
+            "_static/ assets (Sphinx), search/search_index.json (MkDocs), and llms.txt at and above the URL's path; "
             "none matched. The source needs its own pattern "
             "(see docs/architecture.md, 'Adding a new pattern')."
         )
@@ -149,6 +195,8 @@ class DocsProbePattern:
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         if acq.kind == "pdf":
             return PdfUrlPattern().normalize(acq, workdir)
+        if any(acq.raw_dir.glob("spec.*")):
+            return ApiSpecPattern().normalize(acq, workdir)
         if acq.kind == "markdown":
             parts = [
                 _gitbook.strip_banner(f.read_text(encoding="utf-8"))

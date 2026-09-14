@@ -295,3 +295,101 @@ def test_two_locales_of_one_manual_do_not_fold_onto_one_slug(tmp_path, monkeypat
 
     assert en.slug != ja.slug
     assert (en.slug, ja.slug) == ("o-r-docs-en-guide", "o-r-docs-ja-guide")
+
+
+def test_only_repo_tree_and_markdown_blob_urls_are_claimed():
+    """A release asset, raw file or source archive is a file its own pattern ingests;
+    claiming it here stages the repo's markdown instead."""
+    p = GitHubMarkdownPattern()
+    assert p.match("https://github.com/o/r/")
+    assert p.match("https://github.com/o/r/tree/main")
+    assert p.match("https://github.com/o/r/tree/main/docs/guide")
+    assert p.match("https://github.com/o/r/blob/main/docs/Intro.MD")
+    for url in (
+        "https://github.com/o/r/releases/download/v1/manual.pdf",
+        "https://github.com/o/r/releases/download/v1/docs.zip",
+        "https://github.com/o/r/raw/main/openapi.yaml",
+        "https://github.com/o/r/raw/main/docs/intro.md",
+        "https://github.com/o/r/archive/refs/tags/v1.tar.gz",
+        "https://github.com/o/r/issues",
+        "https://github.com/o/r/wiki",
+        "https://github.com/o/r/tree",
+    ):
+        assert not p.match(url), url
+
+
+def _tree_fetch(paths, fail=()):
+    tree = json.dumps({"tree": [{"path": p, "type": "blob"} for p in paths]})
+
+    def fake(url, **kwargs):
+        if url.endswith("/repos/o/r"):
+            return url, '{"default_branch": "main"}'
+        if "/git/trees/" in url:
+            return url, tree
+        path = url.rsplit("/main/", 1)[-1]
+        if path in fail:
+            raise OSError("503 throttled")
+        return url, f"# page {path}"
+
+    return fake
+
+
+def test_an_uppercase_md_extension_reaches_the_deliverable(tmp_path, monkeypatch):
+    """Every page acquire counts must be one normalize concatenates."""
+    monkeypatch.setattr(http, "fetch_text", _tree_fetch(["docs/intro.md", "docs/Usage.MD"]))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    p = GitHubMarkdownPattern()
+
+    acq = p.acquire("https://github.com/o/r", tmp_path)
+    text = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert acq.pages == 2
+    assert "# page docs/intro.md" in text
+    assert "# page docs/Usage.MD" in text
+
+
+def test_numbered_files_order_numerically(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        http, "fetch_text", _tree_fetch(["10-advanced.md", "2-install.md", "1-intro.md"])
+    )
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    p = GitHubMarkdownPattern()
+
+    text = p.normalize(p.acquire("https://github.com/o/r", tmp_path), tmp_path).read_text(
+        encoding="utf-8"
+    )
+
+    assert text.index("1-intro") < text.index("2-install") < text.index("10-advanced")
+
+
+def test_a_failed_fetch_still_paces_the_next_request(tmp_path, monkeypatch):
+    sleeps: list[None] = []
+    monkeypatch.setattr(
+        http, "fetch_text", _tree_fetch(["a.md", "b.md", "c.md"], fail={"a.md", "b.md"})
+    )
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: sleeps.append(None))
+
+    acq = GitHubMarkdownPattern().acquire("https://github.com/o/r", tmp_path)
+
+    assert (acq.pages, acq.lost) == (1, 2)
+    assert len(sleeps) == 3
+
+
+def test_a_directory_readme_leads_its_siblings(tmp_path, monkeypatch):
+    """A nested README is its directory's index page, so it opens that directory."""
+    monkeypatch.setattr(
+        http,
+        "fetch_text",
+        _tree_fetch(["docs/usage.md", "docs/sub/b.md", "docs/README.md", "docs/api.md"]),
+    )
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    p = GitHubMarkdownPattern()
+
+    text = p.normalize(p.acquire("https://github.com/o/r", tmp_path), tmp_path).read_text(
+        encoding="utf-8"
+    )
+
+    order = ["docs/README.md", "docs/api.md", "docs/sub/b.md", "docs/usage.md"]
+    assert [text.index(f"# page {path}") for path in order] == sorted(
+        text.index(f"# page {path}") for path in order
+    )

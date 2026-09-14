@@ -2,8 +2,9 @@
 
 acquire: download the PDF. normalize: pass it through unchanged (a PDF is already
 a pagespeak input). Covers vendor gear manuals (direct ``.pdf`` links) and
-Read-the-Docs PDF builds (``…/_/downloads/en/<ver>/pdf/``, which serve a PDF at
-an extensionless path).
+Read-the-Docs PDF builds (``…/_/downloads/[<alias>/]<lang>/<ver>/pdf/``, which
+serve a PDF at an extensionless path). Any other extensionless URL is left to
+docs_probe, which sniffs the response for a PDF.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ log = get_logger(__name__)
 # Some servers prepend whitespace/BOM, so scan a window rather than the first byte.
 _PDF_MAGIC = b"%PDF-"
 _MAGIC_WINDOW = 1024
+_RTD_DOWNLOAD_RE = re.compile(r"/_/downloads/(?:(?P<alias>.+)/)?[^/]+/[^/]+/pdf$")
 
 
 def _slugify(name: str) -> str:
@@ -38,8 +40,12 @@ def _slug_from_url(url: str) -> str:
     name = unquote(Path(p.path).name)
     if name.lower().endswith(".pdf"):
         return _slugify(name)
-    # RTD-style /_/downloads/en/<ver>/pdf/ — basename is "pdf"; name from the host.
-    return _slugify(domain_of(url).split(".")[0])
+    # RTD-style /_/downloads/…/pdf/ — basename is "pdf"; name from the host.
+    host = domain_of(url).split(".")[0]
+    rtd = _RTD_DOWNLOAD_RE.search(p.path.rstrip("/"))
+    if rtd and rtd.group("alias"):
+        return _slugify(f"{host}-{rtd.group('alias')}")
+    return _slugify(host)
 
 
 class PdfUrlPattern:
@@ -48,7 +54,7 @@ class PdfUrlPattern:
 
     def match(self, url: str) -> bool:
         path = urlparse(url).path.lower().rstrip("/")
-        return path.endswith(".pdf") or path.endswith("/pdf")  # .pdf or RTD /pdf/
+        return path.endswith(".pdf") or _RTD_DOWNLOAD_RE.search(path) is not None
 
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         raw_dir = workdir / "raw"

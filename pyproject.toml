@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pagespring"
-version = "0.11.0"
+version = "0.12.0"
 description = "Acquire and normalize online documentation into clean, convertible source files — the acquisition front-end to pagespeak."
 readme = "README.md"
 requires-python = ">=3.12"
-license = "MIT"
-license-files = ["LICENSE"]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Mike Farr" }]
 keywords = ["manuals", "documentation", "ingest", "acquisition", "rag", "markdown"]
 classifiers = [
