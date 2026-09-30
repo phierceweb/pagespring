@@ -99,8 +99,7 @@ class ReadTheDocsPattern:
             _final, data = http.fetch_bytes(dl)
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
-                raise  # fetch failed — orchestrate reports it honestly (exit 4)
-            # No PDF build published — crawl the rendered docs instead.
+                raise
             log.info("readthedocs.no_pdf_build", download=dl, status=exc.code)
             return _sphinx.acquire(base, workdir, slug=slug, title=None)
         if not data.startswith(b"%PDF"):
@@ -117,7 +116,6 @@ class ReadTheDocsPattern:
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         if acq.kind == "pdf":
-            # Passthrough: the downloaded PDF is already a pagespeak input.
             return next(acq.raw_dir.glob("*.pdf"))
         # Sphinx-crawl fallback: same merge shape as docs_probe's html branch.
         return DocsProbePattern().normalize(acq, workdir)

@@ -13,8 +13,9 @@ from pathlib import Path
 import pf_core.fetch.images as core_images
 import pytest
 
-from pagespring import _staging, images, manifest, orchestrate
+from pagespring import _image_cache, _staging, images, manifest, orchestrate
 from pagespring.config import cfg
+from pagespring.patterns import apple_help
 
 # Read before `_sandbox_incoming_dir` rewrites it: a corpus configured elsewhere
 # (PAGESPRING_ENV_FILE / INCOMING_DIR) is as unrecoverable as the repo one.
@@ -84,7 +85,9 @@ def _refuse_to_touch_the_corpus():
             (manifest, "atomic_write_text"),
             (_staging, "atomic_write_bytes"),
             (images, "atomic_write_text"),
-            (images, "atomic_write_bytes"),
+            (_image_cache, "atomic_write_text"),
+            (_image_cache, "atomic_write_bytes"),
+            (apple_help, "atomic_write_json"),
             (core_images, "atomic_write_text"),
             (core_images, "atomic_write_bytes"),
         ):

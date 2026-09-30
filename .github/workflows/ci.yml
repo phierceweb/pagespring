@@ -17,8 +17,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
-      - run: ruff check src tests bin/check-framework
-      - run: ruff format --check src tests bin/check-framework
+      - run: ruff check src tests bin/check-framework bin/check-release
+      - run: ruff format --check src tests bin/check-framework bin/check-release
       - run: mypy src
       - run: python -m pf_core.guards
       - run: python bin/check-framework

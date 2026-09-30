@@ -8,14 +8,24 @@ from typing import Literal, TypeGuard
 
 from pf_core.exceptions import PreconditionError
 from pf_core.log import get_logger
+from pf_core.utils.hashing import content_hash
 
 from pagespring import manifest
 
 log = get_logger(__name__)
 
-Integrity = Literal["intact", "damaged", "unverifiable"]
+Integrity = Literal["intact", "interrupted", "damaged", "unverifiable"]
 
-LOCAL_IMG_RE = re.compile(r'(?:src=["\']|\]\()(images/[^"\')\s]+)')
+LOCAL_IMG_RE = re.compile(r'(?:src=["\']|<image\b[^>]*?\bhref=["\']|\]\()(images/[^"\')\s]+)')
+
+# What an image pass writes: a ref's target (pf-core's retarget) and the case of an
+# images/ name (normalize_case).
+_REF_TARGET_RE = re.compile(
+    r"(\]\()(?:https?://|images/)[^)]*"
+    r'|(src=")(?:https?://|images/)[^"]*'
+    r"|(src=')(?:https?://|images/)[^']*"
+)
+_IMAGE_NAME_RE = re.compile(r"images/[^\"'()<>\n]*")
 
 # read_manifest returns any parseable JSON as-is, so a truncated file reaches
 # callers missing the fields they index.
@@ -35,10 +45,18 @@ def image_pass_ran(slug_dir: Path, m: manifest.Manifest, doc_text: str) -> bool:
     )
 
 
+def _pass_digest(path: Path) -> str:
+    """Hash of ``path`` blind to what an image pass writes, so every checkpoint of one
+    pass shares it."""
+    text = _REF_TARGET_RE.sub(r"\1\2\3", path.read_text(encoding="utf-8", errors="replace"))
+    return content_hash(_IMAGE_NAME_RE.sub(lambda n: n[0].lower(), text))
+
+
 def integrity(slug_dir: Path, m: manifest.Manifest) -> Integrity:
     """How the file on disk stands against ``m``: ``localized_sha256`` once an image
-    pass recorded one, else ``sha256``. A file an image pass re-pointed without
-    recording a hash has nothing to be compared with: unverifiable, not damaged."""
+    pass recorded one, else ``sha256``. While a pass is open, a file that differs only
+    where the pass writes is its progress: interrupted. A file an image pass re-pointed
+    without recording a hash has nothing to be compared with: unverifiable."""
     name = m.get("deliverable")
     if not isinstance(name, str) or not name:
         return "damaged"
@@ -46,11 +64,12 @@ def integrity(slug_dir: Path, m: manifest.Manifest) -> Integrity:
     if not path.is_file() or not path.stat().st_size:
         return "damaged"
     actual = manifest.sha256_file(path)
-    if m.get("localized_sha256"):
-        return "intact" if actual == m.get("localized_sha256") else "damaged"
-    if actual == m.get("sha256"):
+    recorded = m.get("localized_sha256")
+    if actual == (recorded or m.get("sha256")):
         return "intact"
-    if m.get("kind") == "pdf" or not (slug_dir / "images").is_dir():
+    if opened := m.get("image_pass_open"):
+        return "interrupted" if _pass_digest(path) == opened else "damaged"
+    if recorded or m.get("kind") == "pdf" or not (slug_dir / "images").is_dir():
         return "damaged"
     # Only re-pointed refs can explain the mismatch; a file without any is not the one
     # an image pass left.
@@ -59,8 +78,8 @@ def integrity(slug_dir: Path, m: manifest.Manifest) -> Integrity:
 
 
 def deliverable_intact(slug_dir: Path, m: manifest.Manifest) -> bool:
-    """Whether the staged file may stand: intact, or unverifiable (re-staging would
-    undo its localized refs, whose remote URLs may no longer resolve)."""
+    """Whether the staged file may stand: anything but damaged (re-staging would undo
+    its localized refs, whose remote URLs may no longer resolve)."""
     return integrity(slug_dir, m) != "damaged"
 
 
@@ -78,12 +97,12 @@ def read_usable(slug_dir: Path) -> manifest.Manifest:
 
 def open_for_image_pass(slug_dir: Path, m: manifest.Manifest) -> None:
     """Refuse an image pass over a deliverable that no longer matches its record,
-    then drop ``localized_sha256`` for the length of the pass.
+    then mark the pass open in the manifest until it records its outcome.
 
     The pass records the file's hash as verified, so it must not run over damage.
     A pass that ran without recording a hash left nothing to compare: warn, proceed.
-    The pass checkpoints the file as images land, so a kill leaves bytes no record
-    describes — unrecorded, the re-run resumes instead of refusing.
+    The pass checkpoints the file as images land; the mark lets a killed pass's
+    checkpoints read as progress, and anything else still as damage.
     """
     state = integrity(slug_dir, m)
     deliverable = slug_dir / m["deliverable"]
@@ -94,6 +113,7 @@ def open_for_image_pass(slug_dir: Path, m: manifest.Manifest) -> None:
         )
     if state == "unverifiable":
         log.warning("localize.unverifiable", slug=slug_dir.name, deliverable=str(deliverable))
-    if m.get("localized_sha256"):
-        m["localized_sha256"] = None
-        manifest.write_manifest(slug_dir, m)
+    if state == "interrupted":
+        log.info("localize.resuming", slug=slug_dir.name)
+    m["image_pass_open"] = _pass_digest(deliverable)
+    manifest.write_manifest(slug_dir, m)

@@ -1,15 +1,14 @@
 """api_spec — OpenAPI/Swagger specs and Postman collections.
 
-The one pattern that recognizes a *content shape* rather than a host: API
-contract files. ``match`` claims spec-ish URLs/paths (a ``.json``/``.yaml``/
-``.yml`` extension, or an ``openapi``/``swagger``/``postman`` token in the final
-path segment); ``acquire`` fetches or reads the file, content-sniffs OpenAPI vs
-Postman, and records the operation count; ``normalize`` renders it to ONE clean
-markdown file.
+Recognizes a *content shape* rather than a host: API contract files. ``match``
+claims spec-ish URLs/paths (a ``.json``/``.yaml``/``.yml`` extension, or an
+``openapi``/``swagger``/``postman`` token in the final path segment); ``acquire``
+fetches or reads the file, content-sniffs OpenAPI vs Postman, and records the
+operation count; ``normalize`` renders it to ONE clean markdown file.
 
-Point it at a spec URL (``ingest https://…/openapi.json``) or a local file
-(``ingest ./vendor-openapi.json``) — the latter unblocks specs hidden behind a
-ReDoc/Swagger-UI "Download" button.
+Point it at a spec URL (``ingest https://…/openapi.json``), a local file
+(``ingest ./vendor-openapi.json``), or a Swagger UI, Redoc or Scalar page, whose
+named spec is found and fetched (see _spec_ui).
 """
 
 from __future__ import annotations

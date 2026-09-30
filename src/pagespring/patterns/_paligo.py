@@ -84,6 +84,8 @@ def _extract(page_html: str, page_url: str) -> str | None:
     node = soup.select_one(_CONTENT_CSS)
     if not isinstance(node, Tag):
         return None
+    for crumb in node.select("div.breadcrumb-container"):
+        crumb.decompose()
     strip_scripts(node)
     flatten_responsive_images(node)
     absolutize_refs(node, page_url)

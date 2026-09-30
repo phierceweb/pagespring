@@ -389,3 +389,15 @@ def test_a_spec_url_with_an_interpolated_or_escaped_query_is_still_found(config,
         == expected
     )
     assert requested == [expected]
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<redoc spec-url="a.json"></redoc>',
+        '<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>',
+        '<div id="swagger-ui"></div><script src="swagger-ui-bundle.js"></script>',
+    ],
+)
+def test_every_ui_name_is_listed(html):
+    assert _spec_ui.ui_name(html) in _spec_ui.UI_NAMES

@@ -1,14 +1,15 @@
-"""github_markdown — docs kept as markdown in a GitHub repo (e.g. laravel/docs).
+"""github_markdown — docs kept as markdown or MDX in a GitHub repo (e.g. laravel/docs).
 
-acquire: resolve the repo's default branch, list its ``.md`` files **recursively**
-via the git-trees API (scoped to a subdir when the URL includes one), order them
-by the repo's table-of-contents file if present (Laravel's ``documentation.md``)
-else by path, and download each raw ``.md``. normalize: concatenate in order.
+acquire: resolve the repo's default branch, list its ``.md`` and ``.mdx`` files
+**recursively** via the git-trees API (scoped to a subdir when the URL includes one),
+order them by the repo's table-of-contents file if present (Laravel's
+``documentation.md``) else by path, and download each raw file. normalize:
+concatenate in order, each ``.mdx`` page reduced to plain markdown first.
 
 Point it at the repo: ``https://github.com/<owner>/<repo>`` — optionally
 ``/tree/<branch>`` or ``/tree/<branch>/<subdir>`` to scope a big/nested repo
 (e.g. a single product area of MicrosoftDocs/*), or a ``/blob/`` URL naming a
-``.md`` file to scope to its directory.
+``.md``/``.mdx`` file to scope to its directory.
 """
 
 from __future__ import annotations
@@ -23,15 +24,21 @@ from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns.archive_download import _natural_key
+from pagespring.patterns._gitbook import lead_with_front_matter_title
+from pagespring.patterns._mdx import mdx_to_markdown
+from pagespring.patterns._ordering import natural_key as _natural_key
+from pagespring.patterns._site import raw_stem
 
 log = get_logger(__name__)
 
 _API = "https://api.github.com"
 _RAW = "https://raw.githubusercontent.com"
 _MAX_FILES = 2000  # safety cap so an unscoped huge repo can't fan out forever
+_EXTENSIONS = (".md", ".mdx")
 # Never content; documentation.md doubles as the TOC source.
-_META = {"documentation.md", "license.md", "contributing.md", "changelog.md"}
+_META = {"documentation", "license", "contributing", "changelog"}
+# A directory's own index page, read before its siblings.
+_INDEX = {"readme", "index"}
 _LINK_RE = re.compile(r"\]\(([^)]+)\)")
 
 
@@ -54,14 +61,18 @@ def _default_branch(owner: str, repo: str) -> str:
 
 
 def _list_md(owner: str, repo: str, branch: str, subdir: str) -> tuple[dict[str, str], bool]:
-    """All .md blobs under subdir (recursive) -> ({path: raw download URL}, tree_truncated)."""
+    """All .md/.mdx blobs under subdir (recursive) -> ({path: raw URL}, tree_truncated)."""
     _f, body = http.fetch_text(f"{_API}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1")
     data = json.loads(body)
     prefix = (subdir.rstrip("/") + "/") if subdir else ""
     out: dict[str, str] = {}
     for node in data.get("tree", []):
         path = node.get("path", "")
-        if node.get("type") == "blob" and path.lower().endswith(".md") and path.startswith(prefix):
+        if (
+            node.get("type") == "blob"
+            and path.lower().endswith(_EXTENSIONS)
+            and path.startswith(prefix)
+        ):
             # The key stays the real path; only the fetch URL is encoded, or a
             # space or non-ASCII name raises InvalidURL and the file is dropped.
             out[path] = f"{_RAW}/{owner}/{repo}/{quote(branch)}/{quote(path)}"
@@ -73,22 +84,23 @@ def _list_md(owner: str, repo: str, branch: str, subdir: str) -> tuple[dict[str,
     return out, tree_truncated
 
 
-def _basename(path: str) -> str:
-    return path.rsplit("/", 1)[-1]
+def _stem(path: str) -> str:
+    """The file name, lowercased, without its extension."""
+    return path.rsplit("/", 1)[-1].rpartition(".")[0].lower()
 
 
 def _is_meta(path: str) -> bool:
     """Repo meta, not content. README only at the root — below it, a README is the
     directory's own index page."""
-    name = _basename(path).lower()
-    return name in _META or (name == "readme.md" and "/" not in path)
+    stem = _stem(path)
+    return stem in _META or (stem == "readme" and "/" not in path)
 
 
 def _reading_key(path: str) -> tuple[tuple[object, ...], ...]:
-    """Natural order per path segment, a directory's README ahead of its siblings."""
-    return tuple(
-        () if seg.lower() == "readme.md" else _natural_key(Path(seg)) for seg in path.split("/")
-    )
+    """Natural order per path segment, a directory's README or index ahead of its siblings."""
+    *dirs, name = path.split("/")
+    first = () if _stem(name) in _INDEX else _natural_key(Path(name))
+    return (*(_natural_key(Path(seg)) for seg in dirs), first)
 
 
 def _ordered_content(md: dict[str, str]) -> list[str]:
@@ -109,6 +121,11 @@ def _ordered_content(md: dict[str, str]) -> list[str]:
     return ordered + rest
 
 
+def _page_markdown(page: Path) -> str:
+    text = page.read_text(encoding="utf-8")
+    return lead_with_front_matter_title(mdx_to_markdown(text) if page.suffix == ".mdx" else text)
+
+
 class GitHubMarkdownPattern:
     name = "github_markdown"
 
@@ -123,7 +140,7 @@ class GitHubMarkdownPattern:
             return True
         if len(parts) >= 4 and parts[2] == "tree":
             return True
-        return len(parts) >= 5 and parts[2] == "blob" and parts[-1].lower().endswith(".md")
+        return len(parts) >= 5 and parts[2] == "blob" and parts[-1].lower().endswith(_EXTENSIONS)
 
     def acquire(self, url: str, workdir: Path) -> AcquireResult:
         owner, repo, branch, subdir = _parse_repo(url)
@@ -146,9 +163,9 @@ class GitHubMarkdownPattern:
                 lost += 1
                 log.warning("github_markdown.fetch_error", file=path, error=str(exc))
             else:
-                # Any case of the extension is listed; normalize globs a lowercase one.
-                stem = path.replace("/", "__")[: -len(".md")]
-                (raw_dir / f"{i:04d}-{stem}.md").write_text(
+                # Any case of the extension is listed; normalize matches a lowercase one.
+                base, _dot, ext = path.rpartition(".")
+                (raw_dir / f"{i:04d}-{raw_stem(base)}.{ext.lower()}").write_text(
                     f"<!-- source: {md[path]} -->\n\n{body}\n", encoding="utf-8"
                 )
                 saved += 1
@@ -178,7 +195,8 @@ class GitHubMarkdownPattern:
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
-        parts = [p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*.md"))]
+        pages = sorted(p for p in acq.raw_dir.iterdir() if p.suffix in _EXTENSIONS)
+        parts = [_page_markdown(p) for p in pages]
         out = workdir / f"{acq.slug}.md"
         out.write_text("\n\n---\n\n".join(parts), encoding="utf-8")
         log.info("github_markdown.normalize", slug=acq.slug, out=str(out), pages=len(parts))

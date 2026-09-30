@@ -3,12 +3,12 @@
 acquire: BFS-crawl every topic page under /guide/<slug>/ for the platform,
 saving each page + welcome.html. normalize: strip Apple.com chrome and merge
 the saved pages into one clean <slug>.html whose heading hierarchy comes from
-the welcome TOC tree (see _apple_merge). Image src URLs stay absolute so
-pagespeak downloads them.
+the welcome TOC tree (see _apple_merge).
 """
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections import deque
@@ -17,6 +17,7 @@ from urllib.parse import urljoin, urlparse
 
 from pf_core.exceptions import InvalidInputError
 from pf_core.log import get_logger
+from pf_core.utils.io import atomic_write_json
 
 from pagespring import http
 from pagespring.base import AcquireResult
@@ -27,9 +28,10 @@ from pagespring.patterns._apple_merge import build_merged_html, toc_topic_slugs
 log = get_logger(__name__)
 
 _MAX_PAGES = 6000  # a capped crawl sets truncated
+CRAWL_FAILURES = "crawl_failures.json"
 # Apple links each topic BOTH as `<words>-<token>` and bare `<token>`; the two
 # resolve to the same page. Dedup on the token or half the crawl re-fetches
-# pages already on disk. Prefixes vary within one guide (lgcp/lgsi/lgce/ctls…).
+# pages already on disk. Token prefixes vary within one guide.
 _TOPIC_TOKEN_RE = re.compile(r"^[a-z]{2,6}(?:[0-9a-f]{6,}|_[a-z0-9]+)$")
 _VERSION_SEG_RE = re.compile(r"^[0-9.]+$")
 
@@ -73,28 +75,19 @@ def _crawl(
     Apple embeds the full TOC as JSON in every page, so topic paths are
     harvested by regex from the page text — no DOM parse needed at this stage.
     A seed naming no platform takes it, and its locale, from where Apple
-    redirects the first fetch. Returns (saved, truncated, lost, platform).
+    redirects the first fetch. The URLs it failed to fetch go to ``CRAWL_FAILURES``
+    in outdir, where a replay can count them. Returns (saved, truncated, lost, platform).
     """
     path_re = _topic_link_re(start_url, slug, platform) if platform else None
 
-    def page_id(u: str) -> str:
-        """The URL's topic segment — the raw filename, which _apple_merge matches
-        TOC anchors against, so it stays descriptive."""
-        segs = [p for p in urlparse(u).path.split("/") if p]
-        i = segs.index("guide") if "guide" in segs else -1
-        return segs[i + 2] if i >= 0 and len(segs) > i + 2 else "welcome"
-
     def topic_key(u: str) -> str:
-        """Identity for dedup: the opaque token when the segment carries one."""
-        seg = page_id(u)
-        tail = seg.rsplit("-", 1)[-1]
-        return tail if _TOPIC_TOKEN_RE.fullmatch(tail) else seg
+        return _topic_key(_page_id(u))
 
     seen_ids: set[str] = {"welcome", topic_key(start_url)}
     saved = 0
-    lost = 0
+    failed: list[str] = []
     queue: deque[str] = deque([start_url])
-    if page_id(start_url) != "welcome":
+    if _page_id(start_url) != "welcome":
         # The merge builds its outline and title from welcome's TOC; topics never link back.
         queue.appendleft(_welcome_url(start_url, slug, platform))
     watchdog = ProgressWatchdog(stall_after_s=cfg.CRAWL_STALL_AFTER_S, now=time.monotonic)
@@ -111,7 +104,7 @@ def _crawl(
         try:
             final_url, body = http.fetch_text(url)
         except Exception as exc:
-            lost += 1
+            failed.append(url)
             log.warning("apple_help.fetch_error", url=url, error=str(exc))
             continue
         if path_re is None:
@@ -121,7 +114,7 @@ def _crawl(
         # Mark the post-redirect identity seen too: a short-form URL lands on the
         # long form, and the long form is usually linked elsewhere as well.
         seen_ids.add(topic_key(final_url))
-        out_path = outdir / f"{page_id(final_url)}.html"
+        out_path = outdir / f"{_page_id(final_url)}.html"
         if not out_path.exists():
             out_path.write_text(body, encoding="utf-8")
             saved += 1
@@ -135,7 +128,40 @@ def _crawl(
         http.polite_sleep()
     if queue:
         log.warning("apple_help.capped", saved=saved, cap=_MAX_PAGES, queued=len(queue))
-    return saved, bool(queue), lost, platform or "mac"
+    atomic_write_json(outdir / CRAWL_FAILURES, {"failed": failed})
+    return saved, bool(queue), len(failed), platform or "mac"
+
+
+def _page_id(url: str) -> str:
+    """The URL's topic segment — the raw filename, which _apple_merge matches TOC
+    anchors against, so it stays descriptive."""
+    segs = [p for p in urlparse(url).path.split("/") if p]
+    i = segs.index("guide") if "guide" in segs else -1
+    return segs[i + 2] if i >= 0 and len(segs) > i + 2 else "welcome"
+
+
+def _topic_key(segment: str) -> str:
+    """A topic's identity under either link form: the opaque token when the segment
+    carries one."""
+    tail = segment.rsplit("-", 1)[-1]
+    return tail if _TOPIC_TOKEN_RE.fullmatch(tail) else segment
+
+
+def _recorded_failures(raw_dir: Path) -> set[str] | None:
+    """Topic keys of the fetches the crawl recorded as failed; None when raw/ holds no
+    readable record."""
+    path = raw_dir / CRAWL_FAILURES
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        record = None
+    urls = record.get("failed") if isinstance(record, dict) else None
+    if not isinstance(urls, list) or not all(isinstance(u, str) for u in urls):
+        log.warning("apple_help.failures_unreadable", path=str(path))
+        return None
+    return {_topic_key(_page_id(u)) for u in urls}
 
 
 class AppleHelpPattern:
@@ -174,8 +200,11 @@ class AppleHelpPattern:
                 f"{acq.slug}: the crawl captured no topic page — the guide's link shape "
                 "changed, or every fetch failed. Nothing was staged."
             )
+        saved = {_topic_key(p.stem) for p in acq.raw_dir.glob("*.html")}
         unfetched = sorted(
-            toc_topic_slugs(acq.raw_dir / "welcome.html", acq.slug) - {p.stem for p in topics}
+            s
+            for s in toc_topic_slugs(acq.raw_dir / "welcome.html", acq.slug)
+            if _topic_key(s) not in saved
         )
         if unfetched:
             # The merge skips a TOC entry with no saved page, so a link shape the
@@ -195,9 +224,14 @@ class AppleHelpPattern:
                 dropped=len(dropped),
                 examples=dropped[:5],
             )
-        # The larger, not the sum: a failed fetch is already in the crawl's count, and
-        # a replay seeds `lost` with this normalize's own earlier result.
-        acq.lost = max(acq.lost, len(unfetched) + len(dropped))
+        lost = {_topic_key(s) for s in [*unfetched, *dropped]}
+        failed = _recorded_failures(acq.raw_dir)
+        if failed is None:
+            # raw/ from before the crawl recorded its failures: the count handed in
+            # is the only trace of them, so it can only be raised.
+            acq.lost = max(acq.lost, len(lost))
+        else:
+            acq.lost = len(lost | (failed - saved))
         out_path.write_text(merged, encoding="utf-8")
         log.info("apple_help.normalize", slug=acq.slug, out=str(out_path), bytes=len(merged))
         return out_path

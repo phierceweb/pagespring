@@ -14,10 +14,10 @@ _PAGE1 = json.dumps(
             {
                 "title": "Study Timer",
                 "body": "<p>Use a timer.</p>",
-                "html_url": "https://support.gingerlabs.com/hc/en-us/articles/1",
+                "html_url": "https://support.acme.example/hc/en-us/articles/1",
             },
         ],
-        "next_page": "https://support.gingerlabs.com/api/v2/help_center/en-us/articles.json?page=2&per_page=100",
+        "next_page": "https://support.acme.example/api/v2/help_center/en-us/articles.json?page=2&per_page=100",
     }
 )
 _PAGE2 = json.dumps(
@@ -26,7 +26,7 @@ _PAGE2 = json.dumps(
             {
                 "title": "Handwriting",
                 "body": "<p>Write with a pencil.</p>",
-                "html_url": "https://support.gingerlabs.com/hc/en-us/articles/2",
+                "html_url": "https://support.acme.example/hc/en-us/articles/2",
             },
         ],
         "next_page": None,
@@ -52,7 +52,7 @@ def test_article_bodies_are_stripped_of_scripts(tmp_path, monkeypatch):
                         '<p>Watch this.</p><script async="async" src="https://www.tiktok.com/embed.js">'
                         "</script><style>.x{color:red}</style><p>Then read on.</p>"
                     ),
-                    "html_url": "https://support.gingerlabs.com/hc/en-us/articles/9",
+                    "html_url": "https://support.acme.example/hc/en-us/articles/9",
                 },
             ],
             "next_page": None,
@@ -61,7 +61,7 @@ def test_article_bodies_are_stripped_of_scripts(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "fetch_text", lambda url, **kw: (url, dirty))
     monkeypatch.setattr(http, "polite_sleep", lambda: None)
 
-    acq = ZendeskHelpPattern().acquire("https://support.gingerlabs.com/hc/en-us", tmp_path)
+    acq = ZendeskHelpPattern().acquire("https://support.acme.example/hc/en-us", tmp_path)
     merged = "".join(p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*.html")))
 
     assert "tiktok.com/embed.js" not in merged
@@ -72,7 +72,7 @@ def test_article_bodies_are_stripped_of_scripts(tmp_path, monkeypatch):
 
 def test_match():
     p = ZendeskHelpPattern()
-    assert p.match("https://support.gingerlabs.com/hc/en-us")
+    assert p.match("https://support.acme.example/hc/en-us")
     assert p.match("https://company.zendesk.com/hc/en-us/articles/123")
     assert not p.match("https://example.com/docs")
 
@@ -98,7 +98,7 @@ def test_api_page_cap_warns(tmp_path, monkeypatch):
     spy = _LogSpy()
     monkeypatch.setattr(mod, "log", spy)
 
-    acq = ZendeskHelpPattern().acquire("https://support.gingerlabs.com/hc/en-us", tmp_path)
+    acq = ZendeskHelpPattern().acquire("https://support.acme.example/hc/en-us", tmp_path)
 
     assert acq.pages == 1  # only page 1's article fetched
     assert any(event == "zendesk_help.capped" for event, _ in spy.warnings)
@@ -111,9 +111,9 @@ def _spy_fetch(seen):
             {
                 "articles": [
                     {
-                        "title": "Setting up VocAlign 6",
+                        "title": "Setting up Widget 6",
                         "body": "<p>Insert the plug-in.</p>",
-                        "html_url": "https://synchroarts.zendesk.com/hc/en-us/articles/9",
+                        "html_url": "https://acme.zendesk.com/hc/en-us/articles/9",
                     }
                 ],
                 "next_page": None,
@@ -130,10 +130,10 @@ def test_section_url_scopes_to_that_section(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
     acq = ZendeskHelpPattern().acquire(
-        "https://synchroarts.zendesk.com/hc/en-us/sections/23943152503959-VocAlign-6", tmp_path
+        "https://acme.zendesk.com/hc/en-us/sections/360000000001-Widget-6", tmp_path
     )
 
-    assert "/api/v2/help_center/en-us/sections/23943152503959/articles.json" in seen[0]
+    assert "/api/v2/help_center/en-us/sections/360000000001/articles.json" in seen[0]
     assert acq.pages == 1
 
 
@@ -143,10 +143,10 @@ def test_category_url_scopes_to_that_category(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
     ZendeskHelpPattern().acquire(
-        "https://synchroarts.zendesk.com/hc/en-us/categories/4408150081431-Products", tmp_path
+        "https://acme.zendesk.com/hc/en-us/categories/360000000002-Products", tmp_path
     )
 
-    assert "/api/v2/help_center/en-us/categories/4408150081431/articles.json" in seen[0]
+    assert "/api/v2/help_center/en-us/categories/360000000002/articles.json" in seen[0]
 
 
 def test_unscoped_url_still_pulls_whole_help_center(tmp_path, monkeypatch):
@@ -155,7 +155,7 @@ def test_unscoped_url_still_pulls_whole_help_center(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "fetch_text", _spy_fetch(seen))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
-    ZendeskHelpPattern().acquire("https://support.gingerlabs.com/hc/en-us", tmp_path)
+    ZendeskHelpPattern().acquire("https://support.acme.example/hc/en-us", tmp_path)
 
     assert "/api/v2/help_center/en-us/articles.json" in seen[0]
     assert "/sections/" not in seen[0]
@@ -166,18 +166,18 @@ def test_acquire_paginates_and_merges(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
     p = ZendeskHelpPattern()
 
-    acq = p.acquire("https://support.gingerlabs.com/hc/en-us", tmp_path)
+    acq = p.acquire("https://support.acme.example/hc/en-us", tmp_path)
     assert acq.kind == "html"
-    assert acq.slug == "gingerlabs"
+    assert acq.slug == "acme"
     assert acq.pages == 2  # one article per API page
     assert len(list(acq.raw_dir.glob("*.html"))) == 2  # both pages' articles
 
     html = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
-    assert "<h1>Gingerlabs Help</h1>" in html
+    assert "<h1>Acme Help</h1>" in html
     assert "<h2>Study Timer</h2>" in html  # page 1
     assert "<h2>Handwriting</h2>" in html  # page 2 (pagination followed)
     assert "Write with a pencil." in html
-    assert "source: https://support.gingerlabs.com/hc/en-us/articles/2" in html
+    assert "source: https://support.acme.example/hc/en-us/articles/2" in html
 
 
 @pytest.mark.parametrize(
@@ -205,9 +205,9 @@ def test_hc_must_lead_the_path():
 def test_attachment_url_is_not_claimed():
     """`/hc/.../article_attachments/<id>` is a binary file, not an article.
 
-    Claiming it made a lone PDF acquire the whole help center; declining lets
+    Claiming it would make a lone PDF acquire the whole help center; declining lets
     docs_probe's %PDF- sniff route it to pdf_url."""
-    url = "https://northstarwater.zendesk.com/hc/en-us/article_attachments/37651641721111"
+    url = "https://vendor.zendesk.com/hc/en-us/article_attachments/37651641721111"
 
     assert not ZendeskHelpPattern().match(url)
 
@@ -215,35 +215,35 @@ def test_attachment_url_is_not_claimed():
 def test_help_center_urls_are_still_claimed():
     p = ZendeskHelpPattern()
 
-    assert p.match("https://support.gingerlabs.com/hc/en-us")
-    assert p.match("https://synchroarts.zendesk.com/hc/en-us/articles/9-Setting-up")
+    assert p.match("https://support.acme.example/hc/en-us")
+    assert p.match("https://acme.zendesk.com/hc/en-us/articles/9-Setting-up")
 
 
 def test_article_url_scopes_to_that_article(tmp_path, monkeypatch):
-    """An article URL matched neither sections nor categories, so it fell through
-    to the unscoped endpoint and paged the whole center — up to 10,000 articles."""
+    """An article URL narrows the endpoint too; matching only sections and
+    categories falls through to the unscoped endpoint and pages the whole center."""
     seen: list[str] = []
     monkeypatch.setattr(http, "fetch_text", _spy_fetch(seen))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
     ZendeskHelpPattern().acquire(
-        "https://northstarwater.zendesk.com/hc/en-us/articles/1500012369841-NSC42-Manual", tmp_path
+        "https://vendor.zendesk.com/hc/en-us/articles/360000000003-Model-42-Manual", tmp_path
     )
 
-    assert "/api/v2/help_center/en-us/articles/1500012369841" in seen[0]
+    assert "/api/v2/help_center/en-us/articles/360000000003" in seen[0]
 
 
 def test_article_slug_does_not_collide_with_the_whole_center(tmp_path, monkeypatch):
-    """The slug was host-only, so a single-article ingest and a whole-center
-    ingest of the same vendor would overwrite each other in one incoming/ dir."""
+    """A host-only slug would put a single-article ingest and a whole-center ingest
+    of the same vendor in one incoming/ dir, each overwriting the other."""
     monkeypatch.setattr(http, "fetch_text", _spy_fetch([]))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
     p = ZendeskHelpPattern()
 
     article = p.acquire(
-        "https://synchroarts.zendesk.com/hc/en-us/articles/9-Setting-up-VocAlign-6", tmp_path
+        "https://acme.zendesk.com/hc/en-us/articles/9-Setting-up-Widget-6", tmp_path
     )
-    center = p.acquire("https://synchroarts.zendesk.com/hc/en-us", tmp_path)
+    center = p.acquire("https://acme.zendesk.com/hc/en-us", tmp_path)
 
     assert article.slug != center.slug
 
@@ -255,7 +255,7 @@ def test_article_ingest_marks_itself_a_single_document(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
     acq = ZendeskHelpPattern().acquire(
-        "https://synchroarts.zendesk.com/hc/en-us/articles/9-Setting-up", tmp_path
+        "https://acme.zendesk.com/hc/en-us/articles/9-Setting-up", tmp_path
     )
 
     assert acq.single_document is True
@@ -265,7 +265,7 @@ def test_whole_center_ingest_is_not_a_single_document(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "fetch_text", _spy_fetch([]))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
-    acq = ZendeskHelpPattern().acquire("https://support.gingerlabs.com/hc/en-us", tmp_path)
+    acq = ZendeskHelpPattern().acquire("https://support.acme.example/hc/en-us", tmp_path)
 
     assert acq.single_document is False
 

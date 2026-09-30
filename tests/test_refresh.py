@@ -6,6 +6,7 @@ fast path."""
 import json
 
 import pytest
+from pf_core.exceptions import InvalidInputError
 
 from pagespring import manifest, orchestrate, refresh
 from pagespring.base import AcquireResult
@@ -77,7 +78,7 @@ def test_refresh_preserves_kept_raw_property(tmp_path, monkeypatch):
 
 
 def test_refresh_slug_without_manifest_is_skipped(tmp_path):
-    """A legacy dir with no manifest can't be refreshed — skipped, not fatal."""
+    """A dir with no manifest can't be refreshed — skipped, not fatal."""
     (tmp_path / "incoming" / "legacy").mkdir(parents=True)
     out = refresh.refresh_slug("legacy")
     assert out["status"] == "skipped"
@@ -142,21 +143,22 @@ class _SingleFetchPattern(_BodyPattern):
     single_fetch = True
 
 
-def _seed_validator_manifest(tmp_path, slug="fakeapp"):
+def _seed_validator_manifest(tmp_path, slug="fakeapp", kind="pdf"):
     d = tmp_path / "incoming" / slug
     d.mkdir(parents=True)
-    (d / f"{slug}.pdf").write_bytes(b"%PDF")
+    ext = "pdf" if kind == "pdf" else "html"
+    (d / f"{slug}.{ext}").write_bytes(b"%PDF" if kind == "pdf" else b"<h1>x</h1>")
     manifest.write_manifest(
         d,
         manifest.build_manifest(
             source_url="https://x/manual.pdf",
             pattern="fake",
             slug=slug,
-            kind="pdf",
-            deliverable=f"{slug}.pdf",
+            kind=kind,
+            deliverable=f"{slug}.{ext}",
             pages=None,
             size_bytes=4,
-            sha256=manifest.sha256_file(d / f"{slug}.pdf"),
+            sha256=manifest.sha256_file(d / f"{slug}.{ext}"),
             images=0,
             ingested_at="2026-07-01T00:00:00Z",
             etag='"abc123"',
@@ -241,7 +243,7 @@ def test_refresh_fast_path_miss_falls_through_to_full_reingest(tmp_path, monkeyp
 def test_refresh_crawl_pattern_never_probes_validators(tmp_path, monkeypatch):
     """A crawl-shaped pattern (no single_fetch) ignores stored validators —
     an entry page's 304 proves nothing about the rest of the site."""
-    _seed_validator_manifest(tmp_path)
+    _seed_validator_manifest(tmp_path, kind="html")
     monkeypatch.setattr(refresh, "pattern_by_name", lambda name: _BodyPattern())  # no single_fetch
     monkeypatch.setattr(
         refresh.http,
@@ -265,6 +267,25 @@ def test_refresh_crawl_pattern_never_probes_validators(tmp_path, monkeypatch):
 
     out = refresh.refresh_slug("fakeapp")
     assert out["status"] == "unchanged"
+
+
+def test_refresh_probes_a_pdf_a_crawl_pattern_routed(tmp_path, monkeypatch):
+    """docs_probe hands a PDF served from an extensionless path to pdf_url: the
+    deliverable is still one response of source_url, so its validators hold."""
+    _seed_validator_manifest(tmp_path)
+    monkeypatch.setattr(refresh, "pattern_by_name", lambda name: _BodyPattern())  # no single_fetch
+    monkeypatch.setattr(refresh.http, "not_modified", lambda url, **k: True)
+    monkeypatch.setattr(
+        refresh, "run_ingest", lambda *a, **k: pytest.fail("a 304 must not re-ingest")
+    )
+
+    out = refresh.refresh_slug("fakeapp")
+
+    assert out == {
+        "slug": "fakeapp",
+        "status": "unchanged",
+        "detail": "not modified (validator probe)",
+    }
 
 
 def test_refresh_all_sweeps_every_slug_and_isolates_failures(tmp_path, monkeypatch):
@@ -419,3 +440,124 @@ def test_refresh_all_reports_a_slug_that_raises_and_sweeps_on(tmp_path, monkeypa
         ("bbb", "unchanged"),
     ]
     assert "KeyError" in outcomes[0]["detail"]
+
+
+def _seed_pattern(tmp_path, slug, pattern):
+    d = tmp_path / "incoming" / slug
+    d.mkdir(parents=True)
+    manifest.write_manifest(
+        d,
+        manifest.build_manifest(
+            source_url=f"https://x/{slug}",
+            pattern=pattern,
+            slug=slug,
+            kind="pdf",
+            deliverable=f"{slug}.pdf",
+            pages=1,
+            size_bytes=1,
+            sha256="0" * 64,
+            images=0,
+            ingested_at="2026-07-01T00:00:00Z",
+        ),
+    )
+
+
+def _record_refreshes(monkeypatch):
+    seen: list[str] = []
+
+    def fake(slug):
+        seen.append(slug)
+        return {"slug": slug, "status": "unchanged", "detail": ""}
+
+    monkeypatch.setattr(refresh, "refresh_slug", fake)
+    return seen
+
+
+def test_refresh_all_with_patterns_sweeps_only_their_slugs(tmp_path, monkeypatch):
+    _seed_pattern(tmp_path, "aaa-guide", "apple_help")
+    _seed_pattern(tmp_path, "bbb-pdf", "pdf_url")
+    _seed_pattern(tmp_path, "ccc-pdf", "pdf_url")
+    (tmp_path / "incoming" / "ddd-no-manifest").mkdir()
+    seen = _record_refreshes(monkeypatch)
+
+    outcomes = refresh.refresh_all(patterns={"pdf_url"})
+
+    assert seen == ["bbb-pdf", "ccc-pdf"]
+    assert [o["slug"] for o in outcomes] == seen
+
+
+def test_refresh_all_refuses_a_pattern_name_nothing_registers(monkeypatch):
+    seen = _record_refreshes(monkeypatch)
+    with pytest.raises(InvalidInputError, match="pdf-url"):
+        refresh.refresh_all(patterns={"pdf_url", "pdf-url"})
+    assert seen == []
+
+
+def test_refresh_slugs_folds_every_name_before_the_first_refresh(monkeypatch):
+    seen = _record_refreshes(monkeypatch)
+    with pytest.raises(InvalidInputError):
+        refresh.refresh_slugs(["aaa", ".."])
+    assert seen == []
+
+
+def test_refresh_slugs_isolates_each_and_skips_repeats(tmp_path, monkeypatch):
+    for slug in ("aaa", "bbb", "ccc"):
+        _seed_pattern(tmp_path, slug, "pdf_url")
+
+    def flaky(slug):
+        if slug == "bbb":
+            raise RuntimeError("boom")
+        return {"slug": slug, "status": "changed", "detail": ""}
+
+    monkeypatch.setattr(refresh, "refresh_slug", flaky)
+
+    outcomes = refresh.refresh_slugs(["aaa", "bbb", "aaa", "ccc"])
+
+    assert [(o["slug"], o["status"]) for o in outcomes] == [
+        ("aaa", "changed"),
+        ("bbb", "failed"),
+        ("ccc", "changed"),
+    ]
+
+
+def test_refresh_slugs_folds_names_before_skipping_repeats(tmp_path, monkeypatch):
+    _seed_pattern(tmp_path, "my-manual", "pdf_url")
+    seen = _record_refreshes(monkeypatch)
+
+    outcomes = refresh.refresh_slugs(["my-manual", "My Manual", "MY-MANUAL/"])
+
+    assert seen == ["my-manual"]
+    assert [o["slug"] for o in outcomes] == ["my-manual"]
+
+
+def test_refresh_slugs_refuses_a_name_without_a_manifest_before_any_fetch(tmp_path, monkeypatch):
+    _seed_pattern(tmp_path, "aaa", "pdf_url")
+    seen = _record_refreshes(monkeypatch)
+    with pytest.raises(InvalidInputError, match="ghost"):
+        refresh.refresh_slugs(["aaa", "ghost"])
+    assert seen == []
+
+
+def test_refresh_all_with_patterns_survives_a_hand_edited_pattern(tmp_path, monkeypatch):
+    _seed_pattern(tmp_path, "aaa-pdf", "pdf_url")
+    _seed_pattern(tmp_path, "bbb-edited", "pdf_url")
+    d = tmp_path / "incoming" / "bbb-edited"
+    m = json.loads((d / "manifest.json").read_text())
+    m["pattern"] = ["pdf_url"]
+    (d / "manifest.json").write_text(json.dumps(m))
+    seen = _record_refreshes(monkeypatch)
+
+    refresh.refresh_all(patterns={"pdf_url"})
+
+    assert seen == ["aaa-pdf"]
+
+
+def test_refresh_all_with_patterns_reads_the_directory_it_refreshes(tmp_path, monkeypatch):
+    """A directory whose name folds elsewhere refreshes the folded directory, so the
+    filter must read that one's manifest too."""
+    _seed_pattern(tmp_path, "Legacy_Name", "pdf_url")
+    seen = _record_refreshes(monkeypatch)
+
+    refresh.refresh_all(patterns={"pdf_url"})
+
+    assert seen == []

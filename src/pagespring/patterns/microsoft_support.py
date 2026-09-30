@@ -1,11 +1,11 @@
 """microsoft_support — Microsoft 365 end-user help (support.microsoft.com).
 
 acquire finds the product's article catalog via the per-product sitemap
-(``/_sitemaps/<product>_<locale>_<n>.xml`` — e.g. excel_en-us_1.xml lists
-~1700 articles; the hub page server-renders only ~24). When no product
-sitemap exists it falls back to scraping the hub's ``/office/`` links. Each
-article's ``<div class="learnArticleContent">`` body is extracted (title from
-the page ``<h1>``); title-less chrome shells are skipped. normalize merges
+(``/_sitemaps/<product>_<locale>_<n>.xml``; the hub page server-renders only a
+fraction of the catalog). When no product sitemap exists it falls back to
+scraping the hub's ``/office/`` links. Each article's
+``<div class="learnArticleContent">`` body is extracted (title from the page
+``<h1>``); title-less chrome shells are skipped. normalize merges
 them. Image URLs are absolute (``--download-images`` localizes them).
 
 Point it at an app hub, e.g. ``https://support.microsoft.com/en-us/excel``.
@@ -39,7 +39,7 @@ _CHROME_RE = re.compile(
 _SITEMAP_TPL = "https://support.microsoft.com/_sitemaps/{product}_{locale}_{n}.xml"
 _LOC_RE = re.compile(r"<loc>([^<]+)</loc>")
 _URLSET_RE = re.compile(r"<urlset\b")
-_MAX = 2000  # per-product sitemap scale (excel ≈ 1700)
+_MAX = 2000  # above the largest per-product sitemap
 _MAX_SITEMAP_PAGES = 50  # the largest product publishes a single sitemap page
 _MIN_BODY = 200  # below this, a title-less page is a chrome shell — skip it
 _PACE = 1.0  # seconds between requests — the site quota-blocks bursts with 403s
@@ -96,7 +96,7 @@ def _sitemap_articles(product: str, locale: str) -> tuple[list[str], bool]:
             _f, xml = http.fetch_text(url)
         except urllib.error.HTTPError as exc:
             # 404 is the expected end of pagination; any other status (e.g. a 403
-            # throttle mid-crawl) stopped us early and silently truncated the catalog.
+            # throttle mid-crawl) stopped enumeration early and silently truncated the catalog.
             if exc.code != 404:
                 log.warning(
                     "microsoft_support.sitemap_error", url=url, status=exc.code, pages=n - 1

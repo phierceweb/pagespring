@@ -9,27 +9,24 @@ Sphinx ecosystem.
 
 from __future__ import annotations
 
-import gzip
 import html as _html
-import io
-import lzma
-import re
-import tarfile
 import xml.etree.ElementTree as ET
-import zipfile
-import zlib
-from collections.abc import Iterator
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from pf_core.exceptions import InvalidInputError
 from pf_core.log import get_logger
 from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult, SourceKind
+from pagespring.patterns._archive_extract import extract
+from pagespring.patterns._archive_images import MemberImages
+from pagespring.patterns._archive_links import MemberLinks
+from pagespring.patterns._ordering import natural_key
 
 log = get_logger(__name__)
 
@@ -39,22 +36,9 @@ _PACKAGING = frozenset(
     {"readme", "license", "licence", "changelog", "contributing", "install", "notice", "authors"}
 )
 _HTMLY = (".html", ".htm")
-
-# Extraction budget, checked against declared member sizes before anything is written.
-_MAX_EXTRACT_BYTES = 2 * 1024 * 1024 * 1024
-_MAX_MEMBERS = 100_000
-_MAX_RATIO = 100
-# Below this many extracted bytes a high ratio is ordinary repetitive text, not a bomb.
-_RATIO_FLOOR_BYTES = 16 * 1024 * 1024
-_ARCHIVE_ERRORS = (
-    zipfile.BadZipFile,
-    tarfile.TarError,
-    EOFError,
-    zlib.error,
-    lzma.LZMAError,
-    gzip.BadGzipFile,
-    NotImplementedError,
-)
+_SEPARATOR = "\n\n---\n\n"
+# Elements that are a member's content without any text.
+_MEDIA = ["img", "image", "svg", "video", "audio", "object", "embed", "iframe", "math"]
 
 
 def _html_exts(raw_dir: Path) -> tuple[str, ...]:
@@ -89,46 +73,55 @@ def _load_bytes(src: str) -> tuple[bytes, http.Validators]:
     return path.read_bytes(), http.Validators(etag=None, last_modified=None)
 
 
-def _natural_key(path: Path) -> tuple[object, ...]:
-    """Sort key where embedded digits compare numerically, so ch2 precedes ch10."""
-    return tuple(
-        int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", str(path))
-    )
+class _Package(NamedTuple):
+    """What an EPUB's OPF says about the book; empty for any other archive."""
+
+    spine: list[Path]  # reading order, resolved against the OPF's own directory
+    nav: set[Path]  # EPUB 3 navigation documents: the reading system's TOC
+    title: str | None
 
 
-def _spine_order(raw_dir: Path) -> list[Path]:
-    """Member paths in EPUB reading order, each resolved against the OPF's own
-    directory, from the OPF spine ([] if absent).
+def _package(raw_dir: Path) -> _Package:
+    """The OPF's reading order, navigation documents and title.
 
     The spine is the only authoritative order: filenames sort ch10 between ch1
     and ch2, and Gutenberg names its cover ``wrap0000`` so it lands last.
     """
+    empty = _Package([], set(), None)
     opf = next(iter(sorted(raw_dir.rglob("*.opf"))), None)
     if opf is None:
-        return []
+        return empty
     try:
         root = ET.fromstring(opf.read_text(encoding="utf-8", errors="replace"))
     except ET.ParseError:
-        return []
-    ns = {"opf": "http://www.idpf.org/2007/opf"}
-    hrefs = {
-        item.get("id"): item.get("href")
-        for item in root.iterfind(".//opf:manifest/opf:item", ns)
-        if item.get("id") and item.get("href")
-    }
-    spine = [
-        hrefs.get(ref.get("idref") or "") for ref in root.iterfind(".//opf:spine/opf:itemref", ns)
+        return empty
+    ns = {"opf": "http://www.idpf.org/2007/opf", "dc": "http://purl.org/dc/elements/1.1/"}
+    items = [
+        i for i in root.iterfind(".//opf:manifest/opf:item", ns) if i.get("id") and i.get("href")
     ]
-    paths = (unquote(h.split("#", 1)[0]) for h in spine if h)
-    return [opf.parent / p for p in paths if p]
+    hrefs = {i.get("id"): i.get("href") or "" for i in items}
+
+    def resolve(href: str) -> Path | None:
+        path = unquote(href.split("#", 1)[0])
+        return opf.parent / path if path else None
+
+    spine = [
+        resolve(hrefs.get(r.get("idref") or "") or "")
+        for r in root.iterfind(".//opf:spine/opf:itemref", ns)
+    ]
+    nav = [
+        resolve(i.get("href") or "") for i in items if "nav" in (i.get("properties") or "").split()
+    ]
+    title = root.findtext(".//dc:title", default="", namespaces=ns).strip() or None
+    return _Package([p for p in spine if p], {p.resolve() for p in nav if p}, title)
 
 
 def _ordered_members(raw_dir: Path, exts: tuple[str, ...]) -> list[Path]:
     """Archive members in reading order: EPUB spine first, then natural sort."""
     members = [p for p in raw_dir.rglob("*") if p.suffix.lower() in exts]
-    spine = _spine_order(raw_dir)
+    spine, nav, _title = _package(raw_dir)
     if not spine:
-        return sorted(members, key=_natural_key)
+        return sorted(members, key=natural_key)
     by_path = {p.resolve(): p for p in members}
     by_name = {p.name: p for p in members}
     ordered: list[Path] = []
@@ -140,58 +133,48 @@ def _ordered_members(raw_dir: Path, exts: tuple[str, ...]) -> list[Path]:
         if member is not None and member not in listed:
             listed.add(member)
             ordered.append(member)
-    # Anything the spine omits still belongs in the deliverable, after the book.
-    return ordered + sorted((p for p in members if p not in listed), key=_natural_key)
+    # Anything else the spine omits still belongs in the deliverable, after the book.
+    rest = (p for p in members if p not in listed and p.resolve() not in nav)
+    return ordered + sorted(rest, key=natural_key)
 
 
-def _body_fragment(html: str) -> str:
-    """A document's <body> inner HTML — archives ship whole standalone pages,
-    and nesting 14 of them inside one deliverable is invalid markup."""
-    soup = BeautifulSoup(html, "html.parser")
-    for junk in soup.find_all(["script", "style", "noscript"]):
+def _content(member: Path) -> Tag | None:
+    """A document's <body> less scripts and boilerplate, or None when nothing is left.
+    Archives ship whole standalone pages; nesting them in one deliverable is invalid."""
+    soup = BeautifulSoup(member.read_text(encoding="utf-8", errors="replace"), "html.parser")
+    # .pg-boilerplate: Project Gutenberg's header and license footer.
+    for junk in soup.find_all(["script", "style", "noscript"]) + soup.select(".pg-boilerplate"):
         junk.decompose()
-    body = soup.body
-    if body is None:
-        return str(soup)
-    return "".join(str(c) for c in body.contents).strip()
+    root = soup.body or soup
+    return root if root.get_text(strip=True) or root.find(_MEDIA) else None
 
 
-def _check_budget(sizes: Iterator[int], archive_bytes: int, src: str) -> None:
-    """Refuse a bomb from its declared member sizes before any member reaches disk."""
-    total = 0
-    for members, size in enumerate(sizes, start=1):
-        total += size
-        if members > _MAX_MEMBERS:
-            raise InvalidInputError(f"{src}: archive has more than {_MAX_MEMBERS} members")
-        if total > _MAX_EXTRACT_BYTES:
-            raise InvalidInputError(f"{src}: archive would extract past {_MAX_EXTRACT_BYTES} bytes")
-        ratio = total / max(archive_bytes, 1)
-        if total > _RATIO_FLOOR_BYTES and ratio > _MAX_RATIO:
-            raise InvalidInputError(
-                f"{src}: implausible compression ratio ({ratio:.0f}:1) for a docs archive"
-            )
+def _html_body(
+    files: list[Path], raw_dir: Path, bundle: MemberImages, exts: tuple[str, ...]
+) -> tuple[str, int]:
+    """The members with content, joined, and how many there are."""
+    links = MemberLinks(raw_dir, exts)
+    parts = []
+    for p in files:
+        root = _content(p)
+        if root is None:
+            continue
+        bundle.rewrite_html(root, p)
+        links.include(root, p)
+        parts.append(_part(p, raw_dir, root.decode_contents().strip()))
+    return links.resolve(_SEPARATOR.join(parts)), len(parts)
 
 
-def _open_tar(data: bytes, src: str) -> tarfile.TarFile:
-    try:
-        return tarfile.open(fileobj=io.BytesIO(data), mode="r:*")
-    except tarfile.ReadError as exc:
-        got = " (got an HTML page)" if data.lstrip()[:1] == b"<" else ""
-        raise InvalidInputError(f"{src}: not a zip, tar or epub archive{got}") from exc
+def _text(member: Path, bundle: MemberImages) -> str:
+    text = member.read_text(encoding="utf-8", errors="replace")
+    suffix = member.suffix.lower()
+    if suffix == ".md":
+        return bundle.rewrite_markdown(text, member)
+    return bundle.rewrite_rst(text, member) if suffix == ".rst" else text
 
 
-def _extract(data: bytes, dest: Path, src: str) -> None:
-    try:
-        if zipfile.is_zipfile(io.BytesIO(data)):
-            with zipfile.ZipFile(io.BytesIO(data)) as z:
-                _check_budget((i.file_size for i in z.infolist()), len(data), src)
-                z.extractall(dest)
-            return
-        with _open_tar(data, src) as tar:
-            _check_budget((m.size for m in tar), len(data), src)
-            tar.extractall(dest, filter="data")
-    except _ARCHIVE_ERRORS as exc:
-        raise InvalidInputError(f"{src}: damaged or unsafe archive: {exc}") from exc
+def _part(member: Path, raw_dir: Path, text: str) -> str:
+    return f"<!-- source: {member.relative_to(raw_dir)} -->\n\n{text}"
 
 
 class ArchiveDownloadPattern:
@@ -206,7 +189,7 @@ class ArchiveDownloadPattern:
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
         data, meta = _load_bytes(url)
-        _extract(data, raw_dir, url)
+        extract(data, raw_dir, url)
         htmly = _html_exts(raw_dir)
         members = [(p.suffix.lower(), p.stem.lower()) for p in raw_dir.rglob("*")]
         n_html = sum(1 for suffix, _ in members if suffix in htmly)
@@ -217,13 +200,15 @@ class ArchiveDownloadPattern:
         n_docs = sum(1 for suffix, stem in members if suffix in _TEXTY and stem not in _PACKAGING)
         kind: SourceKind = "html" if n_html > n_docs else "markdown"
         slug = _slug_from(url)
-        pages = n_html if kind == "html" else n_text
+        # normalize drops the HTML members left without content, and recounts.
+        pages = len(_ordered_members(raw_dir, htmly)) if kind == "html" else n_text
         log.info("archive_download.acquire", url=url, slug=slug, kind=kind, bytes=len(data))
         return AcquireResult(
             raw_dir=raw_dir,
             kind=kind,
             slug=slug,
             pages=pages,
+            title=_package(raw_dir).title,
             etag=meta["etag"],
             last_modified=meta["last_modified"],
         )
@@ -231,16 +216,13 @@ class ArchiveDownloadPattern:
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         exts = _html_exts(acq.raw_dir) if acq.kind == "html" else _TEXTY
         files = _ordered_members(acq.raw_dir, exts)
-        parts = []
-        for p in files:
-            rel = p.relative_to(acq.raw_dir)
-            text = p.read_text(encoding="utf-8", errors="replace")
-            if acq.kind == "html":
-                text = _body_fragment(text)
-            parts.append(f"<!-- source: {rel} -->\n\n{text}")
+        bundle = MemberImages(acq.raw_dir, workdir)
+        if acq.kind == "html":
+            body, acq.pages = _html_body(files, acq.raw_dir, bundle, exts)
+        else:
+            body = _SEPARATOR.join(_part(p, acq.raw_dir, _text(p, bundle)) for p in files)
         suffix = "html" if acq.kind == "html" else "md"
         out = workdir / f"{acq.slug}.{suffix}"
-        body = "\n\n---\n\n".join(parts)
         if acq.kind == "html":
             title = _html.escape(acq.title or acq.slug.replace("-", " ").title())
             body = (
@@ -248,5 +230,11 @@ class ArchiveDownloadPattern:
                 f"<title>{title}</title></head>\n<body>\n{body}\n</body></html>\n"
             )
         out.write_text(body, encoding="utf-8")
-        log.info("archive_download.normalize", slug=acq.slug, out=str(out), files=len(files))
+        log.info(
+            "archive_download.normalize",
+            slug=acq.slug,
+            out=str(out),
+            files=len(files),
+            images=bundle.copied,
+        )
         return out

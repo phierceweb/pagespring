@@ -38,7 +38,7 @@ class PagespringConfig(AppConfig):
     APP_NAME: str = "pagespring"
 
     # The deliverable: one incoming/<slug>/ per manual — the clean
-    # acquired+normalized file. A separate step (pagespeak) consumes these.
+    # acquired+normalized file.
     INCOMING_DIR: str = "incoming"
 
     # Idle seconds before a queue-driven crawl is treated as stalled and bails

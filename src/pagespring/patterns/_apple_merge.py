@@ -1,6 +1,6 @@
 """Merge a folder of saved Apple Support help pages into one clean HTML manual.
 
-Each saved Apple Support page is ~90% Apple.com chrome (global nav, a TOC
+Each saved Apple Support page is mostly Apple.com chrome (global nav, a TOC
 popover, breadcrumbs, footer, a "Was this helpful?" widget); the real help text
 lives inside ``<div id="article-section">``. Per app this:
 
@@ -12,7 +12,7 @@ lives inside ``<div id="article-section">``. Per app this:
      sit below that, for one faithful, properly-nested outline.
   4. Tidies Apple's run-together "See also" cross-reference blocks into lists.
 
-Image ``src`` URLs are left absolute so pagespeak downloads them during convert.
+Image ``src`` URLs stay absolute.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from pagespring.patterns._site import flatten_responsive_images, strip_scripts
 
 _PARSER = "html.parser"
 _SLUG_RE = re.compile(r"/guide/[^/]+/([^/]+)/")
+_GUIDE_RE = re.compile(r"/guide/([^/]+)/")
 _SKIP_SLUGS = {"welcome", "aside"}
 
 
@@ -41,14 +42,20 @@ def _slug_from(a: Tag) -> str | None:
 
 
 def toc_topic_slugs(welcome: Path, guide_slug: str) -> set[str]:
-    """Every topic of this guide that welcome's TOC links, saved or not."""
+    """Every topic of the guide that welcome's TOC links, saved or not.
+
+    The guide is the one welcome's canonical link names, else ``guide_slug``: a
+    ``--slug`` override renames the deliverable, not the guide."""
     if not welcome.exists():
         return set()
     soup = BeautifulSoup(welcome.read_text(encoding="utf-8", errors="ignore"), _PARSER)
     container = soup.find(id="modal-toc-container")
     if not isinstance(container, Tag):
         return set()
-    own = f"/guide/{guide_slug}/"
+    canonical = soup.find("link", rel="canonical")
+    href = canonical.get("href") if isinstance(canonical, Tag) else None
+    named = _GUIDE_RE.search(href) if isinstance(href, str) else None
+    own = f"/guide/{named.group(1) if named else guide_slug}/"
     slugs: set[str] = set()
     for a in container.find_all("a"):
         href = a.get("href")
@@ -115,8 +122,8 @@ def toc_items(welcome: Path, files_by_slug: dict[str, Path]) -> list[tuple[str, 
 
 
 def _tidy_see_also(soup: BeautifulSoup, root: Tag) -> None:
-    """Rebuild Apple's run-together <div class="LinkUniversal"> cross-ref blocks
-    as bulleted lists so markitdown doesn't mash the links together."""
+    """Rebuild Apple's <div class="LinkUniversal"> cross-ref blocks, whose anchors
+    sit side by side with no separator, as bulleted lists."""
     for lu in root.find_all("div", class_="LinkUniversal"):
         anchors = lu.find_all("a")
         if not anchors:

@@ -8,29 +8,29 @@ from pf_core.exceptions import InvalidInputError
 from pagespring import http
 from pagespring.patterns import _wordpress
 
-_POST_URL = "https://www.drumeo.com/beat/how-to-tune-drums/"
-_REST_URL = "https://www.drumeo.com/beat/wp-json/wp/v2/posts/26372"
+_POST_URL = "https://www.vendor.example/blog/how-to-set-up/"
+_REST_URL = "https://www.vendor.example/blog/wp-json/wp/v2/posts/1234"
 
 # WordPress declares the post's REST endpoint in the head. Reading it beats
-# guessing a path: the install lives in a /beat/ subdirectory, not the root.
+# guessing a path: the install lives in a /blog/ subdirectory, not the root.
 _PAGE = f"""<!DOCTYPE html><html><head>
 <meta name="generator" content="WordPress 6.4.2" />
 <link rel="alternate" type="application/json" href="{_REST_URL}" />
-<title>How To Tune Your Drums</title></head>
+<title>How To Set Up Your Widget</title></head>
 <body><div class="white-box">theme chrome</div></body></html>"""
 
 _REST = json.dumps(
     {
-        "id": 26372,
-        "slug": "how-to-tune-drums",
-        "title": {"rendered": "How To Tune Your Drums"},
+        "id": 1234,
+        "slug": "how-to-set-up",
+        "title": {"rendered": "How To Set Up Your Widget"},
         "content": {
             "rendered": (
                 '<div id="rank-math-toc"><nav><ul><li>Jump to a section</li></ul></nav></div>'
-                "<h2>Why do we tune drums?</h2>"
+                "<h2>Why set it up?</h2>"
                 "<p></p><p></p>"
-                '<p>Because a drum is a <a href="/beat/gear/">tuned instrument</a>.</p>'
-                '<figure><img src="https://cdn.drumeo.com/head.jpg"/></figure>'
+                '<p>Because a widget is a <a href="/blog/gear/">precise instrument</a>.</p>'
+                '<figure><img src="https://cdn.vendor.example/head.jpg"/></figure>'
                 "<script>track()</script>"
             )
         },
@@ -65,8 +65,8 @@ def test_acquires_rendered_content(tmp_path, fetched):
     acq = _wordpress.acquire(_POST_URL, tmp_path, slug="fallback", title=None)
 
     body = (tmp_path / "raw" / "0000.html").read_text(encoding="utf-8")
-    assert "Why do we tune drums?" in body
-    assert "tuned instrument" in body
+    assert "Why set it up?" in body
+    assert "precise instrument" in body
     assert acq.pages == 1
 
 
@@ -74,13 +74,13 @@ def test_slug_comes_from_the_post_not_the_host(tmp_path, fetched):
     """One host serves many posts — a host slug would collide on every ingest."""
     acq = _wordpress.acquire(_POST_URL, tmp_path, slug="fallback", title=None)
 
-    assert acq.slug == "how-to-tune-drums"
+    assert acq.slug == "how-to-set-up"
 
 
 def test_title_comes_from_the_post(tmp_path, fetched):
     acq = _wordpress.acquire(_POST_URL, tmp_path, slug="fallback", title=None)
 
-    assert acq.title == "How To Tune Your Drums"
+    assert acq.title == "How To Set Up Your Widget"
 
 
 def test_toc_nav_block_is_dropped(tmp_path, fetched):
@@ -97,8 +97,8 @@ def test_scripts_are_stripped_and_refs_absolutized(tmp_path, fetched):
 
     body = (tmp_path / "raw" / "0000.html").read_text(encoding="utf-8")
     assert "track()" not in body
-    assert "https://www.drumeo.com/beat/gear/" in body
-    assert "https://cdn.drumeo.com/head.jpg" in body
+    assert "https://www.vendor.example/blog/gear/" in body
+    assert "https://cdn.vendor.example/head.jpg" in body
 
 
 def test_empty_paragraph_runs_are_collapsed(tmp_path, fetched):
@@ -191,7 +191,7 @@ def test_title_entities_are_decoded(tmp_path, monkeypatch):
     entitled = json.dumps(
         {
             "slug": "care",
-            "title": {"rendered": "Tuning &#038; Care"},
+            "title": {"rendered": "Setup &#038; Care"},
             "content": {"rendered": "<h2>Care</h2><p>Wipe it.</p>"},
         }
     )
@@ -200,18 +200,17 @@ def test_title_entities_are_decoded(tmp_path, monkeypatch):
 
     acq = _wordpress.acquire(_POST_URL, tmp_path, slug="fallback", title=None)
 
-    assert acq.title == "Tuning & Care"
+    assert acq.title == "Setup & Care"
 
 
 _HARDENED = f"""<!DOCTYPE html><html><head>
 <link rel="alternate" type="application/json" href="{_REST_URL}" />
-<title>How To Tune Your Drums</title></head><body></body></html>"""
+<title>How To Set Up Your Widget</title></head><body></body></html>"""
 
 
 def test_detected_without_a_generator_meta():
-    """Many WordPress installs strip the generator tag as hardening — wptavern
-    and torquemag both do. The wp-json REST link the head declares is the
-    reliable tell, and it is the same link acquire already reads."""
+    """Many WordPress installs strip the generator tag as hardening. The wp-json REST
+    link the head declares is the reliable tell, and the same link acquire reads."""
     assert _wordpress.is_wordpress(_HARDENED)
 
 

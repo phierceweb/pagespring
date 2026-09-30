@@ -116,6 +116,11 @@ def _schema_lines(spec: dict[str, Any], schema: Any) -> list[str]:
     return lines
 
 
+def _cell(value: object) -> str:
+    """``value`` as one table cell: a line break would end the row, a bare ``|`` the cell."""
+    return " ".join(str(value).splitlines()).replace("|", r"\|")
+
+
 def _render_params(spec: dict[str, Any], params: list[Any]) -> str:
     rows: list[str] = []
     for p in params:
@@ -126,8 +131,8 @@ def _render_params(spec: dict[str, Any], params: list[Any]) -> str:
             continue  # unresolved/nameless param → skip the empty row
         typ = _type_name(_resolve_ref(spec, p.get("schema"))) or _type_name(p)
         req = "yes" if p.get("required") else "no"
-        desc = str(p.get("description") or "").replace("\n", " ")
-        rows.append(f"| `{p['name']}` | {p.get('in', '')} | {typ} | {req} | {desc} |")
+        cells = (f"`{_cell(p['name'])}`", _cell(p.get("in", "")), _cell(typ), req)
+        rows.append(f"| {' | '.join(cells)} | {_cell(p.get('description') or '')} |")
     if not rows:
         return ""
     head = "| Name | In | Type | Required | Description |\n| --- | --- | --- | --- | --- |"

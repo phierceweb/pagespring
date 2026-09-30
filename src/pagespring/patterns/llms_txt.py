@@ -22,6 +22,7 @@ from pf_core.log import get_logger
 from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.patterns._gitbook import absolutize, strip_boilerplate
+from pagespring.patterns._site import under_section
 
 log = get_logger(__name__)
 
@@ -35,8 +36,7 @@ _KNOWN_HOSTS = {
 _LLMS_NAMES = ("llms.txt", "llms-full.txt")
 # .md URLs, whether bare (GitBook) or inside a markdown link (Mintlify/Anthropic).
 _MD_URL_RE = re.compile(r"https?://[^\s)\]\"'<>]+\.md")
-# Safety cap so a giant index (e.g. a 1600-page platform llms.txt) can't trigger
-# thousands of fetches by accident.
+# Safety cap so a giant index can't trigger thousands of fetches by accident.
 _MAX_PAGES = 1000
 _SOURCE_RE = re.compile(r"\A<!-- source: (\S+) -->")
 
@@ -46,21 +46,6 @@ def _is_llms(url: str, *names: str) -> bool:
     fragment, or case change must not defeat the routing."""
     basename = PurePosixPath(urlparse(url).path.rstrip("/")).name.lower()
     return basename in names
-
-
-def _origin_and_path(url: str) -> tuple[str, str]:
-    p = urlparse(url)
-    return f"{p.scheme.lower()}://{p.netloc.lower()}", p.path.rstrip("/")
-
-
-def _under_section(md_url: str, section: str) -> bool:
-    """Membership is a path-segment prefix on a case-folded origin: a raw string
-    prefix also absorbs siblings (/guide swallowing /guide-advanced)."""
-    origin, path = _origin_and_path(md_url)
-    section_origin, section_path = _origin_and_path(section)
-    return origin == section_origin and (
-        path == section_path or path.startswith(f"{section_path}/")
-    )
 
 
 def _clean_page(raw: str) -> str:
@@ -134,7 +119,7 @@ class LlmsTxtPattern:
             # in-page anchor to a page already listed, not a page of its own.
             if not urlparse(m).path.endswith(".md"):
                 continue
-            if section and not _under_section(m, section):
+            if section and not under_section(m, section):
                 continue
             if m not in seen:
                 seen.add(m)

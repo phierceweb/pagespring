@@ -6,7 +6,7 @@ from pf_core.exceptions import InvalidInputError
 from pagespring import http
 from pagespring.patterns import _st4
 
-_BASE = "https://manual.yamaha.com/av/20/rxa8a/en-US"
+_BASE = "https://manual.vendor.example/av/20/avr8a/en-US"
 
 # The entry page a user pastes: no ST4 token in the generator, only the
 # stylesheet name. Identifiable by its tells alone.
@@ -19,7 +19,7 @@ _INDEX = """<!DOCTYPE html><html xmlns:st4="http://www.schema.de/2010/ST4/XmlImp
 _TOPIC_META = '<meta name="generator" content="SCHEMA ST4, Bootstrap 2016 v1" />'
 
 # treedata.json is a JS source file, not JSON: BOM, `tocData = `, the array,
-# then six more top-level assignments.
+# then more top-level assignments.
 _TREEDATA = (
     "﻿tocData = ["
     '{"text":"BEFORE USING THE UNIT","id":"100","href":"100.html","reused":false,"nodes":['
@@ -30,7 +30,7 @@ _TREEDATA = (
     '{"text":"Trademarks","id":"210","href":"210.html","reused":false}]}];\n'
     'tocHeading = "Table of Contents";\n'
     'languagesData = [{"name":"日本語"}];\n'
-    'projectTitle = "[GUI]RX-A8A";\n'
+    'projectTitle = "[GUI]AVR-8A";\n'
 )
 
 
@@ -38,11 +38,11 @@ def _topic(title: str, body: str) -> str:
     return f"""<!DOCTYPE html><html><head>{_TOPIC_META}</head><body>
 <div class="schema-navbar" id="navbar">CHROME</div>
 <div class="container" role="main">
-<ol class="breadcrumb hidden-xs"><li>RX-A8A</li><li>{title}</li></ol>
+<ol class="breadcrumb hidden-xs"><li>AVR-8A</li><li>{title}</li></ol>
 <h1 class="heading">{title}</h1>
 {body}
 </div>
-<div class="container-footer">(c)2021 Yamaha Corporation</div>
+<div class="container-footer">(c)2021 Vendor Corporation</div>
 <script src="js/x.js"></script></body></html>"""
 
 
@@ -99,7 +99,7 @@ def test_treedata_parses_through_bom_and_trailing_assignments():
 
 
 def test_project_title_strips_bracket_prefix():
-    assert _st4.project_title(_TREEDATA) == "RX-A8A"
+    assert _st4.project_title(_TREEDATA) == "AVR-8A"
 
 
 def test_malformed_treedata_raises_invalid_input():
@@ -108,8 +108,8 @@ def test_malformed_treedata_raises_invalid_input():
 
 
 def test_only_leaf_pages_are_fetched(tmp_path, fetched):
-    """The 99 branch nodes are empty client-rendered shells. Fetching them
-    yields content-free fragments AND loses every chapter title."""
+    """Branch nodes are empty client-rendered shells. Fetching them yields
+    content-free fragments AND loses every chapter title."""
     acq = _st4.acquire(f"{_BASE}/index.html", tmp_path, slug="x", title=None)
 
     assert acq.pages == 3
@@ -140,7 +140,7 @@ def test_chrome_and_breadcrumb_are_dropped(tmp_path, fetched):
 
     assert "breadcrumb" not in merged
     assert "CHROME" not in merged
-    assert "Yamaha Corporation" not in merged
+    assert "Vendor Corporation" not in merged
     assert "js/x.js" not in merged
     assert "Read it." in merged
 
@@ -158,11 +158,11 @@ def test_topic_h1_is_demoted_below_synthesized_headings(tmp_path, fetched):
 
 
 def test_query_string_is_stripped_from_cross_links(tmp_path, monkeypatch):
-    """`href="210.html?page=5459235851"` is a viewer route that expands a branch;
+    """`href="210.html?page=1234567890"` is a viewer route that expands a branch;
     left alone it produces a duplicate target for the same page."""
     pages = dict(_PAGES)
     pages[f"{_BASE}/111.html"] = _topic(
-        "How to use this guide", '<a href="210.html?page=5459235851">See trademarks</a>'
+        "How to use this guide", '<a href="210.html?page=1234567890">See trademarks</a>'
     )
 
     def fake_fetch_text(url, **kwargs):
@@ -186,7 +186,7 @@ def test_image_refs_resolve_above_the_language_dir(tmp_path, monkeypatch):
     pages = dict(_PAGES)
     pages[f"{_BASE}/111.html"] = _topic(
         "How to use this guide",
-        '<figure><img src="../Images/png/27021602658914443__Web.png"/></figure>',
+        '<figure><img src="../Images/png/10000000000000001__Web.png"/></figure>',
     )
 
     def fake_fetch_text(url, **kwargs):
@@ -200,7 +200,9 @@ def test_image_refs_resolve_above_the_language_dir(tmp_path, monkeypatch):
         p.read_text(encoding="utf-8") for p in sorted((tmp_path / "raw").glob("*.html"))
     )
 
-    assert "https://manual.yamaha.com/av/20/rxa8a/Images/png/27021602658914443__Web.png" in merged
+    assert (
+        "https://manual.vendor.example/av/20/avr8a/Images/png/10000000000000001__Web.png" in merged
+    )
 
 
 def test_missing_treedata_raises_invalid_input(tmp_path, monkeypatch):
@@ -219,9 +221,9 @@ def test_missing_treedata_raises_invalid_input(tmp_path, monkeypatch):
 def test_slug_combines_host_label_with_project_title(tmp_path, fetched):
     """`slug_from_host` yields one label for every model a publisher ships — the
     manual names itself in the same file that lists its topics."""
-    acq = _st4.acquire(f"{_BASE}/index.html", tmp_path, slug="yamaha", title=None)
+    acq = _st4.acquire(f"{_BASE}/index.html", tmp_path, slug="vendor", title=None)
 
-    assert acq.slug == "yamaha-rx-a8a"
+    assert acq.slug == "vendor-avr-8a"
 
 
 def test_publication_base_accepts_file_or_directory():
@@ -305,9 +307,8 @@ def test_a_leaf_without_the_content_container_counts_as_lost(tmp_path, monkeypat
 
 
 def test_an_href_holding_a_path_separator_is_flattened_into_the_filename(tmp_path, monkeypatch):
-    """The href is remote-controlled (treedata.json); one holding "/" named a
-    directory that was never created, so the whole acquire died with
-    FileNotFoundError."""
+    """The href is remote-controlled (treedata.json); a "/" in it must not name a
+    missing directory and abort the whole acquire."""
     tree = 'tocData = [{"text":"Topic","id":"1","href":"topics/foo.html","reused":false}];\n'
     pages = {
         f"{_BASE}/js/treedata.json": tree,

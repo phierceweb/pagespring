@@ -1,11 +1,8 @@
 """http — the shim's own contracts (no network).
 
 Retries, backoff, redirect walking, charset resolution, and validator handling
-belong to ``pf_core.fetch`` and are pinned by its test_fetch.py. Pinned here is
-what pagespring adds: the PAGESPRING_UA identity, the ``timeout=`` keyword it
-translates, the raw exceptions its patterns branch on, TLS verification no env
-var can switch off, and the polite delay. Requests are intercepted at the fetch
-core's ``_open`` seam.
+belong to ``pf_core.fetch`` and are pinned by its tests; pinned here is only what
+pagespring adds. Requests are intercepted at the fetch core's ``_open`` seam.
 """
 
 from __future__ import annotations
@@ -52,6 +49,8 @@ def _message(items: dict[str, str] | None = None) -> Message:
 
 class _Resp:
     """Stand-in for what the fetch core's ``_open`` returns."""
+
+    status = 200
 
     def __init__(self, body: bytes = b"ok", headers: dict[str, str] | None = None) -> None:
         self._body = body
@@ -176,6 +175,10 @@ class TestDelegation:
         assert sent["if-none-match"] == _ETAG
         assert sent["if-modified-since"] == _LAST_MODIFIED
 
+    def test_not_modified_true_on_200_with_the_strong_etag_it_sent(self, seam):
+        seam.queue.append(_Resp(headers={"ETag": _ETAG}))
+        assert http.not_modified(URL, etag=_ETAG, last_modified=None) is True
+
     def test_not_modified_false_without_validators_and_no_request(self, seam):
         assert http.not_modified(URL, etag=None, last_modified=None) is False
         assert seam.calls == []  # nothing to probe with — no network
@@ -190,8 +193,7 @@ class TestSsrfGuard:
         assert seam.calls == []
 
     def test_allow_private_opts_the_process_out(self, seam, monkeypatch):
-        """The guard is defeasible, unlike TLS verification. Pinned so the module
-        docstring can't drift back into calling it unconditional."""
+        """The guard is defeasible, unlike TLS verification."""
         monkeypatch.setenv("URL_FETCH_ALLOW_PRIVATE", "1")
         http.fetch_text("http://127.0.0.1:9/manual")
         assert len(seam.calls) == 1, "the opt-out did not let the request through"
@@ -222,8 +224,8 @@ class TestTlsVerification:
 
     @pytest.mark.parametrize("env_var", _TLS_OFF_ENV_VARS)
     def test_off_switch_cannot_disable_certificate_verification(self, seam, env_var, monkeypatch):
-        """The fetch core's TLS switch is process-wide, so one set for another
-        consumer used to turn verification off for every pagespring fetch."""
+        """The fetch core's TLS switch is process-wide; one set for another consumer
+        must not turn verification off for pagespring's fetches."""
         monkeypatch.setenv(env_var, "0")
         http.fetch_text(URL)
         http.fetch_bytes(URL)

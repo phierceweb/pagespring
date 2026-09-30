@@ -3,10 +3,9 @@
 Uses the Help Center REST API (no scraping): ``/api/v2/help_center/<locale>/
 articles.json`` is paginated and returns each article's title + HTML body.
 acquire fetches all articles; normalize merges them into one HTML doc. Image
-URLs in the bodies are absolute (Zendesk CDN) — pagespeak, or the optional
-``--download-images``, handles them.
+URLs stay absolute (``--download-images`` localizes them).
 
-Point it at the help center, e.g. ``https://support.gingerlabs.com/hc/en-us``,
+Point it at the help center, e.g. ``https://support.<vendor>.com/hc/en-us``,
 or at one ``/sections/<id>-...`` / ``/categories/<id>-...`` to pull just that
 slice — the right form when one center covers several products.
 """

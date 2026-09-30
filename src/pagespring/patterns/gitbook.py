@@ -7,7 +7,7 @@ fetches both per page and resolves the images (see _gitbook); normalize
 concatenates.
 
 Point it at a GitBook-hosted base URL, e.g. ``https://acme.gitbook.io/handbook``.
-Custom-domain GitBook sites (e.g. ``https://docs.tableplus.com``) don't match
+Custom-domain GitBook sites (e.g. ``https://docs.<vendor>.com``) don't match
 here directly — ``docs_probe`` sniffs their ``llms.txt`` and delegates back to
 this pattern's ``acquire``.
 """
@@ -41,12 +41,7 @@ def _slug(url: str) -> str:
 class GitBookPattern:
     name = "gitbook"
 
-    # GitBook .md is already well-leveled; captions on by default; pagespeak
-    # downloads the absolute image URLs and splits.
-
     def match(self, url: str) -> bool:
-        # GitBook-hosted only. Custom domains (docs.<vendor>) are recognized by
-        # docs_probe's llms.txt sniff and delegated back to this pattern's acquire.
         return urlparse(url).netloc.lower().endswith(".gitbook.io")
 
     def acquire(
@@ -57,13 +52,14 @@ class GitBookPattern:
         slug: str | None = None,
         title: str | None = None,
         rendered: bool = True,
+        section: str | None = None,
     ) -> AcquireResult:
         base = url.rstrip("/")
         p = urlparse(base)
         origin = f"{p.scheme}://{p.netloc}"
 
         _f, llms = http.fetch_text(f"{base}/llms.txt")
-        pages = _gitbook.discover_pages(llms)
+        pages = _gitbook.discover_pages(llms, section)
         truncated = len(pages) > _MAX_PAGES
         if truncated:
             log.warning("gitbook.truncated", found=len(pages), cap=_MAX_PAGES)
@@ -101,7 +97,7 @@ class GitBookPattern:
         # docs_probe already identified the site and derived these; _slug only knows
         # *.gitbook.io, so a custom domain folds to its generic host label.
         slug = slug or _slug(url)
-        log.info("gitbook.acquire", base=base, pages=saved, slug=slug, lost=lost)
+        log.info("gitbook.acquire", base=base, section=section, pages=saved, slug=slug, lost=lost)
         return AcquireResult(
             raw_dir=raw_dir,
             kind="markdown",

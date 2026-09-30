@@ -3,13 +3,13 @@ source and re-stage what changed.
 
 ``refresh_slug`` re-ingests one slug from its manifest's ``source_url`` with
 ``--if-changed`` semantics (byte-identical → untouched); ``refresh_all`` sweeps
-every slug, isolating per-slug failures so one dead source can't stop the
-sweep. The per-slug outcome (changed/unchanged/failed/skipped) is the
-hand-off signal for downstream re-conversion (pagespeak) and re-indexing.
+every slug (or those of named patterns) and ``refresh_slugs`` a named set, each
+isolating per-slug failures so one dead source can't stop the sweep.
 """
 
 from __future__ import annotations
 
+from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -42,14 +42,13 @@ def refresh_slug(slug: str) -> RefreshOutcome:
     m = manifest.read_manifest(incoming_dir)
     if m is None:
         return {"slug": slug, "status": "skipped", "detail": "no manifest — ingest it first"}
-    if not isinstance(m, dict) or not m.get("source_url") or not m.get("slug"):
+    if not _refreshable(m):
         return {"slug": slug, "status": "skipped", "detail": "unreadable manifest — re-ingest"}
 
-    # Fast path: only single-fetch patterns may trust stored validators — a
-    # crawl's entry-page 304 proves nothing about the rest of the site. A 304
-    # vouches for the source, never for the staged copy.
+    # Validators vouch for one response of source_url, never a crawl or the staged copy;
+    # an acquire that fetched the PDF from another URL records none.
     pattern = pattern_by_name(m.get("pattern") or "")
-    if pattern is not None and getattr(pattern, "single_fetch", False):
+    if m.get("kind") == "pdf" or getattr(pattern, "single_fetch", False):
         etag, last_modified = m.get("etag"), m.get("last_modified")
         intact = (etag or last_modified) and deliverable_intact(incoming_dir, m)
         if intact and http.not_modified(m["source_url"], etag=etag, last_modified=last_modified):
@@ -79,11 +78,54 @@ def refresh_slug(slug: str) -> RefreshOutcome:
     return {"slug": slug, "status": "unchanged", "detail": ""}
 
 
-def refresh_all() -> list[RefreshOutcome]:
-    """Sweep every ``incoming/<slug>/`` in sorted order."""
+def refresh_all(*, patterns: Collection[str] | None = None) -> list[RefreshOutcome]:
+    """Sweep every ``incoming/<slug>/`` in sorted order, or only the slugs whose
+    manifest records one of ``patterns``.
+
+    Raises:
+        InvalidInputError: a name in ``patterns`` is not a registered pattern.
+    """
+    if patterns is not None:
+        unknown = sorted(p for p in patterns if pattern_by_name(p) is None)
+        if unknown:
+            raise InvalidInputError(
+                f"no registered pattern named {', '.join(unknown)} — `pagespring patterns` lists them"
+            )
     incoming = Path(cfg.INCOMING_DIR)
     slugs = sorted(p.name for p in incoming.glob("*") if p.is_dir()) if incoming.is_dir() else []
+    if patterns is not None:
+        slugs = [s for s in slugs if _recorded_pattern(s) in patterns]
     return [_refresh_isolated(s) for s in slugs]
+
+
+def refresh_slugs(slugs: Sequence[str]) -> list[RefreshOutcome]:
+    """``refresh_slug`` for each named slug, once per folded slug, isolated like the sweep.
+
+    Raises:
+        InvalidInputError: a name folds to no slug, or names no manifest a refresh
+            can replay. Every name is checked before the first fetch.
+    """
+    folded = list(dict.fromkeys(slug_dir(s).name for s in slugs))
+    missing = [s for s in folded if not _refreshable(manifest.read_manifest(slug_dir(s)))]
+    if missing:
+        raise InvalidInputError(
+            f"no readable manifest for {', '.join(missing)} — ingest it first; nothing was refreshed"
+        )
+    return [_refresh_isolated(s) for s in folded]
+
+
+def _refreshable(m: object) -> bool:
+    return isinstance(m, dict) and bool(m.get("source_url")) and bool(m.get("slug"))
+
+
+def _recorded_pattern(slug: str) -> str | None:
+    """The pattern the manifest ``refresh_slug`` would read records, if a string."""
+    try:
+        m = manifest.read_manifest(slug_dir(slug))
+    except InvalidInputError:
+        return None
+    pattern = m.get("pattern") if m is not None else None
+    return pattern if isinstance(pattern, str) else None
 
 
 def _refresh_isolated(slug: str) -> RefreshOutcome:

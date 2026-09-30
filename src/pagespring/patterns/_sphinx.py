@@ -1,12 +1,12 @@
-"""Sphinx acquisition for docs_probe — same-prefix breadth-first crawl.
+"""Sphinx acquisition — same-prefix breadth-first crawl.
 
-Sphinx exposes no machine index that works generically across themes
-(RTD-hosted projects route to the readthedocs pattern and its PDF build
-instead), so crawl: breadth-first same-host links under the start URL's directory
-prefix, extract the ``div[role=main]`` content root (fallbacks: ``div.body``,
-``main``), strip headerlink anchors, absolutize refs, and stage pages in the
-toctree order themes render into each page. Capped; a capped crawl warns — a
-silently truncated crawl reads as a complete one.
+Sphinx exposes no machine index that works generically across themes (the
+readthedocs pattern takes an RTD project's PDF build first), so crawl:
+breadth-first same-host links under the start URL's directory prefix, extract
+the ``div[role=main]`` content root (fallbacks: ``div.body``, ``main``), strip
+headerlink anchors, absolutize refs, and stage pages in the toctree order themes
+render into each page. Capped; a capped crawl warns — a silently truncated crawl
+reads as a complete one.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from __future__ import annotations
 import re
 import time
 from collections import deque
-from heapq import heapify, heappop, heappush
 from pathlib import Path
 from urllib.parse import urldefrag, urljoin, urlparse
 
@@ -33,6 +32,7 @@ from pagespring.patterns._site import (
     generator_meta,
     strip_scripts,
 )
+from pagespring.patterns._sphinx_order import Siblings, reading_order
 
 log = get_logger(__name__)
 
@@ -47,8 +47,6 @@ _MAX_PAGES = 1000
 _SKIP_DIRS = {"_static", "_sources", "_modules", "_images", "_downloads"}
 _SKIP_PAGES = {"genindex", "genindex-all", "search", "py-modindex"}
 _TOC_ITEM = re.compile(r"^toctree-l\d+$")
-# One toctree sibling list: (the parent's URL, or None when unknown; member URLs).
-_Siblings = tuple[str | None, tuple[str, ...]]
 
 
 def is_sphinx(html: str) -> bool:
@@ -108,7 +106,7 @@ def _entry_url(li: Tag, page_url: str) -> str | None:
     return urldefrag(urljoin(page_url, str(a["href"]))).url if isinstance(a, Tag) else None
 
 
-def _toc_siblings(soup: BeautifulSoup, page_url: str) -> list[_Siblings]:
+def _toc_siblings(soup: BeautifulSoup, page_url: str) -> list[Siblings]:
     """The page's toctree sibling lists. A nested list's parent is its enclosing
     entry, and a content-root toctree's is the page; a sidebar's top level is None
     — themes root it at the site or at the current section."""
@@ -129,94 +127,6 @@ def _toc_siblings(soup: BeautifulSoup, page_url: str) -> list[_Siblings]:
     return [(parent, tuple(urls)) for parent, urls in lists.values()]
 
 
-def _merge(nodes: list[str], pairs: set[tuple[str, str]], rank: dict[str, int]) -> list[str]:
-    """``nodes`` honouring each (before, after) pair, lowest rank first among the
-    unconstrained; a cycle breaks at its lowest-ranked node."""
-    succ: dict[str, list[str]] = {n: [] for n in nodes}
-    blocked = dict.fromkeys(nodes, 0)
-    for a, b in pairs:
-        succ[a].append(b)
-        blocked[b] += 1
-    free = [(rank[n], n) for n in nodes if not blocked[n]]
-    heapify(free)
-    out: dict[str, None] = {}
-    while len(out) < len(nodes):
-        if not free:
-            n = min((x for x in nodes if x not in out), key=rank.__getitem__)
-            free.append((rank[n], n))
-        _r, n = heappop(free)
-        if n in out:
-            continue
-        out[n] = None
-        for m in succ[n]:
-            blocked[m] -= 1
-            if not blocked[m]:
-                heappush(free, (rank[m], m))
-    return list(out)
-
-
-def _reading_order(
-    ranked: list[str],
-    alias: dict[str, str],
-    found_on: dict[str, str],
-    tocs: dict[_Siblings, str | None],
-) -> list[str]:
-    """Staged pages (``ranked`` in crawl order) in toctree order.
-
-    ``alias`` maps every fetched URL to the staged page holding its content, and
-    ``tocs`` each distinct sibling list to the first page rendering it that is
-    not one of its members. A page
-    nests under its toctree parent, else under the nearest staged page that
-    linked to it; siblings follow the toctrees, then crawl order."""
-    rank = {u: i for i, u in enumerate(ranked)}
-    parent: dict[str, str] = {}  # first claim wins: toctree, then sidebar top level, then link
-
-    def claim(kids: list[str], par: str | None) -> None:
-        for kid in kids:
-            if par is not None and kid != par and rank[kid]:
-                parent.setdefault(kid, par)
-
-    sibling_lists: list[list[str]] = []
-    unrooted: list[tuple[str | None, list[str]]] = []
-    for (hint, members), page in tocs.items():
-        kids = list(dict.fromkeys(alias[m] for m in members if m in alias))
-        sibling_lists.append(kids)
-        if hint is None:
-            unrooted.append((alias.get(page) if page else None, kids))
-        else:
-            claim(kids, alias.get(hint))
-    for page_url, kids in unrooted:
-        claim(kids, next((parent[k] for k in kids if k in parent), page_url))
-    for url, finder in found_on.items():
-        while finder not in alias and finder in found_on:
-            finder = found_on[finder]
-        if url in alias:
-            claim([alias[url]], alias.get(finder))
-
-    children: dict[str, list[str]] = {}
-    for kid in ranked:
-        if kid in parent:
-            children.setdefault(parent[kid], []).append(kid)
-    pairs: dict[str, set[tuple[str, str]]] = {}
-    for kids in sibling_lists:
-        prev: dict[str, str] = {}
-        for kid in (k for k in kids if k in parent):
-            if parent[kid] in prev:
-                pairs.setdefault(parent[kid], set()).add((prev[parent[kid]], kid))
-            prev[parent[kid]] = kid
-
-    order: dict[str, None] = {}
-    for start in ranked:
-        stack = [start]
-        while stack:
-            node = stack.pop()
-            if node not in order:
-                order[node] = None
-                kids = _merge(children.get(node, []), pairs.get(node, set()), rank)
-                stack.extend(reversed(kids))
-    return list(order)
-
-
 def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> AcquireResult:
     last = urlparse(base_url).path.rsplit("/", 1)[-1]
     # Only an .html-suffixed start URL (…/index.html) is a file to strip —
@@ -235,11 +145,11 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     pages: dict[str, str] = {}  # staged URL -> raw file body, in crawl order
     by_digest: dict[str, str] = {}
     alias: dict[str, str] = {}
-    tocs: dict[_Siblings, str | None] = {}
+    tocs: dict[Siblings, str | None] = {}
     lost = 0
     watchdog = ProgressWatchdog(stall_after_s=cfg.CRAWL_STALL_AFTER_S, now=time.monotonic)
     # Breadth-first, so a cap keeps the manual's upper levels rather than one
-    # cross-reference chain; _reading_order sets the staged order.
+    # cross-reference chain; reading_order sets the staged order.
     while queue and len(pages) < _MAX_PAGES:
         if watchdog.stalled():
             idle = round(watchdog.idle_s())
@@ -288,7 +198,7 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     if queue:
         log.warning("sphinx.capped", saved=len(pages), cap=_MAX_PAGES, queued=len(queue))
     truncated = bool(queue)
-    for i, url in enumerate(_reading_order(list(pages), alias, found_on, tocs)):
+    for i, url in enumerate(reading_order(list(pages), alias, found_on, tocs)):
         stem = urlparse(url).path[len(prefix) :].strip("/").replace("/", "-") or "index"
         (raw_dir / f"{i:04d}-{stem}.html").write_text(pages[url], encoding="utf-8")
     log.info("sphinx.acquire", base=base, pages=len(pages), slug=slug)

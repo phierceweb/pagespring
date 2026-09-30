@@ -22,7 +22,7 @@ def test_match_routes_spec_urls_and_paths():
 
 
 def test_classify_routes_json_before_gitbook():
-    # A spec on a docs.* host must reach api_spec, not the broad gitbook matcher.
+    # A spec on a docs.* host must reach api_spec, not the docs_probe catch-all.
     assert classify("https://docs.vendor.com/openapi.json").name == "api_spec"
     assert classify("https://api.x.com/swagger.yaml").name == "api_spec"
 
@@ -340,10 +340,10 @@ def test_openapi_response_code_named_ref_no_redundancy():
 def test_title_slug_uses_postman_info_name():
     # Postman collections name themselves via info.name, not info.title.
     title, slug = mod._title_slug(
-        {"info": {"name": "Auth0 Management API v2"}}, "postman", "https://x/c.json"
+        {"info": {"name": "Acme Management API v2"}}, "postman", "https://x/c.json"
     )
-    assert title == "Auth0 Management API v2"
-    assert slug == "auth0-management-api-v2"
+    assert title == "Acme Management API v2"
+    assert slug == "acme-management-api-v2"
 
 
 def test_load_data_rejects_non_object():

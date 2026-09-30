@@ -5,7 +5,7 @@ from pf_core.exceptions import ClientError, InvalidInputError
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns import _docusaurus, _hugo, _mkdocs, _sphinx, docs_probe, gitbook
+from pagespring.patterns import _detect, _docusaurus, _hugo, _mkdocs, _sphinx, docs_probe, gitbook
 from pagespring.patterns.docs_probe import DocsProbePattern
 
 _MKDOCS_HOME = (
@@ -85,8 +85,8 @@ def test_probe_unrecognized_raises_invalid_input(tmp_path, monkeypatch):
 
 
 def test_generic_static_dir_does_not_route_to_sphinx(tmp_path, monkeypatch):
-    """A bare "_static/" anywhere in the body used to claim the site for Sphinx,
-    whose extractor ends at <main> — so the mis-route succeeded silently."""
+    """A bare "_static/" in the body does not claim the site for Sphinx, whose
+    extractor ends at <main> — a mis-route would succeed silently."""
 
     def fake_fetch(url, **kwargs):
         if url.endswith(("search/search_index.json", "llms.txt")):
@@ -149,10 +149,9 @@ def test_normalize_html_escapes_title(tmp_path):
 
 
 def test_a_url_that_serves_a_pdf_is_handed_to_pdf_url(tmp_path, monkeypatch):
-    """Celemony serves the Melodyne manual as application/pdf from an
-    extensionless path (/M5/pdf/melodyneStudio5/en), so pdf_url.match declines
-    it and this catch-all receives it. docs_probe is the *content* prober — a
-    PDF body must route, not raise 'unrecognized docs site'."""
+    """A PDF served from an extensionless path is declined by pdf_url.match, so this
+    catch-all receives it. docs_probe is the *content* prober — a PDF body must
+    route, not raise 'unrecognized docs site'."""
     monkeypatch.setattr(http, "fetch_text", lambda u, **k: (u, "%PDF-1.7 body"))
     monkeypatch.setattr(
         http,
@@ -161,7 +160,7 @@ def test_a_url_that_serves_a_pdf_is_handed_to_pdf_url(tmp_path, monkeypatch):
     )
 
     probe = DocsProbePattern()
-    acq = probe.acquire("https://helpcenter.celemony.com/M5/pdf/melodyneStudio5/en", tmp_path)
+    acq = probe.acquire("https://helpcenter.vendor.example/v5/pdf/widgetStudio5/en", tmp_path)
 
     assert acq.kind == "pdf"
     assert next(acq.raw_dir.glob("*.pdf")).exists()
@@ -174,13 +173,9 @@ def test_a_url_that_serves_a_pdf_is_handed_to_pdf_url(tmp_path, monkeypatch):
 
 
 def test_soft_404_search_index_is_not_mistaken_for_mkdocs(tmp_path, monkeypatch):
-    """The MkDocs probe must validate the index, not just that the URL fetched.
-
-    synchroarts.com returns 200 with HTML for arbitrary paths, so
-    `search/search_index.json` "existed" and docs_probe reported
-    `generator=mkdocs via=search_index` — then _mkdocs.acquire rejected it. A
-    site with a catch-all 200 gets misrouted and the real error is masked.
-    """
+    """The MkDocs probe must validate the index, not just that the URL fetched: a
+    site that answers every path with a 200 HTML page would route to mkdocs, whose
+    acquire then rejects it and masks the real error."""
     home = "<html><head><title>Manual</title></head><body><article>x</article></body></html>"
 
     def fetch(url, **kwargs):
@@ -193,7 +188,7 @@ def test_soft_404_search_index_is_not_mistaken_for_mkdocs(tmp_path, monkeypatch)
     monkeypatch.setattr(http, "fetch_text", fetch)
 
     with pytest.raises(InvalidInputError, match="unrecognized docs site"):
-        DocsProbePattern().acquire("https://www.synchroarts.com/manuals/x/welcome.html", tmp_path)
+        DocsProbePattern().acquire("https://www.vendor.example/manuals/x/welcome.html", tmp_path)
 
 
 def test_clickhelp_is_detected_without_a_generator_meta(tmp_path, monkeypatch):
@@ -243,7 +238,7 @@ def test_llms_txt_delegation_keeps_the_probed_slug_and_title(tmp_path, monkeypat
 
     monkeypatch.setattr(docs_probe.http, "fetch_text", fake_fetch)
     monkeypatch.setattr(
-        docs_probe, "_fetch_or_none", lambda url: llms if url.endswith("llms.txt") else None
+        _detect, "_fetch_or_none", lambda url: llms if url.endswith("llms.txt") else None
     )
     monkeypatch.setattr(gitbook.http, "fetch_text", fake_fetch)
     monkeypatch.setattr(gitbook.http, "polite_sleep", lambda *a, **k: None)
@@ -255,8 +250,8 @@ def test_llms_txt_delegation_keeps_the_probed_slug_and_title(tmp_path, monkeypat
 
 
 def _spy_gitbook_acquire(called):
-    def spy(self, url, workdir, *, slug=None, title=None, rendered=True):
-        called.update(url=url, slug=slug, title=title, rendered=rendered)
+    def spy(self, url, workdir, *, slug=None, title=None, rendered=True, section=None):
+        called.update(url=url, slug=slug, title=title, rendered=rendered, section=section)
         raw = workdir / "raw"
         raw.mkdir(parents=True, exist_ok=True)
         return AcquireResult(raw_dir=raw, kind="markdown", slug=slug, pages=2, title=title)
@@ -276,7 +271,7 @@ def test_llms_txt_rung_uses_the_index_nearest_the_seed(tmp_path, monkeypatch):
     }
     monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
-    monkeypatch.setattr(docs_probe, "_fetch_or_none", indexes.get)
+    monkeypatch.setattr(_detect, "_fetch_or_none", indexes.get)
     called = {}
     monkeypatch.setattr(gitbook.GitBookPattern, "acquire", _spy_gitbook_acquire(called))
 
@@ -287,7 +282,104 @@ def test_llms_txt_rung_uses_the_index_nearest_the_seed(tmp_path, monkeypatch):
         "slug": "acme",
         "title": "Acme Docs",
         "rendered": True,
+        "section": None,
     }
+
+
+_ROOT_INDEX = (
+    "- [Testing](https://acme.example/testing.md)\n"
+    "- [Wallets](https://acme.example/testing/wallets.md)\n"
+    "- [Use cases](https://acme.example/testing-use-cases.md)\n"
+    "- [Intro](https://acme.example/docs/introduction.md)\n"
+    "- [Setup](https://acme.example/docs/setup.md)\n"
+    "- [Guide](https://acme.example/guide/a.md)\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("seed", "indexes", "section"),
+    [
+        (
+            "https://acme.example/testing",
+            {"/llms.txt": _ROOT_INDEX},
+            "https://acme.example/testing",
+        ),
+        (
+            "https://acme.example/guide/?utm_source=x#top",
+            {"/llms.txt": _ROOT_INDEX},
+            "https://acme.example/guide",
+        ),
+        (
+            "https://acme.example/guide/index.html",
+            {"/llms.txt": _ROOT_INDEX},
+            "https://acme.example/guide",
+        ),
+        (
+            "https://www.acme.example/testing",
+            {"/llms.txt": _ROOT_INDEX},
+            "https://www.acme.example/testing",
+        ),
+        ("https://acme.example/docs/introduction", {"/llms.txt": _ROOT_INDEX}, None),
+        ("https://acme.example/docs/introduction", {"/docs/llms.txt": _ROOT_INDEX}, None),
+        ("https://acme.example/", {"/llms.txt": _ROOT_INDEX}, None),
+        ("https://acme.example/docs/", {"/docs/llms.txt": _ROOT_INDEX}, None),
+    ],
+    ids=[
+        "section",
+        "section-with-query",
+        "section-named-by-a-file",
+        "section-on-the-www-host",
+        "page",
+        "page-under-the-index",
+        "site-root",
+        "the-index-directory",
+    ],
+)
+def test_llms_txt_rung_scopes_to_the_section_the_seed_names(monkeypatch, seed, indexes, section):
+    """A seed below the index names a section when the index lists pages beneath it;
+    a seed naming one page is an entry point, so the whole index stays in scope."""
+    home = "<html><head><title>Acme</title></head><body>x</body></html>"
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
+    monkeypatch.setattr(
+        _detect,
+        "_fetch_or_none",
+        lambda url: indexes.get(url.split(".example", 1)[1]),
+    )
+
+    found = _detect.detect(seed)
+
+    assert (found.route, found.section) == ("llms_txt", section)
+
+
+def test_a_section_seed_stages_only_that_section(tmp_path, monkeypatch):
+    home = "<html><head><title>Testing | Acme</title></head><body>x</body></html>"
+    fetched: list[str] = []
+
+    def fetch(url, **kw):
+        fetched.append(url)
+        if url == "https://acme.example/llms.txt":
+            return url, _ROOT_INDEX
+        if url.endswith(".md"):
+            return url, f"# {url}\n\nBody.\n"
+        return url, home
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(
+        _detect,
+        "_fetch_or_none",
+        lambda url: _ROOT_INDEX if url == "https://acme.example/llms.txt" else None,
+    )
+    probe = DocsProbePattern()
+
+    acq = probe.acquire("https://acme.example/testing", tmp_path)
+    text = probe.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert acq.pages == 2
+    assert [u for u in fetched if u.endswith(".md")] == [
+        "https://acme.example/testing.md",
+        "https://acme.example/testing/wallets.md",
+    ]
+    assert "use-cases" not in text and "introduction" not in text
 
 
 @pytest.mark.parametrize(
@@ -304,7 +396,7 @@ def test_llms_txt_rung_fetches_rendered_pages_only_for_gitbook(
     index = "- [Intro](https://docs.example.com/intro.md)\n"
     monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
     monkeypatch.setattr(
-        docs_probe, "_fetch_or_none", lambda url: index if url.endswith("/llms.txt") else None
+        _detect, "_fetch_or_none", lambda url: index if url.endswith("/llms.txt") else None
     )
     called = {}
     monkeypatch.setattr(gitbook.GitBookPattern, "acquire", _spy_gitbook_acquire(called))
@@ -474,8 +566,8 @@ def test_platforms_without_a_pattern_of_their_own_route_through_existing_rungs(
     tmp_path, monkeypatch, home, files, dispatch
 ):
     """These platforms need no pattern named for them: a generator tag, an llms.txt index,
-    or an API reference UI already routes them. Measured on live sites; before proposing a
-    pattern for a platform, check routing like this rather than searching src/ for its name."""
+    or an API reference UI already routes them. Before proposing a pattern for a platform,
+    check its routing like this rather than searching src/ for its name."""
     page = f"<html><head><title>Vendor Docs</title></head><body>{home}</body></html>"
 
     def fetch(url, **kwargs):
@@ -599,7 +691,7 @@ def test_llms_txt_rung_skips_an_html_page_served_at_a_candidate_path(tmp_path, m
     }
     monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
-    monkeypatch.setattr(docs_probe, "_fetch_or_none", indexes.get)
+    monkeypatch.setattr(_detect, "_fetch_or_none", indexes.get)
     called = {}
     monkeypatch.setattr(gitbook.GitBookPattern, "acquire", _spy_gitbook_acquire(called))
 
@@ -629,3 +721,369 @@ def test_an_oversize_body_that_is_not_a_pdf_reports_the_size_limit(tmp_path, mon
 
     with pytest.raises(ClientError, match="max_bytes"):
         DocsProbePattern().acquire("https://vendor.example/manual/all-in-one", tmp_path)
+
+
+def _meta_home(generator):
+    return (
+        f'<html><head><meta name="generator" content="{generator}"><title>T</title></head></html>'
+    )
+
+
+_OVERSIZE = ClientError("response exceeded max_bytes", context={"max_bytes": 1})
+
+
+@pytest.mark.parametrize(
+    ("home", "tell", "target"),
+    [
+        (_OVERSIZE, None, (docs_probe.PdfUrlPattern, "acquire")),
+        ("%PDF-1.7 binary", None, (docs_probe.PdfUrlPattern, "acquire")),
+        (_PLAIN_HOME, "_clickhelp.is_clickhelp", ("_clickhelp", "acquire")),
+        (_PLAIN_HOME, "_paligo.is_paligo", ("_paligo", "acquire")),
+        (_PLAIN_HOME, "_st4.is_st4", ("_st4", "acquire")),
+        (_MKDOCS_HOME, None, ("_mkdocs", "acquire")),
+        (_DOCUSAURUS_HOME, None, ("_docusaurus", "acquire")),
+        (_meta_home("Hugo 0.140.0"), None, ("_hugo", "acquire")),
+        (_meta_home("Asciidoctor 2.0.23"), None, ("_asciidoctor", "acquire")),
+        (_PLAIN_HOME, "_wordpress.is_wordpress", ("_wordpress", "acquire")),
+        (_PLAIN_HOME, "_mediawiki.is_mediawiki", ("_mediawiki", "acquire")),
+        (_PLAIN_HOME, "_mdbook.is_mdbook", ("_mdbook", "acquire")),
+        (_PLAIN_HOME, "_writerside.is_writerside", ("_writerside", "acquire")),
+        (_PLAIN_HOME, "_hugo.is_docsy", ("_hugo", "acquire")),
+        (_PLAIN_HOME, "_vitepress.is_vitepress", ("_vitepress", "acquire")),
+        (_PLAIN_HOME, "_docsify.is_docsify", ("_docsify", "acquire")),
+        (_meta_home("Antora 3.1.9"), None, ("_antora", "acquire")),
+        (_meta_home("Starlight v0.42.3"), None, ("_starlight", "acquire")),
+        (_SPHINX_HOME, None, ("_sphinx", "acquire")),
+    ],
+)
+def test_every_fetching_hand_off_waits_the_polite_delay(tmp_path, monkeypatch, home, tell, target):
+    """The home page is the probe's last request; the strategy's first one follows it."""
+    events = []
+
+    def fetch(url, **kwargs):
+        events.append("fetch")
+        if isinstance(home, Exception):
+            raise home
+        return url, home
+
+    def hand_off(*args, **kwargs):
+        events.append("hand-off")
+        raw = tmp_path / "raw"
+        raw.mkdir(exist_ok=True)
+        return AcquireResult(raw_dir=raw, kind="html", slug="s", pages=2)
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: events.append("sleep"))
+    if tell is not None:
+        module, name = tell.split(".")
+        monkeypatch.setattr(getattr(docs_probe, module), name, lambda html: True)
+    owner, attr = target
+    monkeypatch.setattr(
+        getattr(docs_probe, owner) if isinstance(owner, str) else owner, attr, hand_off
+    )
+
+    DocsProbePattern().acquire("https://docs.vendor.example/manual/", tmp_path)
+
+    assert events == ["fetch", "sleep", "hand-off"]
+
+
+@pytest.mark.parametrize(
+    ("home", "route", "via"),
+    [
+        ("%PDF-1.7 binary", "pdf", "magic_bytes"),
+        (
+            '{"openapi": "3.0.0", "info": {"title": "A", "version": "1"}, "paths": {"/a": {}}}',
+            "openapi",
+            "content",
+        ),
+        (_MKDOCS_HOME, "mkdocs", "meta"),
+        (_DOCUSAURUS_HOME, "docusaurus", "meta"),
+        (_meta_home("Hugo 0.140.0"), "hugo", "meta"),
+        (_SPHINX_HOME, "sphinx", "tells"),
+    ],
+)
+def test_detect_names_the_route_without_handing_off(monkeypatch, home, route, via):
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
+    for mod in (_docusaurus, _hugo, _mkdocs, _sphinx):
+        monkeypatch.setattr(mod, "acquire", lambda *a, **k: pytest.fail("detect must not acquire"))
+
+    found = _detect.detect("https://docs.vendor.example/manual/")
+
+    assert (found.route, found.via) == (route, via)
+
+
+def test_detect_reads_every_generator_tag(monkeypatch):
+    home = (
+        '<html><head><meta name="generator" content="Astro v7.2.10">'
+        '<meta name="generator" content="Starlight v0.42.0"><title>S</title></head></html>'
+    )
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
+
+    found = _detect.detect("https://docs.vendor.example/guide")
+
+    assert (found.route, found.via) == ("starlight", "meta")
+    assert found.generator == "astro v7.2.10, starlight v0.42.0"
+
+
+def test_detect_names_the_spec_ui_without_fetching_its_spec(monkeypatch):
+    home = '<html><body><redoc spec-url="openapi.json"></redoc></body></html>'
+    fetched = []
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (fetched.append(url), (url, home))[1])
+
+    found = _detect.detect("https://api.vendor.example/docs/")
+
+    assert (found.route, found.via) == ("redoc", "page")
+    assert fetched == ["https://api.vendor.example/docs"]
+
+
+def test_the_search_index_route_paces_the_mkdocs_hand_off(tmp_path, monkeypatch):
+    index = '{"docs": [{"location": "", "title": "Home", "text": "hi"}]}'
+    events = []
+
+    def fetch(url, **kwargs):
+        events.append("fetch")
+        return url, index if url.endswith("search_index.json") else _PLAIN_HOME
+
+    def hand_off(*args, **kwargs):
+        events.append("hand-off")
+        raw = tmp_path / "raw"
+        raw.mkdir(exist_ok=True)
+        return AcquireResult(raw_dir=raw, kind="markdown", slug="s", pages=2)
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: events.append("sleep"))
+    monkeypatch.setattr(_mkdocs, "acquire", hand_off)
+
+    DocsProbePattern().acquire("https://docs.vendor.example/manual/", tmp_path)
+
+    assert events == ["fetch", "sleep", "fetch", "sleep", "hand-off"]
+
+
+def test_an_unrecognized_site_names_the_generator_tags_it_carries(monkeypatch):
+    home = '<html><head><meta name="generator" content="Astro v7.2.10"></head></html>'
+
+    def fetch(url, **kwargs):
+        if url.endswith(("llms.txt", "search_index.json")):
+            raise OSError("404")
+        return url, home
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    with pytest.raises(InvalidInputError, match="generator tags: astro v7.2.10"):
+        _detect.detect("https://docs.vendor.example/guide")
+
+
+def test_detect_reports_generator_tags_on_every_route(monkeypatch):
+    home = '<html><head><meta name="generator" content="Publisher 9"></head></html>'
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
+    monkeypatch.setattr(docs_probe._st4, "is_st4", lambda html: True)
+
+    found = _detect.detect("https://manual.vendor.example/en")
+
+    assert (found.route, found.generator) == ("st4", "publisher 9")
+
+
+@pytest.mark.parametrize(("generator", "via"), [("WordPress 6.6", "meta"), (None, "rest_link")])
+def test_detect_names_the_wordpress_tell_that_matched(monkeypatch, generator, via):
+    meta = f'<meta name="generator" content="{generator}">' if generator else ""
+    home = (
+        f"<html><head>{meta}"
+        '<link rel="alternate" type="application/json"'
+        ' href="https://blog.vendor.example/wp-json/wp/v2/posts/7">'
+        "</head></html>"
+    )
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
+
+    found = _detect.detect("https://blog.vendor.example/how-to")
+
+    assert (found.route, found.via) == ("wordpress", via)
+
+
+@pytest.mark.parametrize(("generator", "via"), [("MediaWiki 1.43.8", "meta"), (None, "api_link")])
+def test_detect_names_the_mediawiki_tell_that_matched(monkeypatch, generator, via):
+    meta = f'<meta name="generator" content="{generator}">' if generator else ""
+    home = (
+        f"<html><head>{meta}"
+        '<link rel="EditURI" type="application/rsd+xml" href="/api.php?action=rsd">'
+        '<script>RLCONF={"wgPageName":"Synth_Manual"};</script>'
+        "</head></html>"
+    )
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
+
+    found = _detect.detect("https://wiki.vendor.example/wiki/Synth_Manual")
+
+    assert (found.route, found.via) == ("mediawiki", via)
+
+
+@pytest.mark.parametrize(
+    ("home", "route", "via"),
+    [
+        (
+            "<html><head></head><body><!-- Book generated using mdBook --></body></html>",
+            "mdbook",
+            "comment",
+        ),
+        (_meta_home("Antora 3.1.9"), "antora", "meta"),
+        (
+            '<html><body><div class="nav-container"><nav class="nav-menu"></nav></div>'
+            '<article class="doc"><h1 class="page">T</h1></article></body></html>',
+            "antora",
+            "layout",
+        ),
+        (_meta_home("Astro v7.2.10") + _meta_home("Starlight v0.42.3"), "starlight", "meta"),
+        (
+            '<html><body><div class="sl-markdown-content">x</div></body></html>',
+            "starlight",
+            "layout",
+        ),
+    ],
+)
+def test_detect_routes_the_new_platforms(monkeypatch, home, route, via):
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, home))
+
+    found = _detect.detect("https://docs.vendor.example/guide/")
+
+    assert (found.route, found.via) == (route, via)
+
+
+@pytest.mark.parametrize(
+    ("tell", "route", "via"),
+    [
+        ("_writerside.is_writerside", "writerside", "help_app_hooks"),
+        ("_hugo.is_docsy", "hugo", "docsy_tells"),
+        ("_vitepress.is_vitepress", "vitepress", "theme_script"),
+        ("_docsify.is_docsify", "docsify", "runtime_script"),
+    ],
+)
+def test_detect_routes_the_tell_only_platforms(monkeypatch, tell, route, via):
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, _PLAIN_HOME))
+    module, name = tell.split(".")
+    monkeypatch.setattr(getattr(docs_probe, module), name, lambda html: True)
+
+    found = _detect.detect("https://docs.vendor.example/manual/")
+
+    assert (found.route, found.via) == (route, via)
+
+
+def test_detect_follows_a_same_site_meta_refresh_shell(monkeypatch):
+    shell = (
+        '<html><head><meta http-equiv="refresh" content="0; url=welcome.html">'
+        "<title>You will be redirected shortly</title></head></html>"
+    )
+    page = "<html><head><title>Welcome | Vendor Docs</title></head></html>"
+    events = []
+
+    def fetch(url, **kwargs):
+        events.append(url)
+        return url, page if url.endswith("welcome.html") else shell
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: events.append("sleep"))
+    monkeypatch.setattr(docs_probe._writerside, "is_writerside", lambda html: html == page)
+
+    found = _detect.detect("https://docs.vendor.example/docs/")
+
+    assert (found.route, found.title) == ("writerside", "Welcome | Vendor Docs")
+    assert found.base == "https://docs.vendor.example/docs/welcome.html"
+    assert events[:3] == [
+        "https://docs.vendor.example/docs",
+        "sleep",
+        "https://docs.vendor.example/docs/welcome.html",
+    ]
+
+
+_SPEC = (
+    '{"openapi": "3.0.0", "info": {"title": "Pets", "version": "1"}, "paths": '
+    '{"/pets": {"get": {"summary": "List pets", "responses": {"200": {"description": "ok"}}}}}}'
+)
+
+
+def test_a_reference_ui_behind_a_meta_refresh_resolves_its_spec_against_the_ui_page(
+    tmp_path, monkeypatch
+):
+    """GitHub Pages cannot redirect, so its docs root is a refresh shell."""
+    from urllib.error import HTTPError
+
+    pages = {
+        "https://org.github.io/api": (
+            '<html><head><meta http-equiv="refresh" content="0; url=reference/redoc.html">'
+            "</head></html>"
+        ),
+        "https://org.github.io/api/reference/redoc.html": (
+            '<html><body><redoc spec-url="openapi.json"></redoc></body></html>'
+        ),
+        "https://org.github.io/api/reference/openapi.json": _SPEC,
+    }
+
+    def fetch(url, **kwargs):
+        if url not in pages:
+            raise HTTPError(url, 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        return url, pages[url]
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+
+    acq = DocsProbePattern().acquire("https://org.github.io/api/", tmp_path)
+
+    assert acq.pages == 1
+
+
+@pytest.mark.parametrize(
+    ("seed", "validators"),
+    [
+        ("https://vendor.example/manual", (None, None)),
+        ("https://vendor.example/files/manual.pdf-download", ('"v3"', "Wed, 01 Jan 2025")),
+    ],
+    ids=["refresh-shell", "served-at-the-seed"],
+)
+def test_a_pdf_keeps_its_validators_only_when_the_seed_serves_it(
+    tmp_path, monkeypatch, seed, validators
+):
+    """refresh probes source_url; behind a shell the validators describe another URL."""
+    shell = (
+        '<html><head><meta http-equiv="refresh" content="0; url=/files/manual.pdf"></head></html>'
+    )
+
+    def fetch(url, **kwargs):
+        return url, shell if url == "https://vendor.example/manual" else "%PDF-1.7 body"
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda u, **k: (
+            u,
+            b"%PDF-1.7 body",
+            {"etag": '"v3"', "last_modified": "Wed, 01 Jan 2025"},
+        ),
+    )
+
+    acq = DocsProbePattern().acquire(seed, tmp_path)
+
+    assert acq.kind == "pdf"
+    assert (acq.etag, acq.last_modified) == validators
+
+
+def test_a_pdf_too_large_to_read_behind_a_meta_refresh_is_handed_to_pdf_url(tmp_path, monkeypatch):
+    """The shell's target is read under the text budget too, and a manual outgrows it."""
+    shell = (
+        '<html><head><meta http-equiv="refresh" content="0; url=/files/manual.pdf"></head></html>'
+    )
+
+    def fetch(url, **kwargs):
+        if url == "https://vendor.example/manual":
+            return url, shell
+        raise ClientError("response exceeded max_bytes", context={"url": url, "max_bytes": 25})
+
+    downloaded = []
+
+    def download(url, **kwargs):
+        downloaded.append(url)
+        return url, b"%PDF-1.7 body", {"etag": '"v3"', "last_modified": None}
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "fetch_bytes_meta", download)
+
+    acq = DocsProbePattern().acquire("https://vendor.example/manual", tmp_path)
+
+    assert acq.kind == "pdf"
+    assert downloaded == ["https://vendor.example/files/manual.pdf"]
+    assert (acq.etag, acq.last_modified) == (None, None)

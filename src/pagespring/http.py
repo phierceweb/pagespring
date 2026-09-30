@@ -99,9 +99,10 @@ def fetch_bytes_meta(
 
 
 def not_modified(url: str, *, etag: str | None, last_modified: str | None) -> bool:
-    """One conditional GET: True ONLY on a definitive 304. False on anything
-    else — changed content, no validators to send, or any error — so a caller
-    can always fall back to the full fetch path safely. Never raises."""
+    """One conditional GET: True on a definitive 304, or on a 200 carrying the
+    strong ETag it sent. False on anything else — changed content, no validators
+    to send, or any error — so a caller can always fall back to the full fetch
+    path safely. Never raises."""
     return _fetcher(max_bytes=_text_max_bytes()).not_modified(
         url, etag=etag, last_modified=last_modified
     )

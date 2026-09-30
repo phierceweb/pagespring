@@ -2,9 +2,9 @@
 
 Read-only (no network, no LLM): each check compares what the manifest claims
 against what's actually on disk, so a half-lost crawl, a hand-edited file, or
-an unfinished localize surfaces as a finding instead of flowing silently into
-pagespeak. Error-level findings mean the deliverable can't be trusted;
-warnings are real-but-survivable RAG noise.
+an unfinished localize surfaces as a finding instead of passing silently
+downstream. Error-level findings mean the deliverable can't be trusted;
+warnings are real but survivable.
 """
 
 from __future__ import annotations
@@ -16,7 +16,8 @@ from typing import Literal, TypedDict
 from pf_core.log import get_logger
 
 from pagespring import manifest
-from pagespring._integrity import LOCAL_IMG_RE, image_pass_ran, usable
+from pagespring._integrity import LOCAL_IMG_RE, image_pass_ran, integrity, usable
+from pagespring._staging import source_key
 from pagespring.config import cfg
 from pagespring.paths import slug_dir
 from pagespring.registry import pattern_by_name
@@ -47,6 +48,35 @@ def _f(check: str, level: Level, detail: str) -> Finding:
     return {"check": check, "level": level, "detail": detail}
 
 
+def _sha_findings(incoming_dir: Path, m: manifest.Manifest, doc_text: str) -> list[Finding]:
+    mismatch = _f("sha_mismatch", "error", "on-disk content differs from the recorded sha256")
+    if m.get("image_pass_open"):
+        interrupted = _f(
+            "localize_interrupted",
+            "warning",
+            "an image pass was cut short before recording its outcome — re-run localize",
+        )
+        return [interrupted] + ([mismatch] if integrity(incoming_dir, m) == "damaged" else [])
+    # Localize re-points refs, so `localized_sha256` — not `sha256` — describes a
+    # localized file.
+    localized = image_pass_ran(incoming_dir, m, doc_text)
+    expected = m.get("localized_sha256") or (None if localized else m["sha256"])
+    actual = manifest.sha256_file(incoming_dir / m["deliverable"])
+    if expected is not None:
+        return [mismatch] if actual != expected else []
+    if actual != m["sha256"]:
+        # Warning, not error: nothing here can tell, and "ok" reads as verified.
+        return [
+            _f(
+                "sha_unverified",
+                "warning",
+                "localized deliverable carries no localized_sha256 — integrity "
+                "unverifiable; re-ingest with --download-images to record one",
+            )
+        ]
+    return []
+
+
 def audit_slug(slug: str) -> list[Finding]:
     """Audit one ``incoming/<slug>/``; empty list ⇒ healthy."""
     incoming_dir = slug_dir(slug)
@@ -68,33 +98,12 @@ def audit_slug(slug: str) -> list[Finding]:
     if deliverable.stat().st_size == 0:
         return [_f("deliverable_empty", "error", f"{m['deliverable']} is 0 bytes — re-ingest")]
 
-    findings: list[Finding] = []
-
-    # Localize re-points refs, so `localized_sha256` — not `sha256` — describes a
-    # localized file.
     doc_text = (
         deliverable.read_text(encoding="utf-8", errors="replace")
         if m["kind"] in ("markdown", "html")
         else ""
     )
-    localized = image_pass_ran(incoming_dir, m, doc_text)
-    expected = m.get("localized_sha256") or (None if localized else m["sha256"])
-    actual = manifest.sha256_file(deliverable)
-    if expected is not None:
-        if actual != expected:
-            findings.append(
-                _f("sha_mismatch", "error", "on-disk content differs from the recorded sha256")
-            )
-    elif actual != m["sha256"]:
-        # Warning, not error: nothing here can tell, and "ok" reads as verified.
-        findings.append(
-            _f(
-                "sha_unverified",
-                "warning",
-                "localized deliverable carries no localized_sha256 — integrity "
-                "unverifiable; re-ingest with --download-images to record one",
-            )
-        )
+    findings = _sha_findings(incoming_dir, m, doc_text)
 
     # A page cap cut the crawl short, so the deliverable is partial. Nothing about
     # the content shows it — when the source grew between versions, the truncated
@@ -200,9 +209,9 @@ def _corpus_findings(slugs: list[str]) -> dict[str, list[Finding]]:
     """Checks that need the WHOLE corpus, keyed by the slug they attach to.
 
     The defect exists only in the relation between two slugs, so no per-slug
-    check can reach it. Derived fresh from the manifests rather than persisted: a duplicate may be
-    ingested *after* the slug it collides with, so nothing written at ingest
-    time can be trusted to still be complete.
+    check can reach it. Derived fresh from the manifests rather than persisted: a
+    duplicate may be ingested *after* the slug it collides with, so nothing written
+    at ingest time can be trusted to still be complete.
     """
     incoming = Path(cfg.INCOMING_DIR)
     by_sha: dict[str, list[str]] = {}
@@ -211,7 +220,7 @@ def _corpus_findings(slugs: list[str]) -> dict[str, list[Finding]]:
         m = manifest.read_manifest(incoming / slug)
         if usable(m):
             by_sha.setdefault(m["sha256"], []).append(slug)
-            by_url.setdefault(m["source_url"], []).append(slug)
+            by_url.setdefault(source_key(m["source_url"]), []).append(slug)
 
     out: dict[str, list[Finding]] = {}
     # Same source_url under two slugs is a staging error; same bytes from

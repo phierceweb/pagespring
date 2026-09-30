@@ -1,9 +1,8 @@
 """liveness — progress watchdog for queue-driven crawls.
 
-A crawl can keep fetching successfully while saving nothing. A duplicate-id bug
-did exactly that on the Logic Pro guide: after 1972 real pages it spent ~38
-minutes re-fetching 1963 short-form duplicates that wrote no files. No socket
-timeout can see this — every request completed fine. Only progress can.
+A crawl can keep fetching successfully while saving nothing — re-fetching
+duplicates that write no files, say. No socket timeout can see this, since every
+request completes fine. Only progress can.
 """
 
 import pytest

@@ -6,7 +6,7 @@ from email.message import Message
 
 import pytest
 
-from pagespring import http, images
+from pagespring import _image_cache, http, images
 
 _PNG = b"\x89PNG\r\n\x1a\n" + b"pngbody"
 _JPG = b"\xff\xd8\xff" + b"jpgbody"
@@ -266,7 +266,7 @@ def test_reuse_unchanged_rewrites_refs_without_downloading(tmp_path, monkeypatch
 
     monkeypatch.setattr(http, "not_modified", not_modified)
 
-    reused = images.reuse_unchanged(doc, tmp_path)
+    reused = _image_cache.reuse_unchanged(doc, tmp_path)
 
     assert reused == 1
     assert probed == ["https://x.com/a.png"]  # the unknown URL is not probed
@@ -313,7 +313,7 @@ def test_reuse_unchanged_paces_every_probe_it_sends(tmp_path, monkeypatch):
     monkeypatch.setattr(http, "fetch_bytes_meta", fetch)
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: events.append(("sleep", None)))
 
-    images.reuse_unchanged(doc, tmp_path)
+    _image_cache.reuse_unchanged(doc, tmp_path)
 
     assert events == [
         ("probe", "https://x.com/a.png"),
@@ -361,7 +361,7 @@ def test_reuse_unchanged_does_not_corrupt_a_prefix_sibling_ref(tmp_path, monkeyp
     )
     monkeypatch.setattr(http, "not_modified", lambda u, **k: True)
 
-    assert images.reuse_unchanged(doc, tmp_path) == 2
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 2
 
     text = doc.read_text(encoding="utf-8")
     assert 'src="images/pic.png"' in text
@@ -400,7 +400,7 @@ def test_reuse_unchanged_probes_the_decoded_url(tmp_path, monkeypatch):
 
     monkeypatch.setattr(http, "not_modified", not_modified)
 
-    assert images.reuse_unchanged(doc, tmp_path) == 1
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 1
     assert probed == ["https://cdn/i.png?a=1&wid=9"]
     assert 'src="images/i.png"' in doc.read_text(encoding="utf-8")
     assert images.count_remote_images(doc) == 0
@@ -430,15 +430,14 @@ def _unreachable(url, **kwargs):
 
 
 def test_reuse_unchanged_refreshes_a_changed_image_in_place(tmp_path, monkeypatch):
-    """A stable-name image (izotope's nectar-banner.png) keeps its URL when the
-    bytes change: the new bytes take the cached file's name and record."""
+    """New bytes at an unchanged URL take the cached file's name and record."""
     doc, _rec = _cached(tmp_path, "banner.png", "https://x.com/banner.png", _PNG)
     fresh = _PNG + b"-v2"
     monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
     monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, fresh, _meta(etag='"new"')))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
-    assert images.reuse_unchanged(doc, tmp_path) == 1
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 1
 
     assert (tmp_path / "images" / "banner.png").read_bytes() == fresh
     assert "](images/banner.png)" in doc.read_text(encoding="utf-8")
@@ -460,7 +459,7 @@ def test_reuse_unchanged_keeps_the_cached_image_when_its_source_is_unreachable(
     monkeypatch.setattr(http, "fetch_bytes_meta", _unreachable)
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
-    assert images.reuse_unchanged(doc, tmp_path) == 0
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 0
 
     assert (tmp_path / "images" / "fig.png").read_bytes() == _PNG
     assert images.read_sidecar(tmp_path) == [rec]
@@ -476,7 +475,7 @@ def test_reuse_unchanged_keeps_the_cached_image_when_a_page_comes_back(tmp_path,
     )
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
-    assert images.reuse_unchanged(doc, tmp_path) == 0
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 0
 
     assert (tmp_path / "images" / "fig.png").read_bytes() == _PNG
     assert images.read_sidecar(tmp_path) == [rec]
@@ -489,7 +488,7 @@ def test_reuse_unchanged_reuses_identical_bytes_from_a_server_without_validators
     monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"e1"')))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
-    assert images.reuse_unchanged(doc, tmp_path) == 1
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 1
 
     assert "](images/a.png)" in doc.read_text(encoding="utf-8")
     assert [r["etag"] for r in images.read_sidecar(tmp_path)] == ['"e1"']
@@ -503,7 +502,7 @@ def test_reuse_unchanged_leaves_a_format_change_to_the_localizer(tmp_path, monke
     monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _JPG, _meta()))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
-    assert images.reuse_unchanged(doc, tmp_path) == 0
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 0
 
     assert (tmp_path / "images" / "hero.png").read_bytes() == _PNG
     assert images.read_sidecar(tmp_path) == [rec]
@@ -513,7 +512,7 @@ def test_reuse_unchanged_leaves_a_format_change_to_the_localizer(tmp_path, monke
 def test_reuse_unchanged_is_a_noop_without_a_sidecar(tmp_path):
     doc = tmp_path / "d.md"
     doc.write_text("![a](https://x.com/a.png)\n", encoding="utf-8")
-    assert images.reuse_unchanged(doc, tmp_path) == 0
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 0
 
 
 def test_remote_image_urls_agrees_with_count_remote_images(tmp_path):
@@ -538,10 +537,9 @@ def test_remote_image_urls_agrees_with_count_remote_images(tmp_path):
 
 
 def test_changed_image_replaces_in_place_instead_of_suffixing(tmp_path, monkeypatch):
-    """A stable-name vendor (izotope's nectar-banner.png) ships new bytes at the SAME
-    URL. The localizer claims names against what is on disk, so leaving the stale file
-    there would write nectar-banner-2.png and orphan the original — and after N
-    refreshes you have -2, -3, -4. Free the name so the fresh download takes it."""
+    """New bytes at the SAME URL replace the cached file under its name. The localizer
+    claims names against what is on disk, so a download beside the stale file would
+    land on banner-2.png and orphan banner.png, one more suffix per refresh."""
     imgs = tmp_path / "images"
     imgs.mkdir()
     (imgs / "banner.png").write_bytes(_PNG)
@@ -565,7 +563,7 @@ def test_changed_image_replaces_in_place_instead_of_suffixing(tmp_path, monkeypa
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
     monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _JPG, _meta(etag='"v2"')))
 
-    images.reuse_unchanged(doc, tmp_path)
+    _image_cache.reuse_unchanged(doc, tmp_path)
     images.download_images(doc, imgs)
 
     assert sorted(p.name for p in imgs.glob("*")) == ["banner.png"]  # no banner-2
@@ -604,7 +602,7 @@ def test_prune_orphans_deletes_unreferenced_files_and_records(tmp_path):
     doc = tmp_path / "d.md"
     doc.write_text("![u](images/used.png)\n", encoding="utf-8")
 
-    pruned = images.prune_orphans(doc, tmp_path)
+    pruned = _image_cache.prune_orphans(doc, tmp_path)
 
     assert pruned == 1
     assert sorted(p.name for p in imgs.glob("*")) == ["used.png"]
@@ -620,7 +618,7 @@ def test_prune_orphans_refuses_while_remote_refs_remain(tmp_path):
     doc = tmp_path / "d.md"
     doc.write_text("![a](images/a.png)\n![b](https://x.com/b.png)\n", encoding="utf-8")
 
-    assert images.prune_orphans(doc, tmp_path) == 0
+    assert _image_cache.prune_orphans(doc, tmp_path) == 0
     assert (imgs / "a.png").exists()
 
 
@@ -650,8 +648,7 @@ def test_two_urls_with_identical_bytes_get_separate_records(tmp_path, monkeypatc
 def test_entity_escaped_url_is_decoded_before_fetching(monkeypatch):
     """The localizer finds refs by regex over raw HTML, so it hands back the
     attribute verbatim — including `&amp;`. Fetched escaped, a CDN reads
-    `amp;wid=1199` as an unknown parameter and serves its small default: this is
-    why the Adobe manuals localized at 400px instead of the width they asked for.
+    `amp;wid=1199` as an unknown parameter and serves its small default rendition.
     """
     seen: list[str] = []
 
@@ -670,39 +667,34 @@ def test_entity_escaped_url_is_decoded_before_fetching(monkeypatch):
 
 
 def test_local_names_are_case_stable():
-    """Two URLs differing only in case must land on the same base name.
+    """Two URLs differing only in case land on the same base name.
 
-    macOS/APFS is case-insensitive, so `Export-for-screens.jpg` and
-    `export-for-screens.jpg` are one file on disk. Naming them differently made
-    the collision handler suffix one copy while the deliverable kept a ref to
-    the other — a ref pointing at a file that no longer exists.
+    macOS/APFS is case-insensitive, so `Hero-Banner.jpg` and
+    `hero-banner.jpg` are one file on disk. Named apart, the collision
+    handler suffixes one copy while the deliverable keeps a ref to the other — a
+    ref pointing at a file that no longer exists.
     """
-    assert images._legacy_name(
-        "https://x/Export-for-screens?$pjpeg$&wid=1920"
-    ) == images._legacy_name("https://x/export-for-screens?$pjpeg$&wid=1920")
-    assert images._legacy_name("https://x/Panel.PNG") == "panel.png"
+    assert images.local_name("https://x/Hero-Banner?$pjpeg$&wid=1920") == images.local_name(
+        "https://x/hero-banner?$pjpeg$&wid=1920"
+    )
+    assert images.local_name("https://x/Panel.PNG") == "panel.png"
 
 
 def test_existing_mixed_case_files_are_normalised_before_localize(tmp_path):
-    """Names became lowercase, so a cache written under the old rule is stale.
-
-    On a case-insensitive filesystem a new download lands on the SAME inode and
-    keeps the old capitalisation, then prune_orphans compares that name against
-    a deliverable holding the lowercase ref, finds no match, and deletes a file
-    the document still points at.
-    """
+    """A mixed-case cached file is renamed lowercase along with its refs and
+    record, before a download can land on it (see ``normalize_case``)."""
     slug_dir = tmp_path / "s"
     (slug_dir / "images").mkdir(parents=True)
     doc = slug_dir / "s.md"
-    doc.write_text("![a](images/MG_0757.jpg)\n![b](images/keep.png)\n", encoding="utf-8")
-    (slug_dir / "images" / "MG_0757.jpg").write_bytes(b"jpg")
+    doc.write_text("![a](images/Panel_0001.jpg)\n![b](images/keep.png)\n", encoding="utf-8")
+    (slug_dir / "images" / "Panel_0001.jpg").write_bytes(b"jpg")
     (slug_dir / "images" / "keep.png").write_bytes(b"png")
     images.write_sidecar(
         slug_dir,
         [
             {
-                "local": "MG_0757.jpg",
-                "source_url": "https://x/MG_0757.jpg",
+                "local": "Panel_0001.jpg",
+                "source_url": "https://x/Panel_0001.jpg",
                 "etag": None,
                 "last_modified": None,
                 "sha256": "d" * 64,
@@ -711,12 +703,12 @@ def test_existing_mixed_case_files_are_normalised_before_localize(tmp_path):
         ],
     )
 
-    images.normalize_case(doc, slug_dir)
+    _image_cache.normalize_case(doc, slug_dir)
 
-    assert (slug_dir / "images" / "mg_0757.jpg").is_file()
-    assert "images/mg_0757.jpg" in doc.read_text(encoding="utf-8")
-    assert "images/MG_0757.jpg" not in doc.read_text(encoding="utf-8")
-    assert images.read_sidecar(slug_dir)[0]["local"] == "mg_0757.jpg"
+    assert (slug_dir / "images" / "panel_0001.jpg").is_file()
+    assert "images/panel_0001.jpg" in doc.read_text(encoding="utf-8")
+    assert "images/Panel_0001.jpg" not in doc.read_text(encoding="utf-8")
+    assert images.read_sidecar(slug_dir)[0]["local"] == "panel_0001.jpg"
     assert (slug_dir / "images" / "keep.png").is_file()  # untouched
 
 
@@ -749,10 +741,9 @@ def test_provenance_does_not_claim_an_earlier_runs_identical_file(tmp_path, monk
 
 
 def test_provenance_guard_survives_a_corrupt_sidecar(tmp_path, monkeypatch):
-    """The earlier-run guard used the sidecar's records, and `read_sidecar` answers
-    [] for a corrupt file — the mis-attribution returned exactly when the record
-    of what to protect was lost. What existed before this run's downloads is read
-    from the directory instead, which cannot be unreadable."""
+    """What existed before this run's downloads is read from the directory, not the
+    sidecar: `read_sidecar` answers [] for a corrupt file, so a sidecar-based guard
+    would mis-attribute exactly when the record of what to protect is lost."""
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
     imgs = tmp_path / "images"
     doc = tmp_path / "d.md"
@@ -825,7 +816,7 @@ def test_a_killed_reuse_pass_leaves_the_deliverable_intact(tmp_path, monkeypatch
     monkeypatch.setattr(io_mod.os, "replace", boom)
 
     with pytest.raises(OSError):
-        images.reuse_unchanged(doc, tmp_path)
+        _image_cache.reuse_unchanged(doc, tmp_path)
 
     assert doc.read_text(encoding="utf-8") == original, "the deliverable was destroyed"
     assert not list(tmp_path.glob(".d.md.*")), "temp file left behind"
@@ -866,5 +857,5 @@ def test_reuse_unchanged_reuses_an_extensionless_url_with_a_dot_in_its_name(tmp_
     monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta()))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
-    assert images.reuse_unchanged(doc, tmp_path) == 1
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 1
     assert "](images/asset-v3.1-large.png)" in doc.read_text(encoding="utf-8")

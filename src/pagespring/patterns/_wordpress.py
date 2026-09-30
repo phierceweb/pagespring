@@ -5,7 +5,7 @@ WordPress declares each post's REST endpoint in the page head:
     <link rel="alternate" type="application/json" href=".../wp-json/wp/v2/posts/<id>" />
 
 Reading that beats deriving a path — the install may sit in a subdirectory
-(``/beat/``), and ``pagespring.http`` exposes no response headers, so the
+(``/blog/``), and ``pagespring.http`` exposes no response headers, so the
 ``Link:`` header route is unavailable.
 
 Scope is ONE post. A whole-blog crawl is a blog scrape, not a manual.
@@ -107,7 +107,7 @@ def acquire(url: str, workdir: Path, *, slug: str, title: str | None) -> Acquire
     )
 
     post_slug = slugify(str(post.get("slug") or "")) or slug
-    # title.rendered is HTML-escaped by wptexturize ("Tuning &#038; Care").
+    # title.rendered is HTML-escaped by wptexturize ("Setup &#038; Care").
     raw_title = (post.get("title") or {}).get("rendered")
     post_title = html.unescape(raw_title) if raw_title else title
     log.info("wordpress.acquire", url=url, endpoint=endpoint, slug=post_slug)

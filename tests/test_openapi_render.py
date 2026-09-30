@@ -200,6 +200,28 @@ def test_type_list_renders_as_a_union():
     assert "- `n` _string | null_" in _openapi_render.render(spec, "T 1")
 
 
+def test_parameter_table_cells_escape_the_column_bar():
+    spec = _spec(
+        paths={
+            "/x": {
+                "get": {
+                    "parameters": [
+                        {"name": "q", "in": "query", "schema": {"type": ["integer", "null"]}},
+                        {"name": "a|b", "in": "query", "description": "on | off"},
+                    ]
+                }
+            }
+        }
+    )
+    rows = [
+        line for line in _openapi_render.render(spec, "T 1").splitlines() if line.startswith("| `")
+    ]
+    assert rows == [
+        r"| `q` | query | integer \| null | no |  |",
+        r"| `a\|b` | query |  | no | on \| off |",
+    ]
+
+
 _SAMPLE_V3: dict[str, Any] = {
     "openapi": "3.1.0",
     "info": {"title": "S", "version": "1"},
@@ -292,3 +314,19 @@ def test_no_wrong_typed_field_crashes_render_or_count():
             except Exception as exc:  # noqa: BLE001 — collect every crash, not just the first
                 failures.append(f"{path}={bad!r}: {type(exc).__name__}: {exc}")
     assert failures == []
+
+
+def test_parameter_table_cells_fold_every_line_break():
+    spec = _spec(
+        paths={
+            "/x": {
+                "get": {
+                    "parameters": [
+                        {"name": "filter", "in": "query", "description": "Filter.\r\nUse a\rb."}
+                    ]
+                }
+            }
+        }
+    )
+    rows = [ln for ln in _openapi_render.render(spec, "T 1").splitlines() if ln.startswith("| `")]
+    assert rows == ["| `filter` | query |  | no | Filter. Use a b. |"]

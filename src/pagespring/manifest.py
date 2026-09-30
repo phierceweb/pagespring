@@ -2,7 +2,7 @@
 ``incoming/<slug>/`` deliverable.
 
 It records where a manual came from, which pattern acquired it, and a content
-hash — so the hand-off to pagespeak is self-describing, and so ``ingest
+hash — so the hand-off is self-describing, and so ``ingest
 --if-changed`` can tell whether a re-fetch produced anything new. Every field
 is an *acquisition* fact; nothing here instructs the downstream converter.
 Pure stdlib; no network, no pattern machinery.
@@ -21,7 +21,7 @@ from pagespring import __version__
 
 MANIFEST_NAME = "manifest.json"
 # Post-v1 keys are NotRequired — read them with .get, older files lack them.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class Manifest(TypedDict):
@@ -46,6 +46,9 @@ class Manifest(TypedDict):
     # the deliverable's hash AFTER localize re-pointed its refs; None when no
     # image pass ran, in which case `sha256` still describes the file on disk
     localized_sha256: NotRequired[str | None]
+    # present only while an image pass is open: the file's hash blind to what the
+    # pass writes, which tells a killed pass's checkpoints from damage
+    image_pass_open: NotRequired[str]
     deliverable: str
     pages: int | None
     bytes: int
@@ -133,7 +136,7 @@ def find_by_sha(incoming_root: Path, sha256: str, *, exclude_slug: str) -> str |
 def read_manifest(slug_dir: Path) -> Manifest | None:
     """Read ``slug_dir/manifest.json``; ``None`` if absent or unreadable.
 
-    Tolerant by design: a legacy slug dir (pre-manifest) or a corrupt file must
+    Tolerant by design: a slug dir without a manifest, or a corrupt one, must
     not crash ``status`` or ``--if-changed`` — they treat ``None`` as "no record".
     Unreadable covers undecodable bytes, unparseable JSON, and a parseable
     non-object, which callers would index by key and raise ``TypeError`` on.

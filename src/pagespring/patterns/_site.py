@@ -1,7 +1,5 @@
-"""Shared helpers for generator-built docs sites (used by docs_probe and its
-strategy modules): host→slug, <title>, <meta generator>, path-segment tests, llms.txt
-index candidates, and
-in-place fragment surgery — absolutizing refs and flattening responsive images."""
+"""Shared helpers for docs-site patterns: URL and page-metadata parsing, and in-place
+fragment surgery on extracted HTML."""
 
 from __future__ import annotations
 
@@ -11,8 +9,9 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
+from pf_core.utils.slugify import slugify
 
-_GENERIC_LABELS = {"www", "docs", "manual", "manuals", "help", "support"}
+_GENERIC_LABELS = {"www", "docs", "manual", "manuals", "help", "support", "wiki"}
 # A file extension, not merely any dot — "v2.1" and "example.test" are not files.
 _FILE_SUFFIX_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]{1,5}$")
 
@@ -25,6 +24,15 @@ def names_a_file(segment: str) -> bool:
     return bool(_FILE_SUFFIX_RE.search(segment))
 
 
+_RAW_STEM_MAX = 80
+
+
+def raw_stem(path: str) -> str:
+    """A crawled page's raw filename stem from its URL path, short enough for a
+    filesystem's 255-byte name limit however long or percent-encoded the path is."""
+    return slugify(path)[:_RAW_STEM_MAX].rstrip("-") or "index"
+
+
 def llms_index_candidates(url: str) -> list[str]:
     """``llms.txt`` URLs from ``url``'s directory up to the site root, nearest first."""
     p = urlparse(url)
@@ -33,6 +41,68 @@ def llms_index_candidates(url: str) -> list[str]:
         segs.pop()
     origin = f"{p.scheme}://{p.netloc}"
     return ["/".join([origin, *segs[:depth], "llms.txt"]) for depth in range(len(segs), -1, -1)]
+
+
+def _host_and_path(url: str) -> tuple[str, str]:
+    p = urlparse(url)
+    return p.netloc.lower().removeprefix("www."), p.path.rstrip("/")
+
+
+def under_section(url: str, section: str) -> bool:
+    """Whether ``url`` is ``section`` or beneath it: the same host, case-folded and
+    without ``www.``, under either scheme, and a path-segment prefix, since a raw
+    string prefix also absorbs siblings (/guide swallowing /guide-advanced)."""
+    host, path = _host_and_path(url)
+    section_host, section_path = _host_and_path(section)
+    return host == section_host and (path == section_path or path.startswith(f"{section_path}/"))
+
+
+def llms_section(seed: str, index: str, pages: list[str]) -> str | None:
+    """``seed`` as a section of the index at directory ``index``, when the index sits
+    above it and lists pages beneath it. A seed naming one page is an entry point to
+    the whole index. ``pages`` are the index's ``.md`` URLs."""
+    section = llms_index_candidates(seed)[0].rsplit("/", 1)[0]
+    if section == index:
+        return None
+    path = urlparse(section).path
+    for page in pages:
+        stem = page.removesuffix(".md")
+        if under_section(stem, section) and urlparse(stem).path != path:
+            return section
+    return None
+
+
+_REFRESH_URL_RE = re.compile(r"^\s*([\d.]*)\s*[;,]\s*url\s*=\s*['\"]?([^'\"]*)", re.I)
+# Longer than a shell forwarding its reader: a session timeout or a periodic reload.
+_MAX_REFRESH_DELAY_S = 10
+
+
+def meta_refresh_target(html: str, page_url: str) -> str | None:
+    """Where a ``<meta http-equiv="refresh">`` shell sends the reader, when that is
+    another page on the same site; None otherwise. A refresh in ``<noscript>`` is the
+    no-JS fallback, never followed by a reader running scripts."""
+    soup = BeautifulSoup(html, "html.parser")
+    for meta in soup.find_all("meta"):
+        if not isinstance(meta, Tag) or str(meta.get("http-equiv") or "").lower() != "refresh":
+            continue
+        if meta.find_parent("noscript") is not None:
+            continue
+        m = _REFRESH_URL_RE.match(str(meta.get("content") or ""))
+        href = str(m.group(2)).strip() if m else ""
+        if m is None or not href or not _prompt(str(m.group(1))):
+            continue
+        target = urljoin(page_url, href)
+        here, there = urlparse(page_url), urlparse(target)
+        if (there.scheme, there.netloc) == (here.scheme, here.netloc) and target != page_url:
+            return target
+    return None
+
+
+def _prompt(delay: str) -> bool:
+    try:
+        return float(delay or 0) <= _MAX_REFRESH_DELAY_S
+    except ValueError:
+        return False
 
 
 def slug_from_host(host: str) -> str:
@@ -50,12 +120,11 @@ def page_title(html: str) -> str | None:
 
 
 def generator_meta(html: str) -> str:
-    """Lowercased <meta name="generator"> content ('' when absent)."""
+    """Every <meta name="generator"> content, lowercased and comma-joined ('' when
+    absent). A platform often names itself after its framework (Astro, then Starlight)."""
     soup = BeautifulSoup(html, "html.parser")
-    tag = soup.find("meta", attrs={"name": "generator"})
-    if isinstance(tag, Tag):
-        return str(tag.get("content") or "").lower()
-    return ""
+    tags = soup.find_all("meta", attrs={"name": "generator"})
+    return ", ".join(str(t.get("content") or "").lower() for t in tags if isinstance(t, Tag))
 
 
 def absolutize_refs(root: Tag, page_url: str) -> None:
@@ -89,7 +158,7 @@ _CARRIERS = (
     "originalimagename",  # publisher build metadata naming a file that never ships
 )
 # A media query that can never match — the variant behind it is never rendered.
-# Publishers write it both bare and parenthesized; Apple ships "(not all)".
+# Publishers write it both bare and parenthesized.
 _DEAD_MEDIA_RE = re.compile(r"^\s*\(?\s*not\s+all\s*\)?\s*$", re.I)
 # Declared pixel width: a srcset "w" descriptor, or a CDN sizing parameter.
 _WIDTH_PARAM_RE = re.compile(r"[?&](?:wid|width|w)=(\d+)", re.I)

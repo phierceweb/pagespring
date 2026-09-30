@@ -24,9 +24,11 @@ bot-detection evasion. It is a **polite client**: it identifies itself with a
 `429 Retry-After`, backs off on server errors, paces crawl requests, and caps
 crawl sizes.
 
-It is a *user-invoked, one-manual-at-a-time* archiver — closer to "Save Page
-As" than to an autonomous crawler — so it does not consult `robots.txt`
-(which governs bots that discover URLs on their own; you supply the URL).
+It is a *user-invoked* archiver — closer to "Save Page As" than to an
+autonomous crawler. Every source is a URL you supply (one per `ingest`, or one
+per line of an `ingest --batch` file), and it never discovers sources on its
+own, so it does not consult `robots.txt` (which governs bots that find URLs
+themselves).
 Before mirroring a site, check its terms of use. What you may do with the
 acquired copy (personal RAG corpus, internal search, redistribution) is
 governed by the source's license — the deliverable under `incoming/` stays on
@@ -42,12 +44,13 @@ pip install pagespring
 
 ```bash
 pagespring ingest https://docs.tableplus.com   # acquire + normalize → incoming/tableplus/
+pagespring ingest --batch manuals.txt           # one ingest per URL line, with a summary
 pagespring renormalize <slug>                   # replay normalize from kept raw/ — no re-crawl
 pagespring refresh --all                        # re-check every manual against its source
 pagespring audit --all                          # $0 sanity checks on everything staged
 pagespring localize <slug>                      # pull a deliverable's images later (resumable; --all)
 pagespring patterns                             # list the source patterns
-pagespring classify <url>                       # which pattern handles a URL (no fetch)
+pagespring classify <url>                       # which pattern handles a URL (no fetch; --probe names docs_probe's route)
 pagespring status                               # what's been acquired
 ```
 

@@ -1,10 +1,10 @@
 """pdf_url — a direct link to a PDF manual.
 
-acquire: download the PDF. normalize: pass it through unchanged (a PDF is already
-a pagespeak input). Covers vendor gear manuals (direct ``.pdf`` links) and
-Read-the-Docs PDF builds (``…/_/downloads/[<alias>/]<lang>/<ver>/pdf/``, which
-serve a PDF at an extensionless path). Any other extensionless URL is left to
-docs_probe, which sniffs the response for a PDF.
+acquire: download the PDF. normalize: pass it through unchanged — the PDF is the
+deliverable. Covers vendor gear manuals (direct ``.pdf`` links) and Read-the-Docs
+PDF builds (``…/_/downloads/[<alias>/]<lang>/<ver>/pdf/``, which serve a PDF at
+an extensionless path). Any other extensionless URL is left to docs_probe, which
+sniffs the response for a PDF.
 """
 
 from __future__ import annotations
@@ -62,8 +62,8 @@ class PdfUrlPattern:
         slug = _slug_from_url(url)
         _final, data, meta = http.fetch_bytes_meta(url)
         # A vendor "PDF" URL that 301s to an HTML landing page still returns 200;
-        # staged unchecked it becomes a .pdf that isn't one, and nothing
-        # downstream looks inside a kind:pdf deliverable.
+        # staged unchecked it becomes a .pdf that isn't one, and audit never
+        # content-checks a kind:pdf deliverable.
         if _PDF_MAGIC not in data[:_MAGIC_WINDOW]:
             raise InvalidInputError(
                 f"{url} returned {len(data)} bytes that are not a PDF "
@@ -83,5 +83,4 @@ class PdfUrlPattern:
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
-        # Passthrough: the downloaded PDF is already a pagespeak input.
         return next(acq.raw_dir.glob("*.pdf"))

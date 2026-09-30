@@ -9,8 +9,13 @@ import pytest
 from pf_core.exceptions import InvalidInputError
 
 from pagespring import http
-from pagespring.patterns import archive_download
+from pagespring.patterns import _archive_extract
 from pagespring.patterns.archive_download import ArchiveDownloadPattern
+
+
+@pytest.fixture(autouse=True)
+def _default_extraction_budget(monkeypatch):
+    monkeypatch.delenv("PAGESPRING_MAX_EXTRACT_BYTES", raising=False)
 
 
 def _serve(monkeypatch, data: bytes, etag=None, last_modified=None) -> None:
@@ -108,8 +113,8 @@ def _epub_bytes() -> bytes:
 
 
 def test_epub_members_follow_the_spine_not_the_filename(tmp_path, monkeypatch):
-    """Lexical sort put Alice's chapters in the order I, X, XI, XII, II, III …
-    and the cover last. The OPF spine is the book's real reading order."""
+    """Lexical sort puts chapter 10 between 1 and 2 and the cover last; the OPF
+    spine is the book's real reading order."""
     _serve(monkeypatch, _epub_bytes())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://www.gutenberg.org/cache/epub/11/pg11.epub", tmp_path)
@@ -122,8 +127,8 @@ def test_epub_members_follow_the_spine_not_the_filename(tmp_path, monkeypatch):
 
 
 def test_html_members_contribute_body_not_whole_documents(tmp_path, monkeypatch):
-    """Concatenating whole XHTML files nested 14 DOCTYPE/<html>/<head> blocks
-    inside one deliverable — invalid, and it buried 14 duplicate <title>s."""
+    """Concatenating whole XHTML files nests a DOCTYPE/<html>/<head> block and a
+    <title> per chapter inside one deliverable — invalid markup."""
     _serve(monkeypatch, _epub_bytes())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://www.gutenberg.org/cache/epub/11/pg11.epub", tmp_path)
@@ -164,9 +169,9 @@ def _epub3_bytes() -> bytes:
 
 
 def test_epub3_xhtml_chapters_are_the_deliverable(tmp_path, monkeypatch):
-    """EPUB 3 names content documents .xhtml. Sniffing only .html/.htm classified
-    the book as markdown, filtered every chapter out, and staged the stray
-    COPYRIGHT.txt as the entire deliverable with a healthy-looking manifest."""
+    """EPUB 3 names content documents .xhtml. A sniff that knows only .html/.htm
+    classifies the book as markdown, filters every chapter out, and stages the
+    stray COPYRIGHT.txt as the entire deliverable with a healthy-looking manifest."""
     _serve(monkeypatch, _epub3_bytes())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://standardebooks.org/x/y/downloads/book.epub", tmp_path)
@@ -178,6 +183,130 @@ def test_epub3_xhtml_chapters_are_the_deliverable(tmp_path, monkeypatch):
     assert "First chapter." in out and "Second chapter." in out
     assert "public domain" not in out, "stray .txt leaked into an HTML deliverable"
     assert out.index("First chapter.") < out.index("Second chapter."), "spine order lost"
+
+
+def _gutenberg_shaped_epub(nav_in_spine: bool = False) -> bytes:
+    """The Project Gutenberg EPUB 3 shape: a dc:title, a nav document, and the book
+    wrapped in a pg-boilerplate header and a license-footer member."""
+    nav_ref = '<itemref idref="nav"/>' if nav_in_spine else ""
+    opf = f"""<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/"
+         version="3.0">
+  <metadata><dc:title> The Tale of a Test </dc:title></metadata>
+  <manifest>
+    <item id="nav" href="toc.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="pg-header" href="book-h-0.htm.xhtml" media-type="application/xhtml+xml"/>
+    <item id="pg-footer" href="book-h-1.htm.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>{nav_ref}<itemref idref="pg-header"/><itemref idref="pg-footer"/></spine>
+</package>"""
+    page = '<html xmlns="http://www.w3.org/1999/xhtml"><body>{}</body></html>'
+    header = (
+        '<header class="pg-boilerplate pgheader" id="pg-header">'
+        "<h2>The Project Gutenberg eBook of The Tale</h2><div>GUTENBERG TERMS OF USE</div></header>"
+    )
+    book = '<h1 id="c1">Chapter One</h1><p>The story body.</p>'
+    footer = '<footer class="pg-boilerplate pgheader"><div>FULL GUTENBERG LICENSE</div></footer>'
+    nav = '<nav><ol><li><a href="book-h-0.htm.xhtml#c1">TOC ENTRY</a></li></ol></nav>'
+    return _deflated_zip(
+        {
+            "mimetype": b"application/epub+zip",
+            "OEBPS/content.opf": opf.encode(),
+            "OEBPS/toc.xhtml": page.format(nav).encode(),
+            "OEBPS/book-h-0.htm.xhtml": page.format(header + book).encode(),
+            "OEBPS/book-h-1.htm.xhtml": page.format(footer).encode(),
+        }
+    )
+
+
+def test_the_opf_title_names_the_deliverable(tmp_path, monkeypatch):
+    """Without it the heading falls back to the slug the download URL yields."""
+    _serve(monkeypatch, _gutenberg_shaped_epub())
+    p = ArchiveDownloadPattern()
+    acq = p.acquire("https://www.gutenberg.org/cache/epub/1/pg1-images-3.epub", tmp_path)
+
+    assert acq.title == "The Tale of a Test"
+    assert "<title>The Tale of a Test</title>" in p.normalize(acq, tmp_path).read_text("utf-8")
+
+
+def test_a_navigation_document_the_spine_omits_is_not_appended(tmp_path, monkeypatch):
+    """Every EPUB 3 carries one: the reading system's table of contents, whose links
+    name member files the deliverable does not have."""
+    _serve(monkeypatch, _gutenberg_shaped_epub())
+    p = ArchiveDownloadPattern()
+    acq = p.acquire("https://x.com/book.epub", tmp_path)
+    out = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert "TOC ENTRY" not in out
+    assert acq.pages == 1, f"the nav document counted as a page: {acq.pages}"
+
+
+def test_a_navigation_document_in_the_spine_keeps_its_place(tmp_path, monkeypatch):
+    _serve(monkeypatch, _gutenberg_shaped_epub(nav_in_spine=True))
+    p = ArchiveDownloadPattern()
+    out = p.normalize(p.acquire("https://x.com/book.epub", tmp_path), tmp_path).read_text("utf-8")
+
+    assert out.index("TOC ENTRY") < out.index("The story body.")
+
+
+def test_gutenberg_boilerplate_is_not_part_of_the_book(tmp_path, monkeypatch):
+    """Project Gutenberg marks its header and license footer pg-boilerplate; the
+    license alone can outweigh a short book."""
+    _serve(monkeypatch, _gutenberg_shaped_epub())
+    p = ArchiveDownloadPattern()
+    out = p.normalize(p.acquire("https://x.com/book.epub", tmp_path), tmp_path).read_text("utf-8")
+
+    assert "Chapter One" in out and "The story body." in out
+    assert "TERMS OF USE" not in out
+    assert "FULL GUTENBERG LICENSE" not in out
+    assert "book-h-1.htm.xhtml" not in out, "the member left empty was still emitted"
+
+
+def _spine_epub(bodies: list[str]) -> bytes:
+    items = "".join(
+        f'<item id="m{i}" href="m{i}.xhtml" media-type="application/xhtml+xml"/>'
+        for i in range(len(bodies))
+    )
+    refs = "".join(f'<itemref idref="m{i}"/>' for i in range(len(bodies)))
+    opf = (
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0">'
+        f"<manifest>{items}</manifest><spine>{refs}</spine></package>"
+    )
+    members = {"mimetype": b"application/epub+zip", "OEBPS/content.opf": opf.encode()}
+    for i, body in enumerate(bodies):
+        members[f"OEBPS/m{i}.xhtml"] = f"<html><body>{body}</body></html>".encode()
+    return _deflated_zip(members)
+
+
+def test_pages_counts_only_the_members_the_deliverable_holds(tmp_path, monkeypatch):
+    """A member emptied by boilerplate removal, even inside a wrapper, is not a page;
+    a member that is only a figure is."""
+    _serve(
+        monkeypatch,
+        _spine_epub(
+            [
+                '<div class="wrap"><footer class="pg-boilerplate">FULL LICENSE</footer></div>',
+                '<div><img src="plate.png" alt=""/></div>',
+                "<p>The story.</p>",
+                "<script>track()</script>",
+            ]
+        ),
+    )
+    p = ArchiveDownloadPattern()
+    acq = p.acquire("https://x.com/book.epub", tmp_path)
+    out = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert acq.pages == out.count("<!-- source:") == 2
+    assert "m1.xhtml" in out and "m2.xhtml" in out
+    assert "FULL LICENSE" not in out and "m0.xhtml" not in out
+
+
+def test_text_and_comments_directly_in_a_body_keep_their_markup(tmp_path, monkeypatch):
+    _serve(monkeypatch, _spine_epub(["<!-- colophon --> 3 &lt; 4 <p>x &amp; y</p>"]))
+    p = ArchiveDownloadPattern()
+    out = p.normalize(p.acquire("https://x.com/book.epub", tmp_path), tmp_path).read_text("utf-8")
+
+    assert "<!-- colophon --> 3 &lt; 4 <p>x &amp; y</p>" in out
 
 
 def _mixed_zip_bytes() -> bytes:
@@ -192,9 +321,9 @@ def _mixed_zip_bytes() -> bytes:
 
 
 def test_stray_xhtml_does_not_flip_a_markdown_archive_to_html(tmp_path, monkeypatch):
-    """.xhtml is an EPUB content-document convention. Counting it as an HTML
-    member everywhere flipped this archive's kind to html, filtered both .md docs
-    out, and staged the boilerplate as the whole deliverable — silently, since
+    """.xhtml is an EPUB content-document convention. Counted as an HTML member
+    everywhere, it flips this archive's kind to html, filters both .md docs out,
+    and stages the boilerplate as the whole deliverable — silently, since
     `single_fetch` suppresses audit's single_page_crawl on the 1-page result."""
     _serve(monkeypatch, _mixed_zip_bytes())
     p = ArchiveDownloadPattern()
@@ -222,8 +351,8 @@ def _uppercase_html_zip_bytes() -> bytes:
 
 
 def test_uppercase_html_members_are_sniffed_as_html(tmp_path, monkeypatch):
-    """A case-sensitive sniff classified a zip of .HTML pages as markdown, filtered
-    every page out, and staged the packaging README as the entire deliverable —
+    """A case-sensitive sniff classifies a zip of .HTML pages as markdown, filters
+    every page out, and stages the packaging README as the entire deliverable —
     with a healthy-looking manifest. pathlib globs case-sensitively even on APFS."""
     _serve(monkeypatch, _uppercase_html_zip_bytes())
     p = ArchiveDownloadPattern()
@@ -414,7 +543,7 @@ def _epub_with_escaped_hrefs() -> bytes:
 
 def test_percent_encoded_spine_hrefs_keep_reading_order(tmp_path, monkeypatch):
     """`Chapter%201.xhtml` names the extracted `Chapter 1.xhtml`; compared raw, no
-    escaped chapter matched and the appendix sorted ahead of chapter one."""
+    escaped chapter matches and the appendix sorts ahead of chapter one."""
     _serve(monkeypatch, _epub_with_escaped_hrefs())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/book.epub", tmp_path)
@@ -436,19 +565,42 @@ def test_an_implausible_compression_ratio_is_refused_before_extraction(tmp_path,
     assert not any((tmp_path / "raw").rglob("*")), "members extracted before the refusal"
 
 
+def _two_incompressible_members(pack) -> bytes:
+    return pack({"a.txt": os.urandom(100_000), "b.txt": os.urandom(100_000)})
+
+
 @pytest.mark.parametrize("pack", [_deflated_zip, _tgz], ids=["zip", "tar.gz"])
-@pytest.mark.parametrize(
-    ("cap", "value", "why"),
-    [("_MAX_EXTRACT_BYTES", 150_000, "extract"), ("_MAX_MEMBERS", 1, "members")],
-)
-def test_an_archive_past_the_extraction_budget_is_refused(
-    tmp_path, monkeypatch, pack, cap, value, why
-):
-    monkeypatch.setattr(archive_download, cap, value)
-    _serve(monkeypatch, pack({"a.txt": os.urandom(100_000), "b.txt": os.urandom(100_000)}))
-    with pytest.raises(InvalidInputError, match=why):
+def test_an_archive_past_the_member_cap_is_refused(tmp_path, monkeypatch, pack):
+    monkeypatch.setattr(_archive_extract, "_MAX_MEMBERS", 1)
+    _serve(monkeypatch, _two_incompressible_members(pack))
+    with pytest.raises(InvalidInputError, match="members"):
         ArchiveDownloadPattern().acquire("https://x.com/docs.zip", tmp_path)
     assert not any((tmp_path / "raw").rglob("*"))
+
+
+@pytest.mark.parametrize("pack", [_deflated_zip, _tgz], ids=["zip", "tar.gz"])
+def test_an_archive_past_the_extraction_budget_is_refused(tmp_path, monkeypatch, pack):
+    monkeypatch.setenv("PAGESPRING_MAX_EXTRACT_BYTES", "150000")
+    _serve(monkeypatch, _two_incompressible_members(pack))
+    with pytest.raises(InvalidInputError, match="extract past 150000 bytes"):
+        ArchiveDownloadPattern().acquire("https://x.com/docs.zip", tmp_path)
+    assert not any((tmp_path / "raw").rglob("*"))
+
+
+def test_the_extraction_budget_can_be_raised_past_its_default(tmp_path, monkeypatch):
+    """A legitimate archive larger than the default budget extracts once the
+    operator raises it, as the download cap already can be."""
+    monkeypatch.setattr(_archive_extract, "_MAX_EXTRACT_BYTES_DEFAULT", 150_000)
+    monkeypatch.setenv("PAGESPRING_MAX_EXTRACT_BYTES", "1000000")
+    _serve(monkeypatch, _two_incompressible_members(_deflated_zip))
+    assert ArchiveDownloadPattern().acquire("https://x.com/docs.zip", tmp_path).pages == 2
+
+
+@pytest.mark.parametrize("value", ["not-a-number", "", "0", "-1"])
+def test_an_unusable_extraction_budget_falls_back_to_the_default(monkeypatch, value):
+    """A malformed or non-positive override must not lift the budget."""
+    monkeypatch.setenv("PAGESPRING_MAX_EXTRACT_BYTES", value)
+    assert _archive_extract._max_extract_bytes() == _archive_extract._MAX_EXTRACT_BYTES_DEFAULT
 
 
 @pytest.mark.parametrize("pack", [_deflated_zip, _tgz], ids=["zip", "tar.gz"])
@@ -490,3 +642,20 @@ def test_a_corrupt_local_archive_names_the_file(tmp_path):
     archive.write_bytes(b"PK\x03\x04" + bytes(40))
     with pytest.raises(InvalidInputError, match="broken-manual.zip: not a zip"):
         ArchiveDownloadPattern().acquire(str(archive), tmp_path / "w")
+
+
+def test_an_html_archive_parses_each_member_once(tmp_path, monkeypatch):
+    from pagespring.patterns import archive_download
+
+    parsed: list[str] = []
+    content = archive_download._content
+    monkeypatch.setattr(
+        archive_download, "_content", lambda member: parsed.append(member.name) or content(member)
+    )
+    _serve(monkeypatch, _spine_epub(["<p>One.</p>", "<script>track()</script>", "<p>Two.</p>"]))
+    p = ArchiveDownloadPattern()
+    acq = p.acquire("https://x.com/book.epub", tmp_path)
+    p.normalize(acq, tmp_path)
+
+    assert sorted(parsed) == ["m0.xhtml", "m1.xhtml", "m2.xhtml"]
+    assert acq.pages == 2

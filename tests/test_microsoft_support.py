@@ -234,8 +234,8 @@ def test_the_terminal_sitemap_404_does_not_truncate(tmp_path, monkeypatch):
 
 
 def test_article_without_a_content_div_counts_as_lost(tmp_path, monkeypatch):
-    """An article the extractor cannot open was dropped silently — a client-rendered
-    or retemplated article is a real loss, not a chrome shell."""
+    """An article the extractor cannot open counts as lost, not silently dropped — a
+    client-rendered or retemplated article is a real loss, not a chrome shell."""
     no_content = (
         "<html><body><h1>Create a PivotTable</h1><p>Rendered client-side.</p></body></html>"
     )
@@ -383,7 +383,7 @@ def _forbidden(url):
 )
 def test_a_200_sitemap_page_without_loc_ends_the_walk(monkeypatch, page_two, truncated):
     """The site ends pagination with a 404, and an empty <urlset> is a clean end too.
-    A WAF interstitial or CDN error page answering 200 hid the rest of the catalog."""
+    A WAF interstitial or CDN error page answering 200 must not end the catalog early."""
     from pagespring.patterns import microsoft_support as mod
 
     calls = []

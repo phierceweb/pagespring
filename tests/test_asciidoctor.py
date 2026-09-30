@@ -6,7 +6,7 @@ from pf_core.exceptions import InvalidInputError
 from pagespring import http
 from pagespring.patterns import _asciidoctor
 
-_BASE = "https://manual.yamaha.com/mi/bo/ead10/en"
+_BASE = "https://manual.vendor.example/mi/bo/kit10/en"
 
 _NAV = (
     '<div id="global-header">CHROME</div>'
@@ -26,14 +26,14 @@ def _page(title: str, body: str, *, container: str = "contentOrg") -> str:
 <body><div id="header">hdr</div>
 <main id="content">{_NAV}<div id="searchresults">No more search results.</div>
 <div id="{container}"><div class="sect1 contentarea">{body}</div></div></main>
-<div id="footer"><div id="copyright">(c) Yamaha</div></div>
+<div id="footer"><div id="copyright">(c) Vendor Corp</div></div>
 <script src="s.js"></script></body></html>"""
 
 
 _PAGES = {
-    f"{_BASE}/index.html": _page("EAD10 Web Manual", "<p>Welcome to the manual.</p>"),
+    f"{_BASE}/index.html": _page("KIT10 Web Manual", "<p>Welcome to the manual.</p>"),
     f"{_BASE}/01_feature_en.html": _page(
-        "What is the EAD10?",
+        "What is the KIT10?",
         '<h2>Features</h2><p>It senses.</p><img src="images/panel.svg"/>',
     ),
     f"{_BASE}/02_setting_en.html": _page("Quick Guide", "<h2>Setup</h2><p>Plug it in.</p>"),
@@ -89,7 +89,7 @@ def test_extracts_content_and_drops_chrome(tmp_path, fetched):
     assert "It senses." in merged
     assert "Plug it in." in merged
     assert "CHROME" not in merged
-    assert "Yamaha" not in merged  # the footer copyright
+    assert "Vendor Corp" not in merged  # the footer copyright
     assert "s.js" not in merged
 
 
@@ -130,9 +130,9 @@ def test_missing_content_container_raises(tmp_path, monkeypatch):
 
 def test_slug_combines_host_label_and_document_title(tmp_path, fetched):
     """One host serves many Asciidoctor manuals; the host label alone collides."""
-    acq = _asciidoctor.acquire(f"{_BASE}/index.html", tmp_path, slug="yamaha", title=None)
+    acq = _asciidoctor.acquire(f"{_BASE}/index.html", tmp_path, slug="vendor", title=None)
 
-    assert acq.slug == "yamaha-ead10-web-manual"
+    assert acq.slug == "vendor-kit10-web-manual"
 
 
 def test_a_dead_page_is_skipped_not_fatal(tmp_path, monkeypatch):
@@ -227,8 +227,7 @@ def test_a_collapsed_multipage_crawl_is_not_marked_single_document(tmp_path, mon
 def test_absent_cross_reference_does_not_defeat_single_document(tmp_path, monkeypatch):
     """A stock single-file manual still cross-references sibling docs, which may
     simply not be published on that host. Counting a 404 as a lost page marks
-    every such manual as a collapsed crawl — the real Asciidoctor User Manual
-    links two plugin docs that 404, and it is one self-contained file.
+    every such manual as a collapsed crawl.
     """
     from urllib.error import HTTPError
 
@@ -252,8 +251,7 @@ def test_absent_cross_reference_does_not_defeat_single_document(tmp_path, monkey
 
 def test_absent_cross_references_are_not_counted_as_lost(tmp_path, monkeypatch):
     """The same 404 siblings that must not defeat single_document must not count
-    as lost either: a healthy one-file manual shipped lost=2, and audit failed it
-    with pages_lost on a document that was complete."""
+    as lost either, or audit fails a complete one-file manual with pages_lost."""
     from urllib.error import HTTPError
 
     linked = _SINGLE.replace(
@@ -305,9 +303,9 @@ def test_a_non_404_sibling_failure_is_still_counted_as_lost(tmp_path, monkeypatc
 def test_directory_form_seed_scopes_to_that_directory(tmp_path, monkeypatch):
     """`.../en/` and `.../en` must scope to `.../en`, not its PARENT.
 
-    Stripping unconditionally sent every chapter one level too high; they 404,
+    Stripping unconditionally sends every chapter one level too high; they 404,
     pages collapses to 1, and single_document then suppresses the audit check
-    that would have caught it."""
+    that would catch it."""
     seen: list[str] = []
 
     def fake(url, **kwargs):
@@ -349,7 +347,7 @@ def test_directory_seed_resolves_assets_inside_the_directory(tmp_path, monkeypat
 
 
 def test_host_root_seed_does_not_produce_a_malformed_base(tmp_path, monkeypatch):
-    """A bare host root has no directory to strip; `rsplit` yielded "https:/"."""
+    """A bare host root has no directory to strip; an unconditional `rsplit` yields "https:/"."""
     root = "https://docs.example.test"
     monkeypatch.setattr(http, "fetch_text", lambda u, **k: (u, _SINGLE))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
@@ -362,9 +360,9 @@ def test_host_root_seed_does_not_produce_a_malformed_base(tmp_path, monkeypatch)
 
 def test_entry_redirect_reanchors_the_crawl(tmp_path, monkeypatch):
     """Every page but the prefetched entry rebinds page_url from the fetch. A
-    seed that redirects into a locale dir left base_dir, link resolution and
-    asset URLs anchored to the pre-redirect URL."""
-    flat = "https://manual.yamaha.com/mi/bo/ead10/index.html"
+    seed that redirects into a locale dir must anchor base_dir, link resolution
+    and asset URLs to the post-redirect URL."""
+    flat = "https://manual.vendor.example/mi/bo/kit10/index.html"
 
     def fake(url, **kwargs):
         if url == flat:
@@ -380,9 +378,9 @@ def test_entry_redirect_reanchors_the_crawl(tmp_path, monkeypatch):
 
 
 def test_link_redirecting_out_of_the_manual_is_dropped(tmp_path, monkeypatch):
-    """base_dir was checked on the href only, never re-checked after the fetch,
-    so a same-dir link that 301s elsewhere had its content staged in."""
-    outsider = "https://manual.yamaha.com/other/promo.html"
+    """Scope is re-checked after the fetch, not only on the href, so a same-dir
+    link that 301s elsewhere stages nothing."""
+    outsider = "https://manual.vendor.example/other/promo.html"
 
     def fake(url, **kwargs):
         if url == f"{_BASE}/02_setting_en.html":
@@ -401,7 +399,7 @@ def test_link_redirecting_out_of_the_manual_is_dropped(tmp_path, monkeypatch):
 
 
 def test_two_links_redirecting_to_one_page_stage_it_once(tmp_path, monkeypatch):
-    """`seen` held pre-redirect URLs only, so aliases duplicated the page."""
+    """`seen` holds post-redirect URLs too, or redirect aliases duplicate the page."""
 
     def fake(url, **kwargs):
         if url.endswith(("01_feature_en.html", "02_setting_en.html")):
@@ -439,9 +437,8 @@ def test_seed_with_a_query_string_stays_well_formed():
 
 def test_sibling_that_fetches_but_cannot_extract_is_still_a_live_sibling(tmp_path, monkeypatch):
     """A page that returns 200 but whose container is gone (theme change) proves
-    the document IS multipage. Counting only *staged* siblings marked it
-    single_document, which suppresses audit's single_page_crawl — the same
-    silent-collapse class the flag already caused once.
+    the document IS multipage. Counting only *staged* siblings would mark it
+    single_document, which suppresses audit's single_page_crawl.
     """
     good = (
         '<html><head><meta name="generator" content="Asciidoctor 2.0"/><title>G</title>'

@@ -76,7 +76,7 @@ def test_acquire_uses_post_redirect_base_for_source_comments(tmp_path, monkeypat
 def test_page_record_text_is_not_repeated_under_its_sections(tmp_path, monkeypatch):
     """MkDocs' index carries each page TWICE: one page-level record holding the
     whole page's text, then one record per section holding the same text again.
-    Emitting both made half of the mkdocs deliverable a verbatim duplicate."""
+    Emitting both makes half of the deliverable a verbatim duplicate."""
     index = json.dumps(
         {
             "docs": [

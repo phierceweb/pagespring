@@ -102,8 +102,8 @@ def test_dedupes_anchor_entries_to_real_pages(tmp_path, monkeypatch):
 
 
 def test_takes_the_content_article_not_the_empty_search_shell(tmp_path, monkeypatch):
-    """article#search-result-wrapper sits beside the real one and extracts to ~30
-    chars on every page — selecting it silently yields an empty corpus."""
+    """article#search-result-wrapper sits beside the real one and holds no content —
+    selecting it silently yields an empty corpus."""
     monkeypatch.setattr(http, "fetch_text", _fetch())
 
     acq = _paligo.acquire(f"{ROOT}/index.html", tmp_path, slug="widget5", title=None)
@@ -185,3 +185,12 @@ def test_publication_base_keeps_a_directory_form_portal_url():
         _paligo.publication_base("https://docs.vendor.example/widget5/index.html", html)
         == "https://docs.vendor.example/widget5/en"
     )
+
+
+def test_the_topic_breadcrumb_is_chrome(tmp_path, monkeypatch):
+    topic = _TOPIC.replace(
+        "<h1>Getting Started</h1>",
+        '<div class="breadcrumb-container"><ul class="breadcrumb"><li>Manual</li>'
+        "<li>Getting Started</li></ul></div><h1>Getting Started</h1>",
+    )
+    assert "breadcrumb" not in _paligo._extract(topic, f"{ROOT}/en/getting-started.html")

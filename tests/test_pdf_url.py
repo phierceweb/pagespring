@@ -7,7 +7,7 @@ from pagespring.patterns.pdf_url import PdfUrlPattern
 def test_match_pdf_extension():
     p = PdfUrlPattern()
     assert p.match("https://x.com/a/Manual.PDF")
-    assert p.match("https://vendor.com/downloads/kemper.pdf")
+    assert p.match("https://vendor.com/downloads/manual.pdf")
     assert not p.match("https://x.com/page.html")
     assert not p.match("https://x.com/docs/")
 
@@ -46,10 +46,10 @@ def test_rtd_pdf_match_and_host_slug(tmp_path, monkeypatch):
 
     p = PdfUrlPattern()
     # Read-the-Docs PDF builds live at an extensionless /pdf/ path.
-    assert p.match("https://picard-docs.musicbrainz.org/_/downloads/en/latest/pdf/")
+    assert p.match("https://widget-docs.vendor.example/_/downloads/en/latest/pdf/")
     assert (
-        _slug_from_url("https://picard-docs.musicbrainz.org/_/downloads/en/latest/pdf/")
-        == "picard-docs"
+        _slug_from_url("https://widget-docs.vendor.example/_/downloads/en/latest/pdf/")
+        == "widget-docs"
     )
 
     monkeypatch.setattr(
@@ -57,10 +57,10 @@ def test_rtd_pdf_match_and_host_slug(tmp_path, monkeypatch):
         "fetch_bytes_meta",
         lambda u, **k: (u, b"%PDF-1.5 body", {"etag": None, "last_modified": None}),
     )
-    acq = p.acquire("https://picard-docs.musicbrainz.org/_/downloads/en/latest/pdf/", tmp_path)
+    acq = p.acquire("https://widget-docs.vendor.example/_/downloads/en/latest/pdf/", tmp_path)
     assert acq.kind == "pdf"
-    assert acq.slug == "picard-docs"
-    assert next(acq.raw_dir.glob("*.pdf")).name == "picard-docs.pdf"
+    assert acq.slug == "widget-docs"
+    assert next(acq.raw_dir.glob("*.pdf")).name == "widget-docs.pdf"
 
 
 def test_acquire_captures_response_validators(tmp_path, monkeypatch):
@@ -87,10 +87,10 @@ def test_acquire_downloads_and_slugs(tmp_path, monkeypatch):
         lambda url, **kw: (url, b"%PDF-1.7 fake body", {"etag": None, "last_modified": None}),
     )
     p = PdfUrlPattern()
-    acq = p.acquire("https://vendor.com/d/KEMPER_PROFILER_Main_14.0.pdf", tmp_path)
+    acq = p.acquire("https://vendor.com/d/WIDGET_PRO_Main_14.0.pdf", tmp_path)
 
     assert acq.kind == "pdf"
-    assert acq.slug == "kemper-profiler-main-14-0"
+    assert acq.slug == "widget-pro-main-14-0"
     assert acq.pages is None  # magic bytes only — no page tree to count
     pdfs = list(acq.raw_dir.glob("*.pdf"))
     assert len(pdfs) == 1
@@ -157,8 +157,7 @@ def _pdf_bytes(pages: int) -> bytes:
 
 
 def test_pages_records_the_pdf_page_count_not_the_file_count(tmp_path, monkeypatch):
-    """`pages: 1` for every PDF was true-but-useless — it counted files fetched.
-    For a PDF the source unit is the page, and downstream reads it that way."""
+    """For a PDF the source unit is the page, not the file fetched."""
     monkeypatch.setattr(
         http,
         "fetch_bytes_meta",

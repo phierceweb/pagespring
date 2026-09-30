@@ -10,7 +10,8 @@ Order matters — first match wins (PATTERNS below is the list):
   - then extension/content patterns so a `.json`/`.yaml` spec or `.pdf` on a
     `docs.*` host routes correctly rather than falling through to the broader
     patterns below; api_spec also claims URLs whose last segment contains an
-    ``openapi``/``swagger``/``postman`` token,
+    ``openapi``/``swagger``/``postman`` token, and sitemap_crawl a URL naming a
+    sitemap file (opt-in: nothing else reaches it),
   - gitbook next, narrowed to `*.gitbook.io` (its own hosting, not custom domains),
   - docs_probe LAST — a content-probing catch-all that claims any remaining
     http(s) URL and sniffs the generator at acquire time. It must stay last:
@@ -32,6 +33,7 @@ from pagespring.patterns.microsoft_support import MicrosoftSupportPattern
 from pagespring.patterns.openstax import OpenStaxPattern
 from pagespring.patterns.pdf_url import PdfUrlPattern
 from pagespring.patterns.readthedocs import ReadTheDocsPattern
+from pagespring.patterns.sitemap_crawl import SitemapCrawlPattern
 from pagespring.patterns.zendesk_help import ZendeskHelpPattern
 
 PATTERNS: list[Pattern] = [
@@ -46,6 +48,7 @@ PATTERNS: list[Pattern] = [
     ApiSpecPattern(),
     PdfUrlPattern(),
     ArchiveDownloadPattern(),
+    SitemapCrawlPattern(),
     GitBookPattern(),
     DocsProbePattern(),
 ]

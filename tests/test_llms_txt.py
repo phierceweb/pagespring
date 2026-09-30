@@ -10,8 +10,8 @@ _LLMS = """# Docs index
 - [Unrelated](https://ex.com/docs/en/other/thing.md)
 """
 
-# The per-page banner GitBook-hosted llms.txt sites prepend (seen live on
-# code.claude.com): a blockquote pointing agents back at the index.
+# The per-page banner GitBook-hosted llms.txt sites prepend: a blockquote
+# pointing agents back at the index.
 _BANNER = (
     "> ## Documentation Index\n"
     "> Fetch the complete documentation index at: https://ex.com/llms.txt\n"
@@ -117,8 +117,8 @@ See https://github.com/acme/acme/blob/main/CONTRIBUTING.md for the process.
 
 
 def test_llms_full_txt_body_is_the_deliverable(tmp_path, monkeypatch):
-    """llms-full.txt IS the documentation, inlined. Link-scraping it threw the
-    body away and shipped whatever .md URLs its prose happened to cite."""
+    """llms-full.txt IS the documentation, inlined; link-scraping it would throw
+    the body away and ship whatever .md URLs its prose cites."""
 
     def fake(url, **kw):
         assert url == "https://docs.acme.com/llms-full.txt", f"unexpected fetch: {url}"
@@ -137,8 +137,8 @@ def test_llms_full_txt_body_is_the_deliverable(tmp_path, monkeypatch):
 
 
 def test_llms_full_txt_slug_comes_from_the_host(tmp_path, monkeypatch):
-    """`endswith("llms.txt")` is False for "llms-full.txt", so every host slugged
-    to the same `llms-full-txt` — and a second vendor's ingest wiped the first."""
+    """`endswith("llms.txt")` is False for "llms-full.txt", so a host-blind slug
+    puts every vendor on `llms-full-txt`, where a second ingest wipes the first."""
     monkeypatch.setattr(http, "fetch_text", lambda url, **kw: (url, _FULL))
     p = LlmsTxtPattern()
 
@@ -150,8 +150,8 @@ def test_llms_full_txt_slug_comes_from_the_host(tmp_path, monkeypatch):
 
 
 def test_match_survives_query_fragment_and_case(monkeypatch):
-    """`endswith` on the raw URL let a query string, fragment, or uppercase
-    spelling route llms-full.txt to docs_probe — which crawls the whole site
+    """`endswith` on the raw URL would let a query string, fragment, or uppercase
+    spelling route llms-full.txt to docs_probe, which crawls the whole site
     instead of taking the inlined body."""
     p = LlmsTxtPattern()
     assert p.match("https://docs.foo.com/llms-full.txt?v=2")
@@ -162,8 +162,8 @@ def test_match_survives_query_fragment_and_case(monkeypatch):
 
 
 def test_full_body_branch_survives_a_query_string(tmp_path, monkeypatch):
-    """A suffixed llms-full.txt URL fell into the index branch, which filtered
-    every .md link away and raised EmptyOutputError."""
+    """A suffixed llms-full.txt URL must not fall into the index branch, which
+    filters every .md link away and raises EmptyOutputError."""
     body = "# Docs\n\nAll the documentation, inlined.\n"
     monkeypatch.setattr(http, "fetch_text", lambda url, **kw: (url, body))
 
@@ -176,8 +176,8 @@ def test_full_body_branch_survives_a_query_string(tmp_path, monkeypatch):
 
 
 def test_section_prefix_drops_query_and_fragment(monkeypatch, tmp_path):
-    """A section base pasted with a tracking query filtered every .md link away
-    (nothing starts with the query'd prefix), staging 0 pages."""
+    """A section base pasted with a tracking query drops it before matching: no
+    .md link starts with the query'd prefix, so kept it would stage 0 pages."""
     index = "- [A](https://docs.foo.com/guide/a.md)\n- [B](https://docs.foo.com/other/b.md)\n"
     fetched: list = []
 
@@ -193,8 +193,8 @@ def test_section_prefix_drops_query_and_fragment(monkeypatch, tmp_path):
 
 
 def test_section_filter_stops_at_a_path_boundary(tmp_path, monkeypatch):
-    """A raw string prefix let a /guide seed absorb every sibling section whose
-    path merely starts with it, while the manifest claimed only /guide."""
+    """A raw string prefix would let a /guide seed absorb every sibling section
+    whose path merely starts with it, while the manifest claims only /guide."""
     index = (
         "- [A](https://docs.foo.com/guide/a.md)\n- [B](https://docs.foo.com/guide-advanced/b.md)\n"
     )
@@ -213,8 +213,9 @@ def test_section_filter_stops_at_a_path_boundary(tmp_path, monkeypatch):
 
 
 def test_section_filter_ignores_host_case(tmp_path, monkeypatch):
-    """An uppercase-host seed routes here but matched no lowercase .md link,
-    staging 0 pages and failing later as 'the source may have changed shape'."""
+    """An uppercase-host seed routes here and must still match the lowercase .md
+    links, or it stages 0 pages and fails later as 'the source may have changed
+    shape'."""
     index = "- [A](https://docs.claude.com/en/docs/claude-code/a.md)\n"
 
     def fake_fetch(url, **kw):
@@ -230,7 +231,7 @@ def test_section_filter_ignores_host_case(tmp_path, monkeypatch):
 
 def test_deep_path_llms_full_slug_folds_in_the_host(tmp_path, monkeypatch):
     """/docs/llms-full.txt is a common layout, so the last path segment alone
-    put two vendors on the slug 'docs'."""
+    would put two vendors on the slug 'docs'."""
     monkeypatch.setattr(http, "fetch_text", lambda url, **kw: (url, _FULL))
     p = LlmsTxtPattern()
 
@@ -257,8 +258,8 @@ def test_uppercase_llms_full_takes_the_body_branch(tmp_path, monkeypatch):
 
 
 def test_match_requires_the_whole_llms_basename(monkeypatch):
-    """Suffix matching claimed any file ending in the name, and acquire then
-    read that vendor file as if it were the llms.txt index."""
+    """Suffix matching would claim any file ending in the name, and acquire
+    would then read that vendor file as the llms.txt index."""
     p = LlmsTxtPattern()
     assert p.match("https://x.com/llms.txt")
     assert p.match("https://x.com/en/llms-full.txt")

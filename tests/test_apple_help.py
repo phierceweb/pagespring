@@ -1,5 +1,6 @@
 """apple_help — acquire (mocked fetch) + normalize (fixture)."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,7 @@ from pf_core.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns.apple_help import AppleHelpPattern, _parse_apple_url
+from pagespring.patterns.apple_help import CRAWL_FAILURES, AppleHelpPattern, _parse_apple_url
 
 FIXTURE = Path(__file__).parent / "fixtures" / "apple_help" / "numbers"
 
@@ -165,9 +166,8 @@ def _two_page_fetch():
 
 
 def test_capped_crawl_marks_the_result_truncated(tmp_path, monkeypatch):
-    """A cap that silently truncates is the Logic Pro failure: 1500 of 3935 pages
-    staged, and it passed every check because the guide had grown since the last
-    version. The cap must travel with the result, not just a log line."""
+    """A capped crawl passes every content check, so the cap must travel with the
+    result, not just a log line."""
     from pagespring.patterns import apple_help as mod
 
     monkeypatch.setattr(http, "fetch_text", _two_page_fetch())
@@ -194,13 +194,9 @@ def test_uncapped_crawl_is_not_truncated(tmp_path, monkeypatch):
 
 def test_same_topic_under_short_and_long_url_is_fetched_once(tmp_path, monkeypatch):
     """Apple links each topic BOTH as /<slug>-<token>/ and bare /<token>/. Both
-    resolve to the same page, so deduping on the raw path segment queues it twice.
-
-    Measured on the real Logic Pro guide: 3935 discovered ids were 1972 real
-    topics plus 1963 short-form duplicates — half of every crawl was re-fetching
-    pages already on disk, writing nothing. A watchdog counting saved files reads
-    that as a stall.
-    """
+    resolve to the same page, so deduping on the raw path segment queues it twice —
+    a re-fetch that writes nothing, which a watchdog counting saved files reads as a
+    stall."""
     welcome = (
         "<html><body>"
         '<a href="/guide/logicpro/aaf-files-lgcp6f2262ba/12.3/mac/15.6">long</a>'
@@ -335,10 +331,8 @@ def test_a_topic_whose_fetch_raises_counts_as_lost(tmp_path, monkeypatch):
 def test_stalled_crawl_stops_and_reports_truncated(tmp_path, monkeypatch):
     """A crawl that keeps fetching but stops producing pages must bail, not spin.
 
-    This is the shape of the real failure: duplicate ids meant ~1963 fetches that
-    all returned 200 and wrote nothing. Every request was healthy, so no timeout
-    applied. Bailing with work still queued makes it a truncated result, which
-    audit already fails.
+    Every request is healthy, so no timeout applies. Bailing with work still queued
+    makes it a truncated result, which audit fails.
     """
     from pagespring.patterns import apple_help as mod
 
@@ -395,8 +389,7 @@ def test_extract_body_drops_scripts_and_styles():
 
 
 def test_extract_body_drops_the_download_guides_widget():
-    """Apple bolts a "Download the guides" PDF-link block onto every topic —
-    1,969 copies of one string in the Logic Pro guide, 5% of its text."""
+    """Apple bolts a "Download the guides" PDF-link block onto every topic."""
     from pagespring.patterns._apple_merge import extract_body
 
     html = """<html><body><div id="article-section">
@@ -563,3 +556,171 @@ def test_a_seed_redirected_off_the_guide_does_not_crash(tmp_path, monkeypatch):
 
     with pytest.raises(InvalidInputError, match="no topic page"):
         AppleHelpPattern().normalize(acq, tmp_path)
+
+
+def _raw_from_fixture(tmp_path, *names, failed=None, welcome=None):
+    """A raw/ holding fixture pages; ``failed`` writes the crawl's failure record."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    for name in names:
+        (raw / name).write_text((FIXTURE / name).read_text(encoding="utf-8"), encoding="utf-8")
+    if welcome is not None:
+        (raw / "welcome.html").write_text(welcome, encoding="utf-8")
+    if failed is not None:
+        (raw / CRAWL_FAILURES).write_text(json.dumps({"failed": failed}), encoding="utf-8")
+    return raw
+
+
+_HOLLOW = '<html><body><div id="article-section"><p>gallery only</p></div></body></html>'
+
+
+def test_the_crawl_records_the_urls_it_failed_on_in_raw(tmp_path, monkeypatch):
+    """A replay has only raw/, so the crawl's losses must be there for it to count."""
+    dead = "https://support.apple.com/guide/numbers/topic-dead/14.0/mac/14.0"
+    welcome = f'<html><body><a href="{dead}">dead</a></body></html>'
+
+    def fetch(url, **kwargs):
+        if url == dead:
+            raise OSError("503 from Apple")
+        return url, welcome
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = AppleHelpPattern().acquire(
+        "https://support.apple.com/guide/numbers/welcome/mac", tmp_path
+    )
+
+    record = json.loads((acq.raw_dir / CRAWL_FAILURES).read_text(encoding="utf-8"))
+    assert record == {"failed": [dead]}
+
+
+def test_a_clean_crawl_records_that_nothing_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr(http, "fetch_text", _two_page_fetch())
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    acq = AppleHelpPattern().acquire(
+        "https://support.apple.com/guide/numbers/welcome/mac", tmp_path
+    )
+
+    record = json.loads((acq.raw_dir / CRAWL_FAILURES).read_text(encoding="utf-8"))
+    assert record == {"failed": []}
+
+
+def test_a_fetch_error_outside_the_toc_does_not_hide_a_merge_drop(tmp_path):
+    raw = _raw_from_fixture(
+        tmp_path,
+        "welcome.html",
+        "whats-new-num123.html",
+        "intro-tables-num456.html",
+        failed=["https://support.apple.com/guide/numbers/elsewhere-num999/mac"],
+    )
+    (raw / "hollow-num777.html").write_text(_HOLLOW, encoding="utf-8")
+    acq = AcquireResult(raw_dir=raw, kind="html", slug="numbers", pages=4, lost=1)
+
+    AppleHelpPattern().normalize(acq, tmp_path)
+
+    assert acq.lost == 2  # the failed fetch + the hollow page the merge dropped
+
+
+def test_a_failed_toc_topic_counts_once_under_either_link_form(tmp_path):
+    """Apple links a topic as `<words>-<token>` and as bare `<token>`: one topic."""
+    welcome = (FIXTURE / "welcome.html").read_text(encoding="utf-8")
+    welcome = welcome.replace("intro-tables-num456", "intro-tables-tan1a2b3c4d")
+    raw = _raw_from_fixture(
+        tmp_path,
+        "whats-new-num123.html",
+        welcome=welcome,
+        failed=["https://support.apple.com/guide/numbers/tan1a2b3c4d/mac"],
+    )
+    acq = AcquireResult(raw_dir=raw, kind="html", slug="numbers", pages=2, lost=1)
+
+    AppleHelpPattern().normalize(acq, tmp_path)
+
+    assert acq.lost == 1
+
+
+def test_a_replay_recomputes_lost_from_raw(tmp_path):
+    """A replay seeds `lost` from the manifest; a normalize that now recovers a topic
+    must be able to report fewer."""
+    raw = _raw_from_fixture(
+        tmp_path, "welcome.html", "whats-new-num123.html", "intro-tables-num456.html", failed=[]
+    )
+    acq = AcquireResult(raw_dir=raw, kind="html", slug="numbers", pages=3, lost=3)
+
+    AppleHelpPattern().normalize(acq, tmp_path)
+
+    assert acq.lost == 0
+
+
+def test_a_raw_dir_without_the_record_keeps_the_count_it_was_given(tmp_path):
+    raw = _raw_from_fixture(
+        tmp_path, "welcome.html", "whats-new-num123.html", "intro-tables-num456.html"
+    )
+    acq = AcquireResult(raw_dir=raw, kind="html", slug="numbers", pages=3, lost=2)
+
+    AppleHelpPattern().normalize(acq, tmp_path)
+
+    assert acq.lost == 2
+
+
+def test_an_unreadable_record_keeps_the_count_it_was_given(tmp_path):
+    raw = _raw_from_fixture(
+        tmp_path, "welcome.html", "whats-new-num123.html", "intro-tables-num456.html"
+    )
+    (raw / CRAWL_FAILURES).write_text('{"failed": [', encoding="utf-8")
+    acq = AcquireResult(raw_dir=raw, kind="html", slug="numbers", pages=3, lost=2)
+
+    AppleHelpPattern().normalize(acq, tmp_path)
+
+    assert acq.lost == 2
+
+
+def test_an_overridden_slug_still_checks_the_guides_own_toc(tmp_path):
+    """`--slug` renames the deliverable, not the guide its TOC links."""
+    welcome = (FIXTURE / "welcome.html").read_text(encoding="utf-8")
+    welcome = welcome.replace(
+        "<head>",
+        '<head><link rel="canonical" href="https://support.apple.com/guide/numbers/welcome/mac" />',
+    )
+    raw = _raw_from_fixture(tmp_path, "whats-new-num123.html", welcome=welcome, failed=[])
+    acq = AcquireResult(raw_dir=raw, kind="html", slug="numbers-user-guide", pages=2)
+
+    AppleHelpPattern().normalize(acq, tmp_path)
+
+    assert acq.lost == 1  # intro-tables-num456 is in the TOC but was never saved
+
+
+def test_renormalize_lowers_lost_once_the_replay_recovers_a_topic(tmp_path, monkeypatch):
+    from pagespring import manifest, orchestrate, renormalize
+
+    monkeypatch.setattr(orchestrate.cfg, "INCOMING_DIR", str(tmp_path / "incoming"))
+    slug_dir = tmp_path / "incoming" / "numbers"
+    slug_dir.mkdir(parents=True)
+    raw = _raw_from_fixture(
+        slug_dir, "welcome.html", "whats-new-num123.html", "intro-tables-num456.html", failed=[]
+    )
+    first = AcquireResult(raw_dir=raw, kind="html", slug="numbers", pages=3)
+    clean = AppleHelpPattern().normalize(first, tmp_path)
+    (slug_dir / "numbers.html").write_bytes(clean.read_bytes())
+    manifest.write_manifest(
+        slug_dir,
+        manifest.build_manifest(
+            source_url="https://support.apple.com/guide/numbers/welcome/mac",
+            pattern="apple_help",
+            slug="numbers",
+            kind="html",
+            deliverable="numbers.html",
+            pages=3,
+            size_bytes=clean.stat().st_size,
+            sha256=manifest.sha256_file(clean),
+            images=0,
+            ingested_at="2026-09-22T00:00:00Z",
+            kept_raw=True,
+            lost=1,  # an earlier normalize dropped a topic this one recovers
+        ),
+    )
+
+    renormalize.run_renormalize("numbers")
+
+    assert manifest.read_manifest(slug_dir)["lost"] == 0

@@ -4,10 +4,15 @@ Hugo publishes a ``sitemap.xml`` at its *site* root, which on a multi-site host
 is a subdirectory (``/<product>/<locale>/``) rather than the origin — so the
 sitemap is discovered by walking up from the given URL. Keep only pages under
 that URL's directory, so pointing at one product on a shared host doesn't drag
-in its siblings. Content lives in ``<main>`` across the Hugo docs themes.
+in its siblings. What one page holds is ``_hugo_page``'s concern.
 
-Hugo also publishes a ``/print/`` view holding the whole site concatenated at
-the site root; including it would duplicate every other page.
+The sitemap lists pages in no reading order, so they are staged in the order of
+the theme's sidebar. A crawl over the page cap keeps the pages that come first in
+the fullest sidebar on the entry page and the first few sitemap pages (a landing
+page may have none). A list page is dropped once every page it lists is staged,
+since it only repeats their excerpts. Hugo also publishes a ``/print/`` view
+holding the whole site concatenated at the site root; including it would
+duplicate every other page.
 """
 
 from __future__ import annotations
@@ -17,34 +22,45 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
-from bs4.element import Tag
-from pf_core.exceptions import InvalidInputError
+from pf_core.exceptions import ClientError, InvalidInputError
 from pf_core.log import get_logger
+from pf_core.utils.hashing import content_hash
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns._site import (
-    absolutize_refs,
-    flatten_responsive_images,
-    names_a_file,
-    strip_scripts,
+from pagespring.patterns._hugo_page import (
+    extract,
+    is_empty,
+    is_whole_section_view,
+    listed_pages,
+    sidebar,
 )
+from pagespring.patterns._nav_order import page_key, reading_order
+from pagespring.patterns._site import names_a_file, raw_stem
 
 log = get_logger(__name__)
 
 _MAX_PAGES = 6000
+_SIDEBAR_PROBES = 5
 _NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
 _LOC = f"{_NS}loc"
 _SITEMAP_EL = f"{_NS}sitemap"
-# Doc themes render the whole chapter list into every page, and most do it in a
-# plain <div> rather than a <nav>. These are the containers the shipped themes
-# use; an unlisted theme's sidebar simply survives, which is the safe failure.
-_CHROME_CSS = (
-    "nav, header, footer, div.drawer, div.book-menu, div.td-sidebar, aside.sidebar, #sidebar"
-)
+# Docsy writes the page kind on <body> as td-<kind>.
+_DOCSY_KINDS = frozenset({"td-home", "td-section", "td-page", "td-taxonomy", "td-term"})
 # The print view, and the taxonomy list pages Hugo auto-generates: those index the
 # manual rather than belonging to it, and their shell duplicates the home page.
 _GENERATED_SEGS = ("print", "categories", "tags")
+
+
+def is_docsy(html: str) -> bool:
+    """Docsy's page shell: a ``td-<kind>`` body class around its ``td-main`` layout.
+
+    A Docsy page may carry no generator tag; this tell routes it here all the same."""
+    soup = BeautifulSoup(html, "html.parser")
+    body = soup.body
+    if body is None or not _DOCSY_KINDS.intersection(body.get_attribute_list("class")):
+        return False
+    return soup.select_one(".td-main") is not None
 
 
 def _is_content_page(url: str, base: str, roots: set[str]) -> bool:
@@ -86,20 +102,6 @@ def _find_sitemap(base_dir: str) -> tuple[str, str]:
         segs.pop()
 
 
-def _extract(page_html: str, page_url: str) -> str | None:
-    """The page's ``<main>`` as a cleaned, absolutized fragment (None if absent)."""
-    soup = BeautifulSoup(page_html, "html.parser")
-    main = soup.find("main")
-    if not isinstance(main, Tag):
-        return None
-    for el in main.select(_CHROME_CSS):
-        el.decompose()
-    strip_scripts(main)
-    flatten_responsive_images(main)
-    absolutize_refs(main, page_url)
-    return str(main)
-
-
 def _page_locs(sitemap_url: str, sitemap: str) -> tuple[list[str], set[str], bool]:
     """Page URLs from a sitemap, the site roots (sitemap directories) it spans, and
     whether any child sitemap was unreadable.
@@ -128,11 +130,34 @@ def _page_locs(sitemap_url: str, sitemap: str) -> tuple[list[str], set[str], boo
             _f, body = http.fetch_text(child_url)
             locs.extend(x.text.strip() for x in ET.fromstring(body).iter(_LOC) if x.text)
             roots.add(child_url.rsplit("/", 1)[0])
-        except (OSError, ET.ParseError) as exc:
+        except (OSError, ET.ParseError, ClientError) as exc:
             child_failed = True
             log.warning("hugo.child_sitemap_error", url=child_url, error=str(exc))
         http.polite_sleep()
     return locs, roots, child_failed
+
+
+def _fullest_sidebar(
+    urls: list[str], keys: set[str], fetched: dict[str, tuple[str, str]]
+) -> list[str]:
+    """The sidebar on ``urls`` that lists the most of ``keys``; each page fetched is
+    kept in ``fetched`` for the crawl."""
+    best: list[str] = []
+    for url in urls:
+        if page_key(url) in fetched:
+            continue
+        try:
+            final, body = http.fetch_text(url)
+        except Exception as exc:
+            log.warning("hugo.sidebar_probe_error", url=url, error=str(exc))
+            continue
+        finally:
+            http.polite_sleep()
+        fetched[page_key(url)] = (final, body)
+        nav = sidebar(BeautifulSoup(body, "html.parser"), final)
+        if len(keys.intersection(nav)) > len(keys.intersection(best)):
+            best = nav
+    return best
 
 
 def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> AcquireResult:
@@ -140,42 +165,84 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     sitemap_url, sitemap = _find_sitemap(base)
     locs, roots, child_failed = _page_locs(sitemap_url, sitemap)
 
-    pages = [u for u in locs if _is_content_page(u, base, roots | {base})]
+    unique: dict[str, str] = {}
+    for url in locs:
+        if _is_content_page(url, base, roots | {base}):
+            unique.setdefault(page_key(url), url)
+    pages = list(unique.values())
     truncated = child_failed or len(pages) > _MAX_PAGES
+    fetched: dict[str, tuple[str, str]] = {}
     if len(pages) > _MAX_PAGES:
         log.warning("hugo.capped", found=len(pages), cap=_MAX_PAGES)
-        pages = pages[:_MAX_PAGES]
+        probes = [base_url, *pages[:_SIDEBAR_PROBES]]
+        pages = reading_order(pages, _fullest_sidebar(probes, set(unique), fetched))[:_MAX_PAGES]
+    keys = {page_key(u) for u in pages}
 
     raw_dir = workdir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    saved = 0
+    staged: dict[str, Path] = {}
+    digests: set[str] = set()
+    have: set[str] = set()
+    listings: dict[str, set[str]] = {}
+    order: list[str] = []
+    listed = 0
     lost = 0
     for i, page in enumerate(pages):
+        prefetched = fetched.pop(page_key(page), None)
         try:
-            final, body = http.fetch_text(page)
+            final, body = prefetched or http.fetch_text(page)
         except Exception as exc:
             lost += 1
             log.warning("hugo.fetch_error", url=page, error=str(exc))
-            http.polite_sleep()
             continue
-        fragment = _extract(body, final)
+        finally:
+            http.polite_sleep()
+        soup = BeautifulSoup(body, "html.parser")
+        if is_whole_section_view(soup):
+            log.info("hugo.whole_section_view", url=page)
+            continue
+        # Read before extract, which strips a sidebar nested in the container.
+        nav = sidebar(soup, final)
+        if (hits := len(keys.intersection(nav))) > listed:
+            order, listed = nav, hits
+        fragment = extract(soup, final)
         if fragment is None:
             lost += 1
             log.warning("hugo.no_main", url=page)
-            http.polite_sleep()
             continue
-        stem = urlparse(page).path.strip("/").replace("/", "-") or "index"
-        (raw_dir / f"{i:04d}-{stem}.html").write_text(
+        if is_empty(fragment):
+            log.info("hugo.empty_page", url=page)
+            continue
+        # A sitemap entry that redirects to another page is that page again.
+        digest = content_hash(fragment)
+        have.update((page_key(page), page_key(final)))
+        if digest in digests:
+            log.info("hugo.duplicate_page", url=page)
+            continue
+        digests.add(digest)
+        crawled = raw_dir / f"crawl-{i:04d}.html"
+        crawled.write_text(
             f"<!-- source: {page} -->\n<section>\n{fragment}\n</section>\n", encoding="utf-8"
         )
-        saved += 1
-        http.polite_sleep()
+        staged[page] = crawled
+        if entries := listed_pages(fragment, final):
+            listings[page] = entries
+
+    for page, entries in listings.items():
+        if entries <= have:
+            log.info("hugo.list_page", url=page, entries=len(entries))
+            staged.pop(page).unlink()
+
+    for n, page in enumerate(reading_order(list(staged), order)):
+        stem = raw_stem(urlparse(page).path.removesuffix(".html"))
+        staged[page].rename(raw_dir / f"{n:04d}-{stem}.html")
 
     log.info(
         "hugo.acquire",
         base=base,
         sitemap=sitemap_url,
-        pages=saved,
+        pages=len(staged),
+        sidebar_pages=listed,
         slug=slug,
         truncated=truncated,
     )
@@ -183,7 +250,7 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
         raw_dir=raw_dir,
         kind="html",
         slug=slug,
-        pages=saved,
+        pages=len(staged),
         title=title,
         truncated=truncated,
         lost=lost,

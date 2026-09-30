@@ -51,8 +51,12 @@ def _inline_scripts(soup: BeautifulSoup) -> list[str]:
     return [t for t in texts if not t.lstrip().startswith(_PAYLOAD_PREFIX)]
 
 
+UI_NAMES = ("redoc", "scalar", "swagger-ui")
+
+
 def ui_name(html: str) -> str | None:
-    """The API reference UI a page is built on, from its elements and scripts."""
+    """The API reference UI a page is built on (one of ``UI_NAMES``), from its
+    elements and scripts."""
     soup = BeautifulSoup(html, "html.parser")
     srcs = " ".join(str(s.get("src") or "") for s in soup.find_all("script")).lower()
     inline = " ".join(_inline_scripts(soup))

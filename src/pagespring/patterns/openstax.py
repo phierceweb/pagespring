@@ -123,7 +123,6 @@ def _walk_to_first(seed: str) -> tuple[str, str]:
 
 class OpenStaxPattern:
     name = "openstax"
-    # Large multi-chapter books; pagespeak downloads the absolute image URLs.
 
     def match(self, url: str) -> bool:
         p = urlparse(url)

@@ -92,12 +92,9 @@ def test_keeps_the_content_container_and_strips_in_container_chrome(tmp_path, mo
 
     assert "Insert the plug-in on a track." in joined
     assert "nav chrome" not in joined  # outside the container
-    # These two sit INSIDE the container on every real page, so an outer-only
-    # strip leaves a copyright line and a "Next" link on each topic.
+    # The footer, both pager links and the mini-TOC sit INSIDE the container, so an
+    # outer-only strip leaves them on every topic.
     assert "© Vendor" not in joined
-    # All three pager/mini-TOC variants, not just Next: an independent audit of the
-    # real VocAlign ingest found 27 surviving Previous links and 117 CHMiniToc
-    # entries, because only the one selector I happened to see was stripped.
     assert "CHNavLinkNext" not in joined
     assert "CHNavLinkPrevious" not in joined
     assert "CHMiniToc" not in joined
@@ -116,11 +113,11 @@ def test_absolutizes_relative_asset_refs(tmp_path, monkeypatch):
 
 def test_slug_comes_from_the_url_path_not_the_host(tmp_path, monkeypatch):
     """One vendor hosts many manuals under one host — a host-derived slug would
-    collide across products (synchroarts ships VocAlign, Revoice Pro, RePitch...)."""
+    collide across products."""
     assert _clickhelp.slug_from_path(ENTRY) == "widget"
-    assert _clickhelp.slug_from_path(
-        "https://x.example/manuals/VocAlign6Pro/Manual/HTML/a.html"
-    ) == ("vocalign6pro")
+    assert _clickhelp.slug_from_path("https://x.example/manuals/Widget6Pro/Manual/HTML/a.html") == (
+        "widget6pro"
+    )
 
 
 def test_missing_toc_is_an_input_error(tmp_path, monkeypatch):
@@ -136,8 +133,8 @@ def test_toc_without_topics_is_an_input_error(tmp_path, monkeypatch):
 
 
 def test_a_topic_without_the_content_container_counts_as_lost(tmp_path, monkeypatch):
-    """A 200 topic whose container is absent was dropped silently — only fetch
-    errors counted, so a theme change audited clean while shipping short."""
+    """A 200 topic whose container is absent is lost, not silently dropped — else a
+    theme change audits clean while shipping short."""
     no_container = "<html><body class='WebHelp_body'><div>theme changed</div></body></html>"
 
     def fetch(url, **kwargs):
@@ -157,8 +154,8 @@ def test_a_topic_without_the_content_container_counts_as_lost(tmp_path, monkeypa
 
 
 def test_a_topic_id_holding_a_path_separator_is_flattened_into_the_filename(tmp_path, monkeypatch):
-    """The tid is remote-controlled; one holding "/" named a directory that was
-    never created, so the whole acquire died with FileNotFoundError."""
+    """The tid is remote-controlled; a "/" in it must not name a missing directory
+    and abort the whole acquire."""
     seen: list[str] = []
     toc = """window['tocTree']=new CHTree('pnlToc',[{"e":"guide/setup","t":"Setup"}]);"""
     monkeypatch.setattr(http, "fetch_text", _fetch(seen, toc=toc))

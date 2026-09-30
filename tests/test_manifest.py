@@ -60,8 +60,8 @@ def test_build_manifest_carries_all_fields():
 
 
 def test_manifest_carries_no_conversion_instructions():
-    """pagespring records what a source IS, never how to convert it — that
-    decision is pagespeak's, and a hint staged here silently goes stale."""
+    """pagespring records what a source IS, never how to convert it; a conversion
+    hint staged here silently goes stale."""
     assert "convert_recipe" not in _sample()
 
 
@@ -134,3 +134,15 @@ def test_a_failed_write_leaves_the_previous_manifest_intact(tmp_path, monkeypatc
     assert manifest.read_manifest(tmp_path) == original, "the old manifest was destroyed"
     strays = list(tmp_path.glob(f".{manifest.MANIFEST_NAME}.*"))
     assert not strays, f"temp file left behind: {strays}"
+
+
+def test_the_architecture_doc_shows_the_current_manifest_schema():
+    import json
+    import re
+    from pathlib import Path
+
+    doc = (Path(__file__).parents[1] / "docs" / "architecture.md").read_text(encoding="utf-8")
+    sample = json.loads(re.search(r"```json\n(\{\n  \"schema_version\".*?\n\})\n```", doc, re.S)[1])
+
+    assert sample["schema_version"] == manifest.SCHEMA_VERSION
+    assert set(sample) == set(manifest.Manifest.__annotations__) - {"image_pass_open"}

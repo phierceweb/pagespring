@@ -4,7 +4,129 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
-## [0.12.0] — 2026-09-10
+## [0.13.0] — 2026-09-30
+
+### Added
+
+- **`ingest --batch <file>`** ingests each URL or path in a file, one per line;
+  blank lines and `#` comments are skipped. The ingest flags apply to every line,
+  lines are paced, a failed line is reported and the batch carries on, and a
+  repeated URL is skipped. No line takes over a slug an earlier line staged, even
+  with `--replace`. One status line per URL, then a summary; exit 1 if any
+  line failed, 2 if the file can't be read or holds no URLs, or if a URL or
+  `--slug` is given beside `--batch`.
+- **`docs_probe` recognizes more documentation platforms**, each acquired from
+  the most complete ordered source it publishes:
+  - **mdBook**: the whole book from `print.html`, else a crawl in TOC order.
+  - **Writerside**: topics from `HelpTOC.json`, in TOC order and nesting; a
+    starting page keeps its cards' one-line descriptions.
+  - **Antora**: the one component version the URL names, in nav order, plus
+    pages only the component's sitemap lists.
+  - **Starlight**: the sitemap in sidebar order, scoped to the seed's locale.
+  - **VitePress**: the server-rendered sidebars, the entry's section first.
+  - **Docsify**: the raw markdown the sidebar files list (the one in each page's
+    directory and above it), routed as the runtime routes it, `ext` included,
+    with `:include` embeds inlined and `:omitFragmentLine` honoured. A page only
+    another page's text links to is staged after it when it sits in a directory
+    the sidebar covers; a dead link there is not a lost page.
+  - **MediaWiki**: the seed page plus the pages it links to, through the action
+    API.
+  - **Docsy** without a Hugo generator tag goes to the Hugo crawl.
+- **`sitemap_crawl`**: a URL naming a sitemap file (`sitemap.xml`,
+  `sitemap-index.xml`, …) crawls the pages it lists under its directory and
+  keeps each page's main content.
+- **MathJax formulas keep their text**: a formula drawn as SVG glyphs is rebuilt
+  as MathML (Writerside, and pages extracted as readable content).
+- **VitePress and readable extraction flatten shiki code blocks** to plain text,
+  keeping the language and line breaks.
+- **`github_markdown` reads MDX**: `.mdx` files are listed beside `.md` (and a
+  `/blob/` URL naming one is claimed), reduced to markdown with imports,
+  exports and component tags dropped and their text kept. A directory's
+  `index.md`/`index.mdx` leads it, and a page's front matter gives way to its
+  `title` as the page heading (`.md` pages too).
+- **`PAGESPRING_MAX_EXTRACT_BYTES`** sets a doc archive's extraction budget.
+- **`refresh` takes several slugs, or `--pattern <name>` (repeatable)** to sweep
+  only the slugs a pattern acquired, so the one-request PDF sources can be
+  re-checked apart from the crawls. An unknown pattern name, slugs mixed with
+  `--all`/`--pattern`, or a named slug with no readable manifest exits 2 before
+  anything is fetched.
+- **`classify --probe <url>`** names the route `docs_probe` would take — the
+  evidence it matched and every generator tag — from the entry page and the
+  probes the ladder needs, without crawling. Exit 2 when nothing recognizes
+  the site, 4 when the fetch fails. An unrecognized site's refusal, from
+  `ingest` too, names the generator tags the page carries.
+
+### Changed
+
+- **`docs_probe` reads every `<meta name="generator">` tag**, not just the
+  first, so a platform that names itself after its framework (Astro, then
+  Starlight) is visible to detection.
+- **`docs_probe` follows a same-site `<meta http-equiv="refresh">` entry page**
+  before detecting; a refresh inside `<noscript>`, or a delayed one (a session
+  timeout), is not followed. A PDF reached through one, even one too large to
+  read as a page, keeps no validators, so `refresh` re-fetches it.
+- **The Hugo crawl** stages pages in the theme sidebar's order and caps after
+  ordering, so a capped crawl keeps the first pages in reading order. It reads
+  Docsy content from `div.td-content`, strips Docsy, Hugo Book and Geekdoc
+  chrome, stages each URL spelling of a page once, skips a page with nothing to
+  read, and drops a list page once every page it lists is staged.
+- **`slug_from_host` drops a leading `wiki` label**, as it drops `docs` and `help`.
+- **pf-core pin raised to `~=0.24.0`.** A validator probe (`refresh`, and the
+  image re-check on a re-localize) also counts a 200 that carries the strong
+  `ETag` it sent as unchanged, so a server that ignores conditional requests no
+  longer forces a re-download.
+
+### Fixed
+
+- **A section URL on a site whose `llms.txt` sits above it stages that section**,
+  not the whole index; the host match ignores `www.` and the scheme.
+- **Link rewriting leaves indented code blocks as written**, and resolves a link
+  whose label is a code span.
+- **A leading `---` block is front matter only when it reads as YAML keys**, so a
+  callout framed by rules (`Note: …`) keeps its text. Docsy's per-page
+  `llms.txt` pointer is dropped.
+- **An EPUB or doc-archive deliverable keeps its figures**: image refs naming
+  archive members are copied into `incoming/<slug>/images/` and re-pointed (on
+  `ingest` and a changed `renormalize`), a missing member audits as
+  `broken_image_ref`, and the manifest records the images and their hash. In a
+  markdown member every ref outside code is re-pointed, and an rst member's
+  `image` and `figure` directives are bundled. An EPUB is titled from its OPF
+  and leaves out its navigation document and Project Gutenberg's license
+  boilerplate.
+- **Links between EPUB or HTML-archive members point inside the deliverable**
+  (`chapter.xhtml#x` becomes `#x`). An id an earlier member already holds is
+  renamed, with the links to it, so each link lands in the member it names.
+- **SIGTERM and SIGHUP stop a run cleanly** (exit 128+signal); an image pass cut
+  short keeps its integrity record.
+- **A killed image pass is told apart from damage**: `localize` records the pass
+  as open in the manifest (an optional `image_pass_open` field; manifest schema
+  v7) instead of clearing the hash, so a SIGKILL mid-pass resumes on the next run
+  while a file changed anywhere else still refuses. `audit` reports an open pass
+  as `localize_interrupted`.
+- **Apple `lost` counts the union of fetch failures, TOC topics never saved and
+  merge drops**, recorded in `raw/`, so `renormalize` can lower it. An Apple
+  ingest with `--slug` checks the guide's own TOC.
+- **Paligo topics drop their breadcrumb.**
+- **OpenAPI parameter tables escape `|` and fold line breaks in every cell**, so
+  a 3.1 type list (`integer | null`), a description containing a bar, or one
+  with `\r\n` line endings no longer shifts or splits the row.
+- **An unchanged re-fetch records the `ETag`/`Last-Modified` it was served**
+  (`ingest --if-changed`, `refresh`), so a source that re-stamps an identical
+  file answers the next refresh probe with a 304 instead of a full download.
+- **`refresh` probes the stored validators of any PDF deliverable**, including
+  one `docs_probe` found at an extensionless URL, instead of re-downloading it
+  on every sweep.
+- **`docs_probe` waits the polite delay between its last probe and the first
+  request of the strategy it hands off to.**
+- **`audit`'s `duplicate_source_url` matches every spelling of one source** the
+  ingest guard treats as the same (`http://www.` and `https://` of one URL, a
+  trailing slash, a fragment; a local file by resolved path).
+- **A Hugo child sitemap over the size cap or with a damaged gzip body marks the
+  crawl truncated** instead of failing the ingest, as an unreachable one does.
+- **A Hugo or `github_markdown` page at a very long path stages** instead of
+  failing the ingest on the file-name limit.
+
+## [0.12.0] — 2026-09-14
 
 ### Changed
 
@@ -100,7 +222,7 @@ semantic versioning.
   ignores wrong-typed fields instead of crashing; Postman renders folder and
   request descriptions, query parameters, path variables, and every body mode.
 
-## [0.11.0] — 2026-08-29
+## [0.11.0] — 2026-08-30
 
 ### Changed
 
@@ -247,7 +369,7 @@ semantic versioning.
   before the deliverable is copied, so a run killed mid-copy leaves provenance
   and the same URL can simply be re-ingested.
 
-## [0.9.0] — 2026-08-05
+## [0.9.0] — 2026-08-07
 
 ### Added
 

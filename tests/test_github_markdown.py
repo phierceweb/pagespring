@@ -2,7 +2,10 @@
 
 import json
 
+import pytest
+
 from pagespring import http
+from pagespring.base import AcquireResult
 from pagespring.patterns import github_markdown
 from pagespring.patterns.github_markdown import GitHubMarkdownPattern
 
@@ -348,6 +351,20 @@ def test_an_uppercase_md_extension_reaches_the_deliverable(tmp_path, monkeypatch
     assert "# page docs/Usage.MD" in text
 
 
+def test_a_file_at_a_long_path_stages_under_a_short_file_name(tmp_path, monkeypatch):
+    long_path = "docs/" + "a" * 300 + ".mdx"  # past a file name's 255-byte limit
+    monkeypatch.setattr(http, "fetch_text", _tree_fetch(["docs/intro.md", long_path]))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    p = GitHubMarkdownPattern()
+
+    acq = p.acquire("https://github.com/o/r", tmp_path)
+    text = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert acq.pages == 2
+    assert f"# page {long_path}" in text
+    assert max(len(f.name) for f in acq.raw_dir.iterdir()) <= 100
+
+
 def test_numbered_files_order_numerically(tmp_path, monkeypatch):
     monkeypatch.setattr(
         http, "fetch_text", _tree_fetch(["10-advanced.md", "2-install.md", "1-intro.md"])
@@ -393,3 +410,99 @@ def test_a_directory_readme_leads_its_siblings(tmp_path, monkeypatch):
     assert [text.index(f"# page {path}") for path in order] == sorted(
         text.index(f"# page {path}") for path in order
     )
+
+
+def test_mdx_pages_are_listed_and_reach_the_deliverable_without_jsx(tmp_path, monkeypatch):
+    pages = {
+        "docs/intro.mdx": 'import X from "./x"\n\n# Intro\n\n<Callout>\nRead this.\n</Callout>\n',
+        "docs/guide.md": "# Guide\n\n<Keep>markdown is not MDX</Keep>\n",
+    }
+    tree = json.dumps({"tree": [{"path": p, "type": "blob"} for p in pages]})
+
+    def fake(url, **kwargs):
+        if url.endswith("/repos/o/r"):
+            return url, '{"default_branch": "main"}'
+        if "/git/trees/" in url:
+            return url, tree
+        return url, pages[url.rsplit("/main/", 1)[-1]]
+
+    monkeypatch.setattr(http, "fetch_text", fake)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    p = GitHubMarkdownPattern()
+
+    acq = p.acquire("https://github.com/o/r", tmp_path)
+    text = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert acq.pages == 2
+    assert "Read this." in text
+    assert "<Callout>" not in text
+    assert "import X" not in text
+    assert "<Keep>markdown is not MDX</Keep>" in text
+
+
+def test_an_mdx_blob_url_is_claimed():
+    p = GitHubMarkdownPattern()
+    assert p.match("https://github.com/vercel/next.js/blob/canary/docs/index.mdx")
+    assert github_markdown._parse_repo(
+        "https://github.com/vercel/next.js/blob/canary/docs/01-app/index.mdx"
+    ) == ("vercel", "next.js", "canary", "docs/01-app")
+
+
+def test_a_directory_index_leads_its_siblings(tmp_path, monkeypatch):
+    """`index.mdx` is the page a docs directory opens on, like its README."""
+    monkeypatch.setattr(
+        http,
+        "fetch_text",
+        _tree_fetch(
+            ["docs/01-install.mdx", "docs/index.mdx", "docs/02-pages/index.mdx", "index.md"]
+        ),
+    )
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    p = GitHubMarkdownPattern()
+
+    text = p.normalize(p.acquire("https://github.com/o/r", tmp_path), tmp_path).read_text(
+        encoding="utf-8"
+    )
+
+    order = ["index.md", "docs/index.mdx", "docs/01-install.mdx", "docs/02-pages/index.mdx"]
+    positions = [text.index(f"# page {path}") for path in order]
+    assert positions == sorted(positions)
+
+
+def test_repo_meta_in_mdx_is_excluded(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        http,
+        "fetch_text",
+        _tree_fetch(["README.mdx", "CHANGELOG.mdx", "docs/README.mdx", "docs/guide.mdx"]),
+    )
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    p = GitHubMarkdownPattern()
+
+    acq = p.acquire("https://github.com/o/r", tmp_path)
+    text = p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert acq.pages == 2
+    assert "# page docs/README.mdx" in text
+    assert "# page README.mdx" not in text
+    assert "CHANGELOG" not in text
+
+
+@pytest.mark.parametrize("suffix", [".md", ".mdx"])
+def test_front_matter_gives_way_to_its_title_as_the_page_heading(tmp_path, suffix):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / f"0000-intro{suffix}").write_text(
+        "<!-- source: https://x/intro -->\n\n---\ntitle: Getting Started\n"
+        "description: Learn the basics.\n---\n\nWelcome to the docs.\n",
+        encoding="utf-8",
+    )
+    (raw / f"0001-setup{suffix}").write_text(
+        "---\ntitle: Setup\n---\n\n# Installing\n\nRun the installer.\n", encoding="utf-8"
+    )
+    acq = AcquireResult(raw_dir=raw, kind="markdown", slug="repo", pages=2)
+
+    out = GitHubMarkdownPattern().normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+    assert "title:" not in out and "description:" not in out
+    assert "<!-- source: https://x/intro -->\n\n# Getting Started\n\nWelcome to the docs." in out
+    assert "# Installing\n\nRun the installer." in out and "# Setup" not in out

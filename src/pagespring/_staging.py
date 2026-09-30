@@ -11,8 +11,9 @@ from pf_core.exceptions import InvalidInputError
 from pf_core.utils.io import atomic_write_bytes
 from pf_core.utils.url_parse import canonical_url
 
-from pagespring import manifest
+from pagespring import _image_cache, images, manifest
 from pagespring._integrity import deliverable_intact, usable
+from pagespring.base import IMAGES_DIR
 from pagespring.config import cfg
 
 
@@ -28,24 +29,24 @@ def _local_path(source: str) -> str | None:
             return None
         raw = url2pathname(parts.path) if parts.scheme else source
         return str(Path(raw).resolve())
-    except (AttributeError, OSError, TypeError, ValueError):  # a hand-edited manifest
+    # RuntimeError: a symlink loop, on Python 3.12's Path.resolve.
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return None
 
 
-def _same_source(held_url: str, url: str) -> bool:
-    """Whether a slug dir's recorded source and an incoming URL name one manual.
+def source_key(source: str) -> str:
+    """The identity every spelling of one manual's source shares.
 
-    ``canonical_url`` returns "" for any non-http scheme, so local sources compare
+    ``canonical_url`` returns "" for any non-http scheme, so local sources key
     by resolved path: the same file typed ``./spec.json``, ``spec.json`` or
-    ``file://`` is one manual.
+    ``file://`` is one manual. Anything else keys as written.
     """
-    held_canonical, url_canonical = canonical_url(held_url), canonical_url(url)
-    if held_canonical and url_canonical:
-        return held_canonical == url_canonical
-    held_local, url_local = _local_path(held_url), _local_path(url)
-    if held_local and url_local:
-        return held_local == url_local
-    return held_url == url
+    return canonical_url(source) or _local_path(source) or source
+
+
+def _same_source(held_url: str, url: str) -> bool:
+    """Whether a slug dir's recorded source and an incoming URL name one manual."""
+    return source_key(held_url) == source_key(url)
 
 
 def _unchanged_record(incoming_dir: Path, url: str, sha256: str) -> manifest.Manifest | None:
@@ -68,9 +69,11 @@ def _guard_slug(
     pages: int | None,
     truncated: bool,
     single_fetch: bool,
+    protected: bool = False,
 ) -> bool:
     """Refuse to stage ``url`` over what ``incoming_dir`` holds; return whether
-    staging takes the slug over from a different manual."""
+    staging takes the slug over from a different manual. A ``protected`` slug is
+    never taken over."""
     if not incoming_dir.exists():
         return False
     slug = incoming_dir.name
@@ -83,6 +86,12 @@ def _guard_slug(
         # Nothing here can say what it holds, so content means refuse.
         takeover = any(incoming_dir.iterdir())
         holds = "an unidentified manual (no readable manifest)"
+    if takeover and protected:
+        raise InvalidInputError(
+            f"slug {slug!r} holds {holds}, staged earlier in this batch — ingesting "
+            f"{url!r} would delete it. Ingest this URL on its own with --slug to give "
+            "it its own directory."
+        )
     if takeover and not replace:
         own_dir = "--slug to give this source its own directory"
         escape = "a different --slug" if slug_override is not None else own_dir
@@ -157,3 +166,28 @@ def _clear_except(directory: Path, *, keep: set[str]) -> None:
             shutil.rmtree(entry, ignore_errors=True)
         else:
             entry.unlink(missing_ok=True)
+
+
+def stage_bundled_images(clean: Path, staged: Path, incoming_dir: Path) -> int | None:
+    """Copy the files a pattern bundled beside ``clean`` into ``incoming_dir/images/``.
+
+    Returns how many files images/ then holds, or None when nothing was bundled. A
+    bundled file owns its name, so a localize record under it is dropped; files the
+    staged deliverable no longer references are pruned (see ``prune_orphans``).
+    """
+    bundle = clean.parent / IMAGES_DIR
+    if not bundle.is_dir():
+        return None
+    images_dir = incoming_dir / IMAGES_DIR
+    images_dir.mkdir(parents=True, exist_ok=True)
+    names = set()
+    for src in sorted(bundle.iterdir()):
+        if src.is_file():
+            atomic_write_bytes(images_dir / src.name, src.read_bytes())
+            names.add(src.name)
+    records = images.read_sidecar(incoming_dir)
+    kept = [r for r in records if r["local"] not in names]
+    if len(kept) < len(records):
+        images.write_sidecar(incoming_dir, kept)
+    _image_cache.prune_orphans(staged, incoming_dir)
+    return sum(1 for p in images_dir.iterdir() if p.is_file())

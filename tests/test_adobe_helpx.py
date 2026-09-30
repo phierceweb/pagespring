@@ -2,10 +2,6 @@
 
 helpx emits no ``<meta name="generator">``; the guide is identified by host and
 the ``ul.tocList`` index, which lists every topic as a leaf link.
-
-The trap this pattern exists to avoid: ``<main>`` **contains** the TOC sidebar,
-so the whole 490-entry navigation is inside the content container on every page.
-Keeping it would bury ~700 KB of real content under ~8 MB of repeated nav.
 """
 
 import pytest
@@ -161,8 +157,7 @@ def test_normalize_merges_pages(tmp_path, monkeypatch):
 
 
 def test_inline_script_and_style_are_dropped(tmp_path, monkeypatch):
-    """helpx inlines a <style> block per component — 12,378 of them on Illustrator,
-    32% of the deliverable. They carry no content and bloat the hand-off."""
+    """helpx inlines a <style> block per component; none of them carry content."""
     styled = _TOPIC.replace(
         "<h1>Workspace basics</h1>",
         "<style>.dexter-Foo{color:red}</style><script>window.x=1</script><h1>Workspace basics</h1>",
@@ -184,10 +179,8 @@ def test_inline_script_and_style_are_dropped(tmp_path, monkeypatch):
 
 
 def test_extract_drops_every_aem_chrome_component():
-    """helpx bolts five AEM components onto every topic inside <main> — promo
-    cards, the feedback widget, prev/next arrows, social share, and the CTA
-    footer experience-fragment. One set per page, ~490 pages, no documentation
-    in any of them."""
+    """helpx bolts a set of AEM components onto every topic inside <main>, none of
+    them documentation."""
     html = """<html><body><main>
       <h1>Draw with the Pen tool</h1><p>Real documentation.</p>
       <div class="dexter-FlexContainer">

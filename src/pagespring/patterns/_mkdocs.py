@@ -26,8 +26,8 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     base = base_url.rstrip("/")
     idx_url = f"{base}/search/search_index.json"
     final_url, body = http.fetch_text(idx_url)
-    # Pages live relative to where the index actually resolved, not the URL we
-    # asked for — a redirect (e.g. to /en/latest/) would otherwise stamp stale
+    # Pages live relative to where the index actually resolved, not the URL
+    # requested — a redirect (e.g. to /en/latest/) would otherwise stamp stale
     # source comments.
     suffix = "/search/search_index.json"
     final_base = final_url[: -len(suffix)] if final_url.endswith(suffix) else base

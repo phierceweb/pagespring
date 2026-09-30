@@ -20,6 +20,19 @@ def test_slug_from_host():
     assert slug_from_host("squidfunk.github.io") == "squidfunk"
 
 
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/guide/Getting_Started", "guide-getting-started"),
+        ("/", "index"),
+        ("/zh/" + "%E5%BF%AB" * 40, ("zh-" + "e5-bf-ab-" * 9)[:80].rstrip("-")),
+    ],
+)
+def test_raw_stem_is_a_short_slug_of_the_path(path, expected):
+    assert _site.raw_stem(path) == expected
+    assert slug_from_host("wiki.zynthian.org") == "zynthian"
+
+
 def test_page_title_and_generator_meta():
     html = (
         "<html><head><title> MkDocs </title>"
@@ -57,8 +70,8 @@ def _flat(html: str) -> str:
 
 def test_picture_collapses_to_its_img():
     """Apple ships <source media="(not all)"> — a query that never matches —
-    holding the dark-mode variant. It is inert markup the localizer cannot see,
-    and every <picture> in the corpus has an <img> fallback."""
+    holding the dark-mode variant. It is inert markup the localizer cannot see;
+    the <img> fallback carries the image."""
     out = _flat(
         '<picture><source media="(not all)" srcset="https://cdn/dark.png"/>'
         '<img alt="Main window" src="https://cdn/light.png"/></picture>'
@@ -209,8 +222,7 @@ def test_root_relative_promotion_is_absolutized():
 
 
 def test_largest_declared_width_wins_across_candidates():
-    """The corpus feeds a vision pass, so resolution is the goal. Width comes
-    from a srcset `w` descriptor or a `wid=` query param."""
+    """Width comes from a srcset `w` descriptor or a `wid=` query param."""
     out = _flat(
         "<picture>"
         '<source media="(min-width: 1200px)" data-srcset="https://s7/x?$png$&amp;wid=1199"/>'
@@ -268,11 +280,11 @@ def test_dead_build_metadata_is_dropped():
     [
         ("https://docs.tableplus.com", ["https://docs.tableplus.com/llms.txt"]),
         (
-            "https://resend.com/docs/introduction",
+            "https://vendor.example/docs/introduction",
             [
-                "https://resend.com/docs/introduction/llms.txt",
-                "https://resend.com/docs/llms.txt",
-                "https://resend.com/llms.txt",
+                "https://vendor.example/docs/introduction/llms.txt",
+                "https://vendor.example/docs/llms.txt",
+                "https://vendor.example/llms.txt",
             ],
         ),
         (
@@ -284,3 +296,99 @@ def test_dead_build_metadata_is_dropped():
 )
 def test_llms_index_candidates_run_from_the_seed_up_to_the_root(url, expected):
     assert _site.llms_index_candidates(url) == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "section", "expected"),
+    [
+        ("https://docs.x.com/guide", "https://docs.x.com/guide", True),
+        ("https://docs.x.com/guide/a/b.md", "https://docs.x.com/guide/", True),
+        ("https://docs.x.com/guide-advanced/a.md", "https://docs.x.com/guide", False),
+        ("https://docs.x.com/guide.md", "https://docs.x.com/guide", False),
+        ("https://DOCS.x.com/guide/a.md", "https://docs.X.com/guide", True),
+        ("https://other.x.com/guide/a.md", "https://docs.x.com/guide", False),
+        ("https://docs.x.com/Guide/a.md", "https://docs.x.com/guide", False),
+        ("https://x.com/docs/a.md", "https://www.x.com/docs", True),
+        ("https://www.x.com/docs/a.md", "http://x.com/docs", True),
+    ],
+    ids=[
+        "the-section-itself",
+        "beneath",
+        "sibling-sharing-a-prefix",
+        "a-file-beside-it",
+        "host-case",
+        "other-host",
+        "path-case",
+        "www-host",
+        "scheme",
+    ],
+)
+def test_under_section_is_a_path_segment_prefix(url, section, expected):
+    assert _site.under_section(url, section) is expected
+
+
+def test_generator_meta_reads_every_tag():
+    html = (
+        '<html><head><meta name="generator" content="Astro v7.2.10">'
+        '<meta name="generator" content="Starlight v0.42.0"></head></html>'
+    )
+    assert generator_meta(html) == "astro v7.2.10, starlight v0.42.0"
+
+
+_SHELL = (
+    '<!DOCTYPE html><html lang="en-US"><meta charset="utf-8">'
+    "<title>You will be redirected shortly</title>"
+    '<meta http-equiv="refresh" content="{content}">'
+    '<h1>Redirecting&hellip;</h1><a href="welcome.html">Click here</a></html>'
+)
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("0; url=welcome.html", "https://docs.example.com/docs/welcome.html"),
+        ("0;URL='/en/latest/index.html'", "https://docs.example.com/en/latest/index.html"),
+        ("2, url=https://docs.example.com/v2/", "https://docs.example.com/v2/"),
+    ],
+    ids=["relative", "rooted-quoted", "absolute-same-origin"],
+)
+def test_meta_refresh_target_resolves_against_the_shell_url(content, expected):
+    shell = _SHELL.format(content=content)
+    assert _site.meta_refresh_target(shell, "https://docs.example.com/docs/") == expected
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "0; url=https://elsewhere.example.org/",
+        "300",
+        "0; url=",
+        "0; url=https://docs.example.com/docs/",
+    ],
+    ids=["off-site", "reload-only", "empty", "self"],
+)
+def test_meta_refresh_target_ignores_what_is_not_a_same_site_hop(content):
+    shell = _SHELL.format(content=content)
+    assert _site.meta_refresh_target(shell, "https://docs.example.com/docs/") is None
+
+
+def test_meta_refresh_target_is_none_for_an_ordinary_page():
+    assert (
+        _site.meta_refresh_target("<html><body><p>x</p></body></html>", "https://a.example/")
+        is None
+    )
+
+
+def test_meta_refresh_target_ignores_a_refresh_inside_noscript():
+    """A browser running scripts never follows it; it leads to the no-JS fallback."""
+    html = (
+        '<html><head><noscript><meta http-equiv="refresh" content="0; url=/nojs.html">'
+        "</noscript></head><body><p>docs</p></body></html>"
+    )
+    assert _site.meta_refresh_target(html, "https://docs.example.com/docs/") is None
+
+
+def test_meta_refresh_target_ignores_a_delayed_refresh():
+    """A session timeout, not a shell forwarding its reader."""
+    shell = _SHELL.format(content="1800; url=/login")
+    assert _site.meta_refresh_target(shell, "https://docs.example.com/docs/") is None

@@ -4,10 +4,10 @@ GitBook serves a raw-markdown variant of every page (append ``.md``) and an
 ``llms.txt`` index listing them. That markdown references images as internal
 ``/files/<id>`` paths that 404 on their own; the real downloadable image lives
 behind the rendered page's ``~gitbook/image`` proxy (its ``url=`` param is the
-direct, e.g. Firebase-storage, asset URL). So per page we read BOTH the ``.md``
-(clean text, ordered image slots) and the rendered HTML (ordered downloadable
-image URLs) and resolve each ``/files/<id>`` slot — exactly when the id appears
-in a URL, else positionally in document order. Image URLs are left absolute;
+direct, e.g. Firebase-storage, asset URL). So each page's ``.md`` (clean text,
+ordered image slots) and rendered HTML (ordered downloadable image URLs) are BOTH
+read, and each ``/files/<id>`` slot is resolved — exactly when the id appears in
+a URL, else positionally in document order. Image URLs are left absolute;
 remaining root-relative links are absolutized.
 """
 
@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import re
 import urllib.parse
-from collections.abc import Callable
+
+from pagespring.patterns._md_code import fence_closes, fence_open, outside_code
+from pagespring.patterns._site import under_section
 
 _MD_URL_RE = re.compile(r"https?://[^\s)]+\.md")
 _FILES_RE = re.compile(r"/files/[A-Za-z0-9_-]+")
@@ -37,12 +39,21 @@ _BANNER_RE = re.compile(
 # that send the reader to an llms.txt index URL, before the page's first heading.
 _SOURCE_COMMENT_RE = re.compile(r"\A<!--[^\n]*-->\n+")
 _FRONT_MATTER_RE = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n+|\Z)", re.DOTALL)
+# Front-matter keys are lowercase, quoted, or a common key in any case (Title); a
+# callout framed by rules ("Note: ...") or a prose line is not one.
+_FRONT_MATTER_KEY_RE = re.compile(
+    r"""(?:[a-z_][\w.-]*(?::[\w.-]+)*|"[^"\n]+"|'[^'\n]+'"""
+    r"|(?i:title|description|date|author|authors|tags|categories|keywords|slug|weight|draft))"
+    r"[ \t]*:(?:[ \t]|$)"
+)
 _LEADING_BLOCK_RE = re.compile(r"\A(.*?)(?:\n[ \t]*\n+|\Z)", re.DOTALL)
 _LLMS_URL_RE = re.compile(r"https?://\S+/llms(?:-full)?\.txt", re.IGNORECASE)
 _INDEX_POINTER_RE = re.compile(r"\b(?:fetch|index)\b", re.IGNORECASE)
-_FENCE_RE = re.compile(r"(?:[ \t>]|[-*+][ \t]|\d{1,9}[.)][ \t])*(`{3,}|~{3,})(.*)")
-# A backtick run closed by the next run of the same length, within one paragraph.
-_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n).)+?(?<!`)\1(?!`)", re.DOTALL)
+# Docsy's pointer under the title and description, closed by a rule.
+_TITLED_POINTER_RE = re.compile(
+    r"\A(#[^\n]*\n+(?:>[^\n]*\n+)*(?:---[ \t]*\n+)?)"
+    r"LLMS index: \[llms(?:-full)?\.txt\]\([^)\s]+\)[ \t]*\n+---[ \t]*(?:\n+|\Z)"
+)
 # Top-level MDX component definitions and imports: JSX source, not prose.
 _MDX_IMPORT_RE = re.compile(r"^import\s.+\sfrom\s+['\"][^'\"]+['\"];?\s*$")
 _MDX_EXPORT_RE = re.compile(r"^export\s+(?:const|let|function|default)\b")
@@ -50,8 +61,9 @@ _SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 _MD_TARGET_RE = re.compile(r"\]\(([^)\s]+)")
 
 
-def discover_pages(llms_txt: str) -> list[str]:
-    """Ordered, de-duped per-page .md URLs from the llms.txt index.
+def discover_pages(llms_txt: str, section: str | None = None) -> list[str]:
+    """Ordered, de-duped per-page .md URLs from the llms.txt index; with ``section``,
+    only the section's own page and the pages beneath it.
 
     The ``.md`` must be in the path: an index may list in-page anchors whose
     fragment ends in ``.md``, and those are links into a page already listed.
@@ -60,6 +72,8 @@ def discover_pages(llms_txt: str) -> list[str]:
     pages: list[str] = []
     for url in _MD_URL_RE.findall(llms_txt):
         if not urllib.parse.urlparse(url).path.endswith(".md"):
+            continue
+        if section is not None and not under_section(url.removesuffix(".md"), section):
             continue
         if url not in seen:
             seen.add(url)
@@ -79,23 +93,68 @@ def strip_banner(md: str) -> str:
     return _BANNER_RE.sub("", md)
 
 
-def _strip_front_matter(md: str) -> str:
-    """``md`` without a leading ``---`` block whose body is a YAML mapping."""
+def _yaml_shaped(body: str) -> bool:
+    """Opens on a key line, and every other line is a key, a list item, indented or blank.
+
+    A ``#`` line counts as a YAML comment only in a run of lines holding a key; a
+    heading stands apart from its prose."""
+    lines = body.split("\n")
+    comments: set[int] = set()
+    run: list[int] = []
+    for i, line in enumerate([*lines, ""]):
+        if line.strip():
+            run.append(i)
+            continue
+        if any(_FRONT_MATTER_KEY_RE.match(lines[j]) for j in run):
+            comments.update(j for j in run if lines[j].startswith("#"))
+        run = []
+    first, *rest = [line for i, line in enumerate(lines) if i not in comments]
+    return bool(_FRONT_MATTER_KEY_RE.match(first)) and all(
+        not line.strip()
+        or line[0] in " \t"
+        or line.startswith("- ")
+        or _FRONT_MATTER_KEY_RE.match(line)
+        for line in rest
+    )
+
+
+def split_front_matter(md: str) -> tuple[dict[str, object] | None, str]:
+    """A leading ``---`` block of key lines that parses as a YAML mapping, and the rest
+    of ``md``; ``(None, md)`` when there is none."""
     block = _FRONT_MATTER_RE.match(md)
-    if block is None:
-        return md
+    if block is None or not _yaml_shaped(block.group(1)):
+        return None, md
     import yaml  # lazy: only pages opening with a --- block pull this in
 
     try:
         data = yaml.safe_load(block.group(1))
     except (yaml.YAMLError, ValueError):
+        return None, md
+    return (data, md[block.end() :]) if isinstance(data, dict) else (None, md)
+
+
+def _strip_front_matter(md: str) -> str:
+    return split_front_matter(md)[1]
+
+
+def lead_with_front_matter_title(md: str) -> str:
+    """``md`` without its front matter, opening on the block's ``title`` as an H1 unless it
+    already opens on one; a leading ``<!-- source -->`` comment stays first."""
+    comment = _SOURCE_COMMENT_RE.match(md)
+    head = comment.group(0) if comment else ""
+    data, body = split_front_matter(md[len(head) :])
+    if data is None:
         return md
-    return md[block.end() :] if isinstance(data, dict) else md
+    title = data.get("title")
+    if isinstance(title, str) and title.strip() and not body.lstrip().startswith("# "):
+        body = f"# {title.strip()}\n\n{body}"
+    return head + body
 
 
 def strip_agent_preamble(md: str) -> str:
-    """Drop front matter and the blocks before the first heading that send AI clients
-    to an llms.txt index; a leading ``<!-- source -->`` comment is kept."""
+    """Drop front matter and the blocks before the first heading, or the pointer under
+    it, that send AI clients to an llms.txt index; a leading ``<!-- source -->``
+    comment is kept."""
     comment = _SOURCE_COMMENT_RE.match(md)
     head = comment.group(0) if comment else ""
     body = _strip_front_matter(md[len(head) :])
@@ -107,58 +166,7 @@ def strip_agent_preamble(md: str) -> str:
         if not (_LLMS_URL_RE.search(text) and _INDEX_POINTER_RE.search(text)):
             break
         body = body[block.end() :]
-    return head + body
-
-
-def _fence_open(line: str) -> str | None:
-    """The run of backticks or tildes that opens a code fence on this line, else None."""
-    m = _FENCE_RE.fullmatch(line)
-    if m is None or (m.group(1)[0] == "`" and "`" in m.group(2)):
-        return None
-    return m.group(1)
-
-
-def _fence_closes(line: str, fence: str) -> bool:
-    """Whether the line closes ``fence``: the same character, at least as long, nothing after."""
-    m = _FENCE_RE.fullmatch(line)
-    return (
-        m is not None
-        and m.group(1)[0] == fence[0]
-        and len(m.group(1)) >= len(fence)
-        and not m.group(2).strip()
-    )
-
-
-def _outside_code(md: str, rewrite: Callable[[str], str]) -> str:
-    """``rewrite`` applied to ``md`` everywhere but fenced code blocks and inline code spans."""
-    out: list[str] = []
-    prose: list[str] = []
-
-    def flush() -> None:
-        text = "".join(prose)
-        prose.clear()
-        pos = 0
-        for span in _INLINE_CODE_RE.finditer(text):
-            out.extend((rewrite(text[pos : span.start()]), span.group(0)))
-            pos = span.end()
-        out.append(rewrite(text[pos:]))
-
-    fence: str | None = None
-    for line in re.split(r"(?<=\n)", md):
-        bare = line.rstrip("\r\n")
-        if fence is not None:
-            out.append(line)
-            if _fence_closes(bare, fence):
-                fence = None
-            continue
-        fence = _fence_open(bare)
-        if fence is None:
-            prose.append(line)
-        else:
-            flush()
-            out.append(line)
-    flush()
-    return "".join(out)
+    return head + _TITLED_POINTER_RE.sub(r"\1", body, count=1)
 
 
 def strip_mdx_definitions(md: str) -> str:
@@ -182,8 +190,8 @@ def strip_mdx_definitions(md: str) -> str:
             skipping = not stripped.endswith(";")
             continue
         if fence is None:
-            fence = _fence_open(line)
-        elif _fence_closes(line, fence):
+            fence = fence_open(line)
+        elif fence_closes(line, fence):
             fence = None
         out.append(line)
     return "\n".join(out)
@@ -255,7 +263,7 @@ def absolutize(md: str, origin: str, page_url: str | None = None) -> str:
         )
         return text if page_url is None else _MD_TARGET_RE.sub(resolve, text)
 
-    return _outside_code(md, rewrite)
+    return outside_code(md, rewrite)
 
 
 def process_page(md: str, html: str, origin: str, page_url: str | None = None) -> str:

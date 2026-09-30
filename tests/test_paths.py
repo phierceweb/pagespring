@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from pf_core.exceptions import InvalidInputError
 
-from pagespring import audit, orchestrate, paths, refresh
+from pagespring import audit, localize, paths, refresh, renormalize
 from pagespring import manifest as manifest_mod
 from pagespring.config import cfg
 from pagespring.paths import slug_dir
@@ -46,8 +46,8 @@ def test_a_slug_that_names_nothing_is_refused(slug):
     [
         pytest.param(lambda s: audit.audit_slug(s), id="audit_slug"),
         pytest.param(lambda s: refresh.refresh_slug(s), id="refresh_slug"),
-        pytest.param(lambda s: orchestrate.run_renormalize(s), id="run_renormalize"),
-        pytest.param(lambda s: orchestrate.localize_images(s), id="localize_images"),
+        pytest.param(lambda s: renormalize.run_renormalize(s), id="run_renormalize"),
+        pytest.param(lambda s: localize.localize_images(s), id="localize_images"),
     ],
 )
 def test_every_slug_entry_point_folds_before_touching_disk(call, monkeypatch, tmp_path):

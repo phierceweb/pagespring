@@ -74,7 +74,7 @@ def _json_array_at(text: str, start: int) -> str:
     """Slice the bracket-balanced array beginning at ``start``.
 
     A regex to the next assignment would cut early on a ``]`` inside a title,
-    and the file appends six more assignments after the array.
+    and the file appends more assignments after the array.
     """
     depth = 0
     in_str = False

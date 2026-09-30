@@ -5,6 +5,8 @@ to recover. Everything here is aimed at a stand-in corpus: a guard that has
 stopped working must fail this file, not prove it by deleting a manual.
 """
 
+import importlib
+import pkgutil
 import shutil
 from pathlib import Path
 
@@ -12,6 +14,7 @@ import conftest
 import pf_core.fetch.images as core_images
 import pytest
 
+import pagespring
 from pagespring import _staging, images, manifest, orchestrate
 
 _DOC = "<h1>real</h1>"
@@ -82,6 +85,18 @@ def test_atomic_writes_inside_the_corpus_are_refused(stand_in_corpus):
     assert (slug / "precious.html").read_text(encoding="utf-8") == _DOC
     assert not (slug / manifest.MANIFEST_NAME).exists()
     assert not (slug / images.SIDECAR_NAME).exists()
+
+
+def test_every_atomic_writer_binding_in_the_package_is_guarded():
+    """An atomic writer imported by name is a binding the guard must patch where it
+    lives, so a module that adds one must be added to conftest's list."""
+    unguarded = []
+    for info in pkgutil.walk_packages(pagespring.__path__, "pagespring."):
+        module = importlib.import_module(info.name)
+        for attr, value in vars(module).items():
+            if attr.startswith("atomic_write") and not hasattr(value, "__wrapped__"):
+                unguarded.append(f"{info.name}.{attr}")
+    assert unguarded == []
 
 
 def _manifest() -> manifest.Manifest:

@@ -3,9 +3,7 @@ one source type.
 
 A pattern recognizes a family of source URLs (``match``), downloads the raw
 pages (``acquire``), and turns them into one clean file with absolute asset
-URLs (``normalize``). That file is the deliverable and pagespring stops there:
-how it gets converted is pagespeak's decision, derived from the source it can
-see for itself.
+URLs (``normalize``). That file is the deliverable and pagespring stops there.
 """
 
 from __future__ import annotations
@@ -14,10 +12,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-# "html"     -> hand the clean file to pagespeak to convert (markitdown + pipeline)
-# "markdown" -> already the source's canonical clean form (e.g. GitBook per-page .md)
-# "pdf"      -> a downloaded PDF; already a pagespeak input (normalize passthrough)
+# The deliverable's format; a "pdf" is the downloaded file, passed through normalize as-is.
 SourceKind = Literal["html", "markdown", "pdf"]
+
+# Files a deliverable references that no URL serves (an archive's own figures) go
+# in this directory beside the normalized file, referenced as ``images/<name>``;
+# staging copies them into ``incoming/<slug>/images/``.
+IMAGES_DIR = "images"
 
 
 @dataclass
@@ -25,7 +26,7 @@ class AcquireResult:
     """What ``acquire`` produced: a local dir of raw pages + how to treat them."""
 
     raw_dir: Path  # local dir holding the downloaded raw page(s)
-    kind: SourceKind  # whether normalize emits html (for pagespeak) or markdown
+    kind: SourceKind
     slug: str  # short id for the source; becomes the output dir name
     # Source units the deliverable covers — crawl pages / articles / PDF pages.
     # None means "not determinable" (e.g. an unreadable PDF), never a guess.
@@ -51,8 +52,7 @@ class Pattern(Protocol):
 
     Implementations are instances (see pagespring/patterns/*); the registry holds
     one of each. All *source-specific* knowledge (crawl rules, chrome selectors,
-    TOC walking, image-scheme resolution) lives in the pattern — pagespeak stays
-    source-agnostic.
+    TOC walking, image-scheme resolution) lives in the pattern.
     """
 
     name: str
@@ -66,5 +66,6 @@ class Pattern(Protocol):
         ...
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
-        """Turn the raw pages into ONE clean .html/.md (absolute asset URLs)."""
+        """Turn the raw pages into ONE clean .html/.md (absolute asset URLs, or
+        ``IMAGES_DIR`` refs to files written beside it)."""
         ...

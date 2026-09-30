@@ -75,8 +75,8 @@ def test_fetch_failure_and_missing_article_sleep_before_continuing(tmp_path, mon
 
 
 def test_a_page_without_an_article_counts_as_lost(tmp_path, monkeypatch):
-    """A 200 page whose <article> is absent was dropped silently — only fetch
-    errors counted, so a theme change audited clean while shipping short."""
+    """A 200 page whose <article> is absent counts as lost, not silently dropped —
+    else a theme change audits clean while shipping short."""
     monkeypatch.setattr(http, "fetch_text", _fake_fetch_text)
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
     acq = _docusaurus.acquire("https://ex.io/docs", tmp_path, slug="ex", title="Ex Docs")
