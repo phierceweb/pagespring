@@ -629,9 +629,7 @@ def _spec_file(path, title):
 
 
 def test_ingest_refused_slug_takeover_exits_2(monkeypatch, tmp_path):
-    """Two vendors' specs share a title, so the second lands on the first's slug:
-    the refusal must reach the operator as exit 2 naming what is held, not as a
-    traceback — and the held manual must still be there afterwards."""
+    """Two vendors' specs share a title: the refusal exits 2 naming what is held, and it survives."""
     monkeypatch.setattr(cfg, "INCOMING_DIR", str(tmp_path / "incoming"))
     held = _spec_file(tmp_path / "vendor-a" / "openapi.json", "Vendor API")
     incoming = _spec_file(tmp_path / "vendor-b" / "openapi.json", "Vendor API")

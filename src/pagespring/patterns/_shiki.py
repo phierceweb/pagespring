@@ -1,8 +1,5 @@
-"""Shiki-highlighted code blocks reduced to plain ``<pre><code>`` text.
-
-Shiki wraps every token in a ``<span>`` carrying inline colour styles, one
-``span.line`` per line, which outweighs the code itself several times over.
-"""
+"""Shiki code blocks reduced to plain ``<pre><code>``: its per-token styled spans outweigh the code
+several times over."""
 
 from __future__ import annotations
 

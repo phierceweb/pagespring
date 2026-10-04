@@ -1,11 +1,5 @@
-"""MkDocs acquisition for docs_probe — the search-index shortcut.
-
-MkDocs ships a client-side search index at ``search/search_index.json``: a
-``docs`` array of ``{location, title, text}`` records covering every page
-(page-level records have no ``#`` anchor; section records carry one). One fetch
-replaces a crawl. Known limitation: the index text is flattened plain text —
-code blocks lose their fencing.
-"""
+"""MkDocs for docs_probe: every page from ``search/search_index.json`` in one fetch. The index text
+is flattened, so code blocks lose their fencing."""
 
 from __future__ import annotations
 
@@ -26,9 +20,8 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     base = base_url.rstrip("/")
     idx_url = f"{base}/search/search_index.json"
     final_url, body = http.fetch_text(idx_url)
-    # Pages live relative to where the index actually resolved, not the URL
-    # requested — a redirect (e.g. to /en/latest/) would otherwise stamp stale
-    # source comments.
+    # Resolve pages against where the index landed, not the URL asked for: a redirect would stamp
+    # stale source comments.
     suffix = "/search/search_index.json"
     final_base = final_url[: -len(suffix)] if final_url.endswith(suffix) else base
     try:
@@ -59,9 +52,8 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
     for path, page in pages.items():
         sections: list[tuple[str, str]] = page["sections"]
         lead = page["text"]
-        # The page-level record holds the WHOLE page: lead prose plus every
-        # section's text again. Keep only the prose before the first section,
-        # or half the deliverable is a verbatim second copy of itself.
+        # The page-level record repeats every section's text after the lead prose; keep only the
+        # prose before the first section, or the page appears twice.
         if sections and lead:
             # The first section *with text*: a heading straight above a sub-heading
             # indexes with none of its own.

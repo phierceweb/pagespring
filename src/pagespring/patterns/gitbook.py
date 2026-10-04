@@ -1,16 +1,5 @@
-"""gitbook — GitBook documentation sites.
-
-GitBook serves an ``llms.txt`` index + a per-page ``.md`` variant, but its
-markdown points images at internal ``/files/<id>`` paths that 404; the real
-image lives behind a ``~gitbook/image`` proxy in the rendered HTML. acquire
-fetches both per page and resolves the images (see _gitbook); normalize
-concatenates.
-
-Point it at a GitBook-hosted base URL, e.g. ``https://acme.gitbook.io/handbook``.
-Custom-domain GitBook sites (e.g. ``https://docs.<vendor>.com``) don't match
-here directly — ``docs_probe`` sniffs their ``llms.txt`` and delegates back to
-this pattern's ``acquire``.
-"""
+"""gitbook: ``*.gitbook.io`` sites, each page's ``.md`` with its images resolved from the rendered
+page (see ``_gitbook``); custom domains arrive through ``docs_probe``'s llms.txt sniff."""
 
 from __future__ import annotations
 

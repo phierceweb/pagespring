@@ -1,20 +1,11 @@
-"""mdBook acquisition for docs_probe — the print page, else a TOC-ordered crawl.
-
-mdBook renders the whole book into ``print.html`` at the book root: every chapter
-in SUMMARY order, split by page-break divs, so one fetch replaces a crawl. A book
-can switch the print page off; the sidebar TOC then drives a crawl in reading order.
-
-The root comes from the page's own ``path_to_root``, so a chapter seed scopes to
-its book. Every chapter renders its title as ``<h1>`` whatever its nesting, so each
-chapter's headings shift by its TOC depth to sit under its parent.
-"""
+"""mdBook for docs_probe: the whole book from ``print.html``, else a crawl in TOC order, rooted at
+the page's ``path_to_root``; every chapter's ``<h1>`` shifts by its TOC depth."""
 
 from __future__ import annotations
 
 import re
 import time
 from dataclasses import dataclass
-from html import escape
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
 
@@ -35,6 +26,7 @@ from pagespring.patterns._site import (
     names_a_file,
     page_title,
     raw_stem,
+    seat_headings,
     strip_scripts,
 )
 
@@ -91,21 +83,12 @@ def _repeats(first: Tag, second: Tag) -> bool:
 
 
 def fix_headings(node: Tag, *, depth: int, name: str) -> None:
-    """Seat a chapter at its TOC depth: its first heading becomes ``h{depth + 1}``,
-    the rest move with it, none rising above it or past ``h6``. A chapter with no
-    heading gets its TOC name. The ``<h1>`` the print page adds over a chapter that
-    opens lower goes where the chapter's own heading repeats it."""
-    top = min(depth + 1, 6)
+    """``seat_headings``, after dropping the ``<h1>`` the print page adds over a chapter that
+    opens lower where the chapter's own heading repeats it."""
     heads = node.find_all(_HEADING_RE)
     if len(heads) > 1 and _repeats(heads[0], heads[1]):
-        heads.pop(0).decompose()
-    if not heads:
-        if name:
-            node.insert(0, BeautifulSoup(f"<h{top}>{escape(name)}</h{top}>", "html.parser"))
-        return
-    shift = top - int(heads[0].name[1])
-    for head in heads:
-        head.name = f"h{min(max(int(head.name[1]) + shift, top), 6)}"
+        heads[0].decompose()
+    seat_headings(node, depth=depth, name=name)
 
 
 def _seed(url: str) -> str:
@@ -118,10 +101,8 @@ def _seed(url: str) -> str:
 
 
 def _toc(soup: BeautifulSoup, base_url: str, root: str) -> list[_Chapter]:
-    """Linked chapters in reading order with their nesting depth.
-
-    Depth counts enclosing lists, not items: the TOC leaves a parent ``<li>``
-    unclosed, and older themes put a section list in a sibling ``<li>``."""
+    """Linked chapters in reading order with nesting depth, counted in enclosing lists: the TOC
+    leaves a parent ``<li>`` unclosed, and older themes put sections in a sibling ``<li>``."""
     top = soup.select_one("ol.chapter")
     if top is None:
         return []

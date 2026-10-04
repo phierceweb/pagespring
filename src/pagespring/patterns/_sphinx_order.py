@@ -41,13 +41,8 @@ def reading_order(
     found_on: dict[str, str],
     tocs: dict[Siblings, str | None],
 ) -> list[str]:
-    """Staged pages (``ranked`` in crawl order) in toctree order.
-
-    ``alias`` maps every fetched URL to the staged page holding its content, and
-    ``tocs`` each distinct sibling list to the first page rendering it that is not
-    one of its members. A page nests under its toctree parent, else under the
-    nearest staged page that linked to it; siblings follow the toctrees, then crawl
-    order."""
+    """Staged pages in toctree order: each nests under its toctree parent, else the nearest staged
+    page linking it; siblings follow the toctrees, then crawl order (``ranked``)."""
     rank = {u: i for i, u in enumerate(ranked)}
     parent: dict[str, str] = {}  # first claim wins: toctree, then sidebar top level, then link
 

@@ -1,10 +1,5 @@
-"""Spec discovery for API reference UIs (Swagger UI, Redoc, Scalar) — used by docs_probe.
-
-These pages are script shells around an OpenAPI document. Without running script,
-the evidence is a spec URL in the page's own query, written literally in the page or
-in Swagger UI's initializer script, or listed by a Swagger UI config document, proved
-by fetching and parsing it.
-"""
+"""Spec discovery for API reference UIs (Swagger UI, Redoc, Scalar): script shells whose spec URL
+sits in the page query, the page, the initializer or a config document, proved by parsing it."""
 
 from __future__ import annotations
 
@@ -23,9 +18,8 @@ from pagespring.patterns.api_spec import is_openapi
 Fetch = Callable[[str], str | None]
 
 _MAX_CANDIDATES = 5
-# A whole quoted string naming a spec file; a ${...} interpolation breaks the match.
-# The query ends at an interpolation or an escaped quote; an interpolated query is a
-# cache-buster or template, so the URL is taken without it.
+# A whole quoted string naming a spec file; a ${...} interpolation breaks the match, and an
+# interpolated query (a cache-buster or template) is cut from the URL.
 _SPEC_TOKEN_RE = re.compile(
     r"""["'`]((?:https?://)?[\w.~%/:@+-]+\.(?:json|ya?ml))(\?[^"'`\s{}$\\]*)?"""
     r"""((?:\$?\{|\\)[^"'`]*)?["'`]"""

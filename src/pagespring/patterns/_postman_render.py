@@ -1,7 +1,5 @@
-"""Render a Postman collection (schema v2.x) to clean markdown — one section per
-request, folders as nested headings. Pure transformation over a parsed dict;
-fields of the wrong type are ignored rather than raised on.
-"""
+"""Render a Postman v2.x collection dict to markdown, one section per request and folders as nested
+headings; fields of the wrong type are ignored, not raised on."""
 
 from __future__ import annotations
 

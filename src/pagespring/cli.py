@@ -1,8 +1,4 @@
-"""pagespring command-line interface (Typer, via pf_core.cli).
-
-The commands live in ``_cli_ingest`` and ``_cli_corpus``; registering them here fixes
-their order in ``--help``.
-"""
+"""pagespring CLI via pf_core.cli; registering the commands here fixes their ``--help`` order."""
 
 import signal
 import urllib.error
@@ -76,9 +72,8 @@ def _exit_on(signum: int, _frame: FrameType | None) -> None:
 
 
 def _unwind_on_termination() -> None:
-    """Turn SIGTERM and SIGHUP into ``SystemExit`` so ``finally`` blocks record what a
-    pass left; by default they end the process with no unwinding. A signal the caller
-    ignores (``nohup``) stays ignored."""
+    """Turn SIGTERM and SIGHUP into ``SystemExit`` so ``finally`` blocks record what a pass left; a
+    signal the caller ignores (``nohup``) stays ignored."""
     for name in ("SIGTERM", "SIGHUP"):
         sig = getattr(signal, name, None)
         if sig is not None and signal.getsignal(sig) is signal.SIG_DFL:

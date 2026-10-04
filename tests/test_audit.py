@@ -1,9 +1,4 @@
-"""audit — $0 deterministic deliverable checks (no network, no LLM).
-
-Findings-based: a healthy slug audits to an empty list; each defect is one
-(check, level, detail) finding. Error-level = the deliverable can't be
-trusted; warning-level = real but survivable.
-"""
+"""audit: a healthy slug audits to []; each defect is one (check, level, detail) finding."""
 
 from pathlib import Path
 
@@ -136,12 +131,7 @@ def test_pdf_kind_skips_content_checks(tmp_path):
 
 
 def test_single_page_from_crawl_pattern_is_an_error(tmp_path):
-    """A crawl pattern that yielded one page means the seed URL was too specific.
-
-    Seeding a single doc page makes llms_txt fetch that page's .md twin instead
-    of walking the index — one page where a site's worth was expected, and the
-    ingest still exits 0.
-    """
+    """Seeding one doc page makes llms_txt fetch only its .md twin, and the ingest still exits 0."""
     _stage(tmp_path, pattern="llms_txt", pages=1)
     assert ("single_page_crawl", "error") in _checks(audit.audit_slug("fakeapp"))
 
@@ -211,9 +201,7 @@ def test_pre_v4_manifest_without_truncated_is_fine(tmp_path):
 
 
 def test_duplicate_content_across_slugs_is_reported(tmp_path):
-    """Two slugs holding byte-identical deliverables — invisible to any per-slug check.
-    `run_ingest` detects it via find_by_sha but only logs it, so the signal is gone by
-    the time anyone audits."""
+    """``run_ingest`` only logs a byte-identical duplicate, so audit has to find it again."""
     _stage(tmp_path, slug="mic-manual", body="# Same\n\ntext\n")
     _stage(tmp_path, slug="mic-spec", body="# Same\n\ntext\n")
 
@@ -302,9 +290,7 @@ def test_resolved_local_image_refs_are_fine(tmp_path):
 
 
 def test_pages_lost_is_an_error(tmp_path):
-    """A crawl that discovers 100 pages and fetches 40 is 60% missing, but the
-    deliverable looks healthy: headings exist, no remote refs remain, and
-    `truncated` stays False because no page CAP was hit."""
+    """60% missing yet healthy-looking: no page cap was hit, so ``truncated`` stays False."""
     d = _stage(tmp_path, pattern="apple_help", pages=40)
     m = manifest.read_manifest(d)
     m["lost"] = 60
@@ -345,13 +331,8 @@ def test_failed_localize_with_empty_images_dir_is_a_warning(tmp_path):
 
 
 def test_remote_ref_the_localizer_skipped_is_still_flagged(tmp_path, monkeypatch):
-    """The audit must not share the localizer's idea of what an image ref is.
-
-    A ref the localizer declines to claim is never downloaded and never counted,
-    so asking it how many remain answers zero on exactly the deliverable that is
-    still remote. Pinned by stubbing that count to 0: the audit has to reach the
-    finding by reading the file itself.
-    """
+    """The count is stubbed to 0: audit must read the file, since the localizer never counts a ref
+    it declines to claim."""
     skipped = "https://cdn.example.com/is/image/Prod/whats-new-widget-3.1-preview"
     d = _stage(tmp_path, body=f'![a](images/a.png)\n<img src="{skipped}">\n\n# T\n', images=1)
     (d / "images").mkdir()
@@ -379,9 +360,7 @@ def test_remote_non_image_refs_are_not_localize_findings(tmp_path):
 
 
 def test_single_operation_api_spec_is_not_a_collapsed_crawl(tmp_path):
-    """api_spec fetches ONE spec file and counts operations, not crawl pages, so a
-    one-operation spec is a complete deliverable — not a seed URL that named a
-    page instead of an index."""
+    """``pages`` counts operations, so one operation is a complete spec."""
     _stage(tmp_path, pattern="api_spec", pages=1)
     assert audit.audit_slug("fakeapp") == []
 
@@ -450,10 +429,7 @@ def test_sha_unverified_advises_a_reingest_not_a_localize(tmp_path):
 
 
 def test_ingest_killed_mid_image_pass_warns_instead_of_reporting_corruption(tmp_path):
-    """A manifest older than schema v7 marks no open pass, so a pass killed under it
-    left images=0 and no localized_sha256 beside a legitimately re-pointed file; the
-    divergence from the staged sha is the pass's own work, not corruption, and only
-    images/ existing can tell."""
+    """Before schema v7 no pass was marked open; only images/ tells a killed pass from damage."""
     d = _stage(tmp_path, body="# T\n\n![i](images/i.png)\n![j](https://x/j.png)\n")
     m = manifest.read_manifest(d)
     # The staged sha describes the pre-localize body; the file was checkpointed after.
@@ -553,9 +529,7 @@ def test_status_lists_healthy_slugs_around_an_unreadable_one(tmp_path):
 
 
 def test_a_leftover_images_dir_does_not_excuse_a_corrupt_deliverable(tmp_path):
-    """A re-ingest keeps images/ while staging a fresh, un-localized deliverable, so the
-    bare directory is no proof of localization. Corruption must stay sha_mismatch
-    (error) rather than sha_unverified (warning), or `audit --strict` passes it."""
+    """A re-ingest keeps images/, so the bare dir must not downgrade corruption to a warning."""
     d = _stage(tmp_path, body="# T\n\ntext\n")
     (d / "images").mkdir()  # left behind by an earlier --download-images run
     deliverable = d / "fakeapp.md"

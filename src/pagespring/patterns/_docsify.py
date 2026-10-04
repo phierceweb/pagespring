@@ -1,14 +1,5 @@
-"""Docsify acquisition for docs_probe — the raw markdown the app loads.
-
-A Docsify site ships no rendered pages: ``index.html`` holds a
-``window.$docsify`` config and the runtime fetches markdown per route. The page
-set is what the sidebar files list (``_docsify_pages``), after the homepage when
-they do not list it.
-
-Links resolve to the files they route to, the URLs the pages are staged under;
-images resolve against the page's route directory, as the runtime resolves them.
-``:include`` links are expanded by ``_docsify_embed``.
-"""
+"""Docsify for docs_probe: the raw markdown the runtime loads per route, in the order the sidebar
+files list it; links resolve to the files they route to, images to the route's directory."""
 
 from __future__ import annotations
 

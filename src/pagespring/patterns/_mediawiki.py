@@ -1,13 +1,5 @@
-"""MediaWiki acquisition for docs_probe — the action API, no HTML crawl.
-
-A wiki is a link graph, not a book. One manual is the seed page plus the pages
-its content links to, in reading order: a wiki manual's landing page is its
-table of contents, and following links any further walks the whole wiki.
-
-``action=parse`` returns a page's rendered content without the skin. Its link
-list carries namespace and existence but is alphabetical, so the order comes
-from the rendered anchors.
-"""
+"""MediaWiki for docs_probe through the action API: the seed page plus the pages its content links
+to, one hop, in the rendered anchors' order (the API's link list is alphabetical)."""
 
 from __future__ import annotations
 
@@ -65,10 +57,8 @@ def page_name(page: str) -> str | None:
 
 
 def is_mediawiki(page: str) -> bool:
-    """Generator meta, or the ``api.php`` link and page config every install emits.
-
-    A hardened install strips the generator tag; the other two are what
-    ``acquire`` reads."""
+    """Generator meta, or the ``api.php`` link and page config every install emits, which a hardened
+    install keeps when it strips the generator tag."""
     if "mediawiki" in generator_meta(page):
         return True
     return _edit_uri(page) is not None and page_name(page) is not None
@@ -114,10 +104,8 @@ def _text(parsed: dict[str, Any]) -> str:
 
 
 def _linked_titles(parsed: dict[str, Any], namespaces: set[int], seed: str) -> list[str]:
-    """Existing pages in ``namespaces`` the content links to, in reading order.
-
-    A listed link with no anchor to place it (a template can render one out of
-    sight) follows the anchored ones."""
+    """Existing pages in ``namespaces`` the content links to, in reading order; listed links with no
+    anchor (a template can hide one) come after the anchored ones."""
     wanted = [
         str(link["*"])
         for link in parsed.get("links") or []

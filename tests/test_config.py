@@ -33,9 +33,7 @@ def test_env_file_expands_a_user_path(monkeypatch):
 
 
 def test_env_file_ignores_a_dot_env_in_the_working_directory(tmp_path, monkeypatch):
-    """Every key in the resolved file enters the process environment, so adopting
-    whatever `.env` the caller happens to stand in would inherit a sibling
-    project's secrets and let it flip pf-core's private-address guard."""
+    """A stray ``.env``'s keys enter the environment and could flip the private-address guard."""
     (tmp_path / ".env").write_text("URL_FETCH_ALLOW_PRIVATE=1\n", encoding="utf-8")
     monkeypatch.delenv(config._ENV_FILE_VAR, raising=False)
     monkeypatch.chdir(tmp_path)

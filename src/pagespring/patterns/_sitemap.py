@@ -1,9 +1,5 @@
-"""Sitemap reading, URL scope and the page fetch loop shared by the sitemap-driven
-crawls (``sitemap_crawl`` and the Starlight strategy).
-
-A sitemap index lists child sitemaps rather than pages, so it is expanded; page
-order is the sitemap's own.
-"""
+"""Sitemap reading, URL scope and the page fetch loop shared by the sitemap-driven crawls; an index
+is expanded into its children, and page order is the sitemap's own."""
 
 from __future__ import annotations
 
@@ -32,10 +28,8 @@ _ERROR_PAGES = {"404", "404.html"}
 
 
 def read_locs(url: str) -> tuple[str, list[str], bool]:
-    """(final URL, page URLs in sitemap order, whether a child sitemap was unreadable).
-
-    An unreadable child takes its whole block of pages with it, so the caller
-    must report the crawl truncated.
+    """(final URL, page URLs in order, whether a child sitemap was unreadable); an unreadable child
+    loses its whole block, so the caller must report the crawl truncated.
 
     Raises:
         InvalidInputError: ``url`` does not serve a sitemap.
@@ -145,12 +139,8 @@ def crawl(
     belongs: Callable[[str], bool] | None = None,
     event: str,
 ) -> Crawl:
-    """Fetch ``urls`` in order and stage each page's fragment as ``raw/NNNN-<path>.html``.
-
-    A fetch error or a page ``extract`` finds no content in counts as lost. A page
-    that redirects out of scope, one ``belongs`` rejects (the site's generator did
-    not build it), and a repeat of staged content are skipped.
-    """
+    """Fetch ``urls`` in order, staging each fragment as ``raw/NNNN-<path>.html``; errors and empty
+    pages are lost, while out-of-scope redirects, rejects and repeats are skipped."""
     raw_dir.mkdir(parents=True, exist_ok=True)
     result = Crawl()
     hashes: set[str] = set()

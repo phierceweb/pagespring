@@ -1,14 +1,5 @@
-"""sitemap_crawl — opt-in crawl of the pages a named sitemap lists.
-
-For a site no other pattern recognizes. Only a URL naming a sitemap file
-(``sitemap.xml``, ``sitemap-index.xml``, ``sitemap-0.xml``…) matches, so the
-crawl happens only when asked for. Every page listed under the sitemap's
-directory is fetched in sitemap order and reduced to its main content
-(``_readable.extract_main``); a sitemap index is expanded into its children.
-
-The sitemap is taken as given: a multi-locale site stages every language it
-lists, so point at a sitemap scoped to the manual.
-"""
+"""sitemap_crawl: an opt-in crawl, matched only by a URL naming a sitemap file, of the listed pages
+under its directory, each reduced to main content. Every locale it lists is staged."""
 
 from __future__ import annotations
 

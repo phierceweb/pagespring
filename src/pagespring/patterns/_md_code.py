@@ -73,10 +73,8 @@ class _IndentedCode:
 
 
 def outside_code(md: str, rewrite: Callable[[str], str]) -> str:
-    """``rewrite`` applied to ``md`` everywhere but code blocks and inline code spans.
-
-    ``rewrite`` sees each code span as a placeholder, so a link labelled with code
-    reaches it whole."""
+    """``rewrite`` applied to ``md`` outside code blocks and spans; each code span reaches it as a
+    placeholder, so a link labelled with code arrives whole."""
     out: list[str] = []
     prose: list[str] = []
 

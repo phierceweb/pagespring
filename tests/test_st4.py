@@ -76,9 +76,7 @@ def fetched(monkeypatch):
 
 
 def test_detects_entry_page_by_tells_not_generator():
-    """The pasted entry URL advertises the stylesheet, never 'ST4' — so tell
-    matching is the only way in. Probing the generator alone reads it as an
-    unrecognized site (the _paligo two-faces problem)."""
+    """The entry page names only the stylesheet, so a generator probe alone finds nothing."""
     assert "st4" not in _INDEX.lower().split("generator")[1][:80]
     assert _st4.is_st4(_INDEX)
 
@@ -233,9 +231,7 @@ def test_publication_base_accepts_file_or_directory():
 
 
 def test_synthesized_heading_escapes_the_toc_text(tmp_path, monkeypatch):
-    """TOC text is a vendor string interpolated straight into markup. Every
-    sibling pattern escapes its titles; unescaped, a `<` or `&` in a chapter
-    name corrupts the merged document."""
+    """TOC text is a vendor string placed in markup; an unescaped ``<`` or ``&`` corrupts it."""
     tree = (
         "﻿tocData = ["
         '{"text":"Bass & <Treble>","id":"1","href":"1.html","reused":false,"nodes":['

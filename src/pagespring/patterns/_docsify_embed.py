@@ -1,9 +1,5 @@
-"""Docsify ``:include`` links, replaced by the files they embed.
-
-Markdown is inlined, ``.mmd`` becomes a mermaid fence and any other text file a
-fence in its extension's language. Media and HTML embeds, and files that fail to
-load, stay links.
-"""
+"""Docsify ``:include`` links replaced by what they embed: markdown inline, ``.mmd`` as mermaid,
+other text fenced by extension. Media, HTML and failed loads stay links."""
 
 from __future__ import annotations
 

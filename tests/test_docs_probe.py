@@ -127,10 +127,21 @@ def test_normalize_html_wraps_fragments_with_title(tmp_path):
     assert text.index("<h1>A</h1>") < text.index("<h1>B</h1>")
 
 
+def test_normalize_html_carries_bundled_images_beside_the_deliverable(tmp_path):
+    """Staging bundles images/ beside the deliverable; raw/ keeps them for a replay."""
+    raw = tmp_path / "raw"
+    (raw / "images").mkdir(parents=True)
+    (raw / "0000-a.html").write_text('<section><img src="images/fig.png"/></section>')
+    (raw / "images" / "fig.png").write_bytes(b"\x89PNG fake")
+    acq = AcquireResult(raw_dir=raw, kind="html", slug="s", pages=1)
+
+    out = DocsProbePattern().normalize(acq, tmp_path)
+
+    assert (out.parent / "images" / "fig.png").read_bytes() == b"\x89PNG fake"
+
+
 def test_normalize_html_empty_raw_dir_writes_empty_file(tmp_path):
-    """A zero-page crawl must write a 0-byte file, not a hollow shell — that's
-    what trips orchestrate's EmptyOutputError before staging clobbers a prior
-    good deliverable."""
+    """0 bytes trips EmptyOutputError before staging; a hollow shell would replace a good one."""
     raw = tmp_path / "raw"
     raw.mkdir()
     acq = AcquireResult(raw_dir=raw, kind="html", slug="x", pages=0, title="X Manual")
@@ -149,9 +160,7 @@ def test_normalize_html_escapes_title(tmp_path):
 
 
 def test_a_url_that_serves_a_pdf_is_handed_to_pdf_url(tmp_path, monkeypatch):
-    """A PDF served from an extensionless path is declined by pdf_url.match, so this
-    catch-all receives it. docs_probe is the *content* prober — a PDF body must
-    route, not raise 'unrecognized docs site'."""
+    """pdf_url.match declines an extensionless PDF, so this catch-all must route it by content."""
     monkeypatch.setattr(http, "fetch_text", lambda u, **k: (u, "%PDF-1.7 body"))
     monkeypatch.setattr(
         http,
@@ -173,9 +182,7 @@ def test_a_url_that_serves_a_pdf_is_handed_to_pdf_url(tmp_path, monkeypatch):
 
 
 def test_soft_404_search_index_is_not_mistaken_for_mkdocs(tmp_path, monkeypatch):
-    """The MkDocs probe must validate the index, not just that the URL fetched: a
-    site that answers every path with a 200 HTML page would route to mkdocs, whose
-    acquire then rejects it and masks the real error."""
+    """A site answering 200 everywhere would route to mkdocs and mask the real error."""
     home = "<html><head><title>Manual</title></head><body><article>x</article></body></html>"
 
     def fetch(url, **kwargs):
@@ -220,9 +227,7 @@ def test_clickhelp_is_detected_without_a_generator_meta(tmp_path, monkeypatch):
 
 
 def test_llms_txt_delegation_keeps_the_probed_slug_and_title(tmp_path, monkeypatch):
-    """docs_probe derives the slug from the host and the title from the page. Delegating
-    to GitBook without them folds every custom domain onto its generic host label
-    ('help', 'docs'), where they collide."""
+    """Without them every custom domain folds onto its generic host label, where they collide."""
     home = (
         "<html><head><title>Widget Pro Manual</title>"
         '<meta name="generator" content="nothing-known"></head><body>x</body></html>'
@@ -565,9 +570,8 @@ _OPENAPI_BODY = '{"openapi": "3.0.0", "info": {"title": "Vendor API"}, "paths": 
 def test_platforms_without_a_pattern_of_their_own_route_through_existing_rungs(
     tmp_path, monkeypatch, home, files, dispatch
 ):
-    """These platforms need no pattern named for them: a generator tag, an llms.txt index,
-    or an API reference UI already routes them. Before proposing a pattern for a platform,
-    check its routing like this rather than searching src/ for its name."""
+    """Platforms routed by a generator tag, llms.txt or a reference UI; check routing like this
+    before proposing a pattern."""
     page = f"<html><head><title>Vendor Docs</title></head><body>{home}</body></html>"
 
     def fetch(url, **kwargs):
@@ -748,6 +752,8 @@ _OVERSIZE = ClientError("response exceeded max_bytes", context={"max_bytes": 1})
         (_PLAIN_HOME, "_mediawiki.is_mediawiki", ("_mediawiki", "acquire")),
         (_PLAIN_HOME, "_mdbook.is_mdbook", ("_mdbook", "acquire")),
         (_PLAIN_HOME, "_writerside.is_writerside", ("_writerside", "acquire")),
+        (_PLAIN_HOME, "_flare.is_flare", ("_flare", "acquire")),
+        (_PLAIN_HOME, "_fluidtopics.is_fluidtopics", ("_fluidtopics", "acquire")),
         (_PLAIN_HOME, "_hugo.is_docsy", ("_hugo", "acquire")),
         (_PLAIN_HOME, "_vitepress.is_vitepress", ("_vitepress", "acquire")),
         (_PLAIN_HOME, "_docsify.is_docsify", ("_docsify", "acquire")),
@@ -949,6 +955,8 @@ def test_detect_routes_the_new_platforms(monkeypatch, home, route, via):
     ("tell", "route", "via"),
     [
         ("_writerside.is_writerside", "writerside", "help_app_hooks"),
+        ("_flare.is_flare", "flare", "runtime_attrs"),
+        ("_fluidtopics.is_fluidtopics", "fluidtopics", "app_shell"),
         ("_hugo.is_docsy", "hugo", "docsy_tells"),
         ("_vitepress.is_vitepress", "vitepress", "theme_script"),
         ("_docsify.is_docsify", "docsify", "runtime_script"),

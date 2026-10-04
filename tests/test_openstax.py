@@ -1,9 +1,5 @@
-"""openstax — match + Prev/Next-chain acquire + normalize (mocked fetch).
-
-Reproduces REX's structure: content in <main class="page-content">, Prev/Next
-as <a aria-label="…Page"> OUTSIDE main, content images as root-relative
-/apps/image-cdn/… URLs, and page chrome (logo/toolbar) outside main.
-"""
+"""openstax over REX's shape: content in ``<main class="page-content">``, Prev/Next and chrome
+outside it, root-relative images (mocked fetch)."""
 
 import urllib.error
 
@@ -82,9 +78,6 @@ def test_match():
 
 
 def test_acquire_walks_chain_from_bare_book_url(tmp_path, monkeypatch):
-    """A bare /books/<slug> URL seeds at preface and walks Next to the end —
-    extracting every page's content, absolutizing the content image, and leaving
-    page chrome (logo, nav) out."""
     monkeypatch.setattr(http, "fetch_text", _fake_fetch_text)
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
     p = OpenStaxPattern()
@@ -165,9 +158,7 @@ def test_seed_404_is_clean(tmp_path, monkeypatch):
 
 
 def test_book_title_comes_from_page_title_not_slug(tmp_path, monkeypatch):
-    """The deliverable title is read from the page <title> ('… - <Book> |
-    OpenStax'), so slugs that drop words (concepts-biology -> 'Concepts of
-    Biology') don't mangle it."""
+    """Slugs drop words (concepts-biology), so the title comes from the page ``<title>``."""
     monkeypatch.setattr(http, "fetch_text", _fake_fetch_text)
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
     p = OpenStaxPattern()

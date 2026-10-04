@@ -1,7 +1,5 @@
-"""refresh — the corpus-maintenance sweep over incoming/ (mocked patterns; no
-network). Re-ingests each slug from its manifest's source_url with --if-changed
-semantics; single-fetch patterns with stored validators get a conditional-GET
-fast path."""
+"""refresh: each slug re-ingested from its manifest with --if-changed semantics, single-fetch
+sources first probed with their validators (mocked patterns)."""
 
 import json
 
@@ -122,9 +120,7 @@ class _RenamedSlugPattern(_BodyPattern):
 
 
 def test_refresh_pins_the_recorded_slug(tmp_path, monkeypatch):
-    """A refresh re-ingests INTO the recorded slug even when acquire now
-    derives a different one (source retitled, or the slug was a --slug
-    override) — identity stays stable, no duplicate dir appears."""
+    """A retitled source or ``--slug`` override must not mint a duplicate dir."""
     p = _BodyPattern("v1")
     monkeypatch.setattr(orchestrate, "classify", lambda url: p)
     orchestrate.run_ingest("https://x")
@@ -342,10 +338,8 @@ def test_refresh_all_sweeps_every_slug_and_isolates_failures(tmp_path, monkeypat
 
 
 def test_refresh_single_fetch_without_validators_skips_the_probe(tmp_path, monkeypatch):
-    """`api_spec` declares single_fetch but its acquire captures no validators, so
-    the probe has nothing to send — it must fall straight to the full re-ingest
-    without issuing a conditional GET at all. The real pattern, ingested from a
-    local spec file: a fake could declare validators the pattern never records."""
+    """api_spec is single_fetch but records no validators, so no probe is sent; the real pattern,
+    since a fake could declare validators it never records."""
     spec = tmp_path / "openapi.json"
     spec.write_text(
         json.dumps(

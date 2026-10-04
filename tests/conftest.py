@@ -1,9 +1,5 @@
-"""Suite-wide guards protecting the real corpus.
-
-`INCOMING_DIR` defaults to the relative ``incoming``, which resolves to the real
-corpus whenever pytest runs from the repo root. `incoming/` is gitignored, so a
-test that writes or deletes there destroys manuals with no copy to recover.
-"""
+"""Suite-wide guards for the real corpus: ``INCOMING_DIR`` defaults to the repo's gitignored
+``incoming/``, so a test writing or deleting there destroys manuals with no copy."""
 
 import functools
 import os
@@ -49,11 +45,8 @@ def _guarded(fn, verb, pos, kw=None):
 
 @pytest.fixture(autouse=True, scope="session")
 def _sandbox_incoming_dir(tmp_path_factory):
-    """Point `INCOMING_DIR` away from the corpus for every test in the suite.
-
-    Per-file fixtures still narrow it to their own `tmp_path`; this only stops a
-    file that omits one from falling back to the real thing.
-    """
+    """Point ``INCOMING_DIR`` away from the corpus for every test; per-file fixtures still narrow it
+    to their own ``tmp_path``."""
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(cfg, "INCOMING_DIR", str(tmp_path_factory.mktemp("incoming")))
         yield
@@ -61,12 +54,8 @@ def _sandbox_incoming_dir(tmp_path_factory):
 
 @pytest.fixture(autouse=True, scope="session")
 def _refuse_to_touch_the_corpus():
-    """Reject any delete or overwrite aimed at the real corpus, whatever
-    `INCOMING_DIR` says.
-
-    At the point of danger, not a setup-time assertion: a per-file fixture
-    redirecting wrongly runs after conftest's setup, so a check there cannot fail.
-    """
+    """Reject any delete or overwrite aimed at the corpus, whatever ``INCOMING_DIR`` says, at the
+    point of danger: a wrongly redirecting fixture runs after conftest's setup."""
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
             orchestrate,
@@ -97,10 +86,7 @@ def _refuse_to_touch_the_corpus():
 
 @pytest.fixture
 def env_sandbox(monkeypatch):
-    """A private `os.environ` for tests that load a settings file.
-
-    `load_dotenv` writes the loaded file's keys into the real environment, and an
-    inherited key out-ranks the file under test.
-    """
+    """A private ``os.environ`` for tests that load a settings file: ``load_dotenv`` writes into the
+    real environment, and an inherited key outranks the file under test."""
     settings = ("INCOMING_DIR", "CRAWL_STALL_AFTER_S")
     monkeypatch.setattr(os, "environ", {k: v for k, v in os.environ.items() if k not in settings})

@@ -1,10 +1,5 @@
-"""How a Docsify site maps routes and links to the files it loads.
-
-The ``window.$docsify`` config is read by regex, so options another script sets
-are missed. A route maps to a file the way the runtime maps it: ``alias`` first,
-then ``README`` for a directory, each suffixed with ``ext`` unless the path already
-names a file, under the root ``basePath`` sets.
-"""
+"""How a Docsify site maps routes to files, read from ``window.$docsify`` by regex (options set by
+another script are missed): ``alias``, then ``README`` for a directory, ``ext``, ``basePath``."""
 
 from __future__ import annotations
 

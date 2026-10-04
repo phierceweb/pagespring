@@ -1,23 +1,10 @@
-"""docs_probe — content-probing last resort for generator-built docs sites.
-
-Generator-built docs sites carry no URL tell on custom domains, so ``match``
-cannot route them. This pattern registers LAST, claims any http(s) URL the
-specific patterns declined, and probes the base page at acquire time (the
-api_spec precedent — cheap match, content sniff in acquire).
-
-The ladder runs strongest evidence first: content type, then the asset tells of
-tools that emit no generator tag, then ``<meta name="generator">``, then the
-weaker fallback tells. ``_detect.detect`` is the live list — don't restate it here.
-Unrecognized sites raise ``InvalidInputError`` (exit 2) naming what was probed.
-
-``classify`` reporting ``docs_probe`` therefore means "will content-probe at
-acquire", not a confirmed source type; ``classify --probe`` runs ``detect`` to
-name the route without crawling.
-"""
+"""docs_probe: the last pattern, claiming any http(s) URL the others declined and probing the entry
+page at acquire (``_detect.detect``); unrecognized sites exit 2 naming what was probed."""
 
 from __future__ import annotations
 
 import html
+import shutil
 from pathlib import Path
 from types import ModuleType
 from urllib.parse import urlparse
@@ -26,13 +13,15 @@ from pf_core.exceptions import InvalidInputError
 from pf_core.log import get_logger
 
 from pagespring import http
-from pagespring.base import AcquireResult
+from pagespring.base import IMAGES_DIR, AcquireResult
 from pagespring.patterns import (
     _antora,
     _asciidoctor,
     _clickhelp,
     _docsify,
     _docusaurus,
+    _flare,
+    _fluidtopics,
     _gitbook,
     _hugo,
     _mdbook,
@@ -63,6 +52,8 @@ _STRATEGIES: dict[str, ModuleType] = {
     "paligo": _paligo,
     "st4": _st4,
     "writerside": _writerside,
+    "flare": _flare,
+    "fluidtopics": _fluidtopics,
     "mdbook": _mdbook,
     "mkdocs": _mkdocs,
     "docusaurus": _docusaurus,
@@ -162,5 +153,8 @@ class DocsProbePattern:
                 "<body>\n" + "\n".join(fragments) + "\n</body>\n</html>\n",
                 encoding="utf-8",
             )
+        bundled = acq.raw_dir / IMAGES_DIR
+        if bundled.is_dir():
+            shutil.copytree(bundled, out.parent / IMAGES_DIR, dirs_exist_ok=True)
         log.info("docs_probe.normalize", slug=acq.slug, out=str(out), pages=len(fragments))
         return out

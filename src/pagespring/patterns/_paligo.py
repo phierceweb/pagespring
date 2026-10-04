@@ -1,15 +1,5 @@
-"""Paligo acquisition for docs_probe — search-index driven, no crawl.
-
-Paligo HTML5 output has two faces. A **topic** page announces itself with
-``<meta name="generator" content="Paligo">``; the **portal** shell a reader
-actually lands on carries no generator meta, no ``<main>``, and none of the
-content — only links into ``<locale>/``. Probing the portal alone therefore
-identifies nothing, which is why a Paligo manual reads as an unrecognized site.
-
-The page index is the search corpus, ``<base>/js/fuzzydata.js``. Its entries are
-per *anchor*, not per page, so they dedupe down to the real page set — reading
-it replaces a crawl.
-"""
+"""Paligo for docs_probe: the reader lands on a portal shell with no generator meta or content, so
+tells identify it; the anchor-level search corpus ``js/fuzzydata.js`` dedupes to the page set."""
 
 from __future__ import annotations
 
@@ -50,11 +40,8 @@ def is_paligo(html: str) -> bool:
 
 
 def publication_base(url: str, html: str) -> str:
-    """The directory holding the topics and ``js/fuzzydata.js``.
-
-    A topic URL already sits in it. A portal URL does not — the locale dir is
-    whatever the portal links into, which is not always ``en``.
-    """
+    """The directory holding the topics and ``js/fuzzydata.js``: a topic URL sits in it; a portal's
+    is whatever locale dir it links into, not always ``en``."""
     p = urlparse(url.split("?", 1)[0].split("#", 1)[0])
     path = p.path.rstrip("/")
     # A portal URL's last segment is a real directory, so only a filename is dropped.

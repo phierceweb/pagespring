@@ -16,12 +16,8 @@ _ENV_FILE_VAR = "PAGESPRING_ENV_FILE"
 
 
 def _env_file() -> Path:
-    """The ``.env`` settings resolve from.
-
-    ``_project_root`` names the project only for an editable install, so an
-    installed CLI needs ``PAGESPRING_ENV_FILE``. The working directory is
-    deliberately not searched: every key in the file enters the environment.
-    """
+    """The ``.env`` settings resolve from: ``PAGESPRING_ENV_FILE``, else the editable project root.
+    Never the working directory, since every key in the file enters the environment."""
     override = resolve_str(None, _ENV_FILE_VAR)
     if not override:
         return _project_root / ".env"
@@ -41,15 +37,12 @@ class PagespringConfig(AppConfig):
     # acquired+normalized file.
     INCOMING_DIR: str = "incoming"
 
-    # Idle seconds before a queue-driven crawl is treated as stalled and bails
-    # with its remaining queue (surfacing as `truncated`). A crawl can fetch
-    # healthily while producing nothing, which no socket timeout detects.
-    # 0 disables.
+    # Idle seconds before a queue-driven crawl counts as stalled and bails as `truncated`: a crawl
+    # can fetch healthily while producing nothing. 0 disables.
     CRAWL_STALL_AFTER_S: int = 300
 
-    # A same-source re-crawl finding fewer than COLLAPSE_KEEP_PCT percent of the
-    # staged pages is refused unless --replace (COLLAPSE_KEEP_PCT=0 disables);
-    # manuals under COLLAPSE_MIN_PAGES pages are exempt.
+    # A same-source re-crawl below COLLAPSE_KEEP_PCT percent of the staged pages is refused unless
+    # --replace (0 disables); manuals under COLLAPSE_MIN_PAGES pages are exempt.
     COLLAPSE_KEEP_PCT: int = 50
     COLLAPSE_MIN_PAGES: int = 10
 

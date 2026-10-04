@@ -8,7 +8,7 @@ from pf_core.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.config import cfg
-from pagespring.patterns import _writerside
+from pagespring.patterns import _toc_stage, _writerside
 from pagespring.patterns.docs_probe import DocsProbePattern
 
 _DIR = "https://docs.example.com/help/prod/"
@@ -669,6 +669,36 @@ def test_a_page_that_fails_to_fetch_counts_as_lost(tmp_path, monkeypatch):
     assert "Guides &amp; more" in _staged(acq)[1]  # the group heading moves to the next page
 
 
+@pytest.mark.parametrize("skip", ["fetch_fails", "no_article", "duplicate", "listed_twice"])
+def test_a_skipped_topic_still_heads_the_topics_under_it(tmp_path, monkeypatch, skip):
+    entities = {
+        "first": {"id": "first", "title": "First", "url": "first.html"},
+        "grp": {"id": "grp", "title": "Guides", "pages": ["a", "b"]},
+        "a": {"id": "a", "title": "A", "url": "a.html", "pages": ["c"]},
+        "c": {"id": "c", "title": "C", "url": "c.html"},
+        "b": {"id": "b", "title": "B", "url": "b.html"},
+    }
+    pages = {
+        **_PAGES,
+        f"{_DIR}first.html": _article("First", "<p>First body.</p>"),
+        f"{_DIR}c.html": _article("C", "<p>Gamma body.</p>"),
+    }
+    if skip == "fetch_fails":
+        del pages[f"{_DIR}a.html"]
+    elif skip == "no_article":
+        pages[f"{_DIR}a.html"] = "<html><body><p>You will be redirected shortly</p></body></html>"
+    elif skip == "duplicate":
+        pages[f"{_DIR}first.html"] = pages[f"{_DIR}a.html"]
+    else:
+        entities["first"]["url"] = "a.html"
+    pages[f"{_DIR}HelpTOC.json"] = _toc(entities, ["first", "grp"])
+    _serve(monkeypatch, pages)
+
+    gamma = next(s for s in _staged(_acquire(tmp_path)) if "Gamma body." in s)
+
+    assert gamma.index("<h2>A</h2>") < gamma.index("Gamma body.")
+
+
 def test_a_page_without_an_article_counts_as_lost(tmp_path, monkeypatch):
     pages = dict(_PAGES)
     pages[f"{_DIR}a.html"] = "<html><body><p>You will be redirected shortly</p></body></html>"
@@ -703,7 +733,7 @@ def test_a_stalled_crawl_stops_and_reports_truncated(tmp_path, monkeypatch):
         [f"p{i}" for i in range(40)],
     )
     clock = {"t": 0.0}
-    monkeypatch.setattr(_writerside.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(_toc_stage.time, "monotonic", lambda: clock["t"])
     monkeypatch.setattr(cfg, "CRAWL_STALL_AFTER_S", 30)
     seen: list[str] = []
 

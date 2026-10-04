@@ -1,9 +1,5 @@
-"""MathJax SVG output rebuilt as MathML.
-
-MathJax draws a formula as glyph paths, so a text extraction of it is empty. Each
-group of the SVG names the MathML element it renders (``data-mml-node``) and each
-glyph its code point (``data-c``), which is enough to rebuild the ``<math>``.
-"""
+"""MathJax SVG output rebuilt as MathML: each group names its element (``data-mml-node``) and each
+glyph its code point (``data-c``), since a text extraction of the paths is empty."""
 
 from __future__ import annotations
 

@@ -1,15 +1,5 @@
-"""GitBook acquisition helpers.
-
-GitBook serves a raw-markdown variant of every page (append ``.md``) and an
-``llms.txt`` index listing them. That markdown references images as internal
-``/files/<id>`` paths that 404 on their own; the real downloadable image lives
-behind the rendered page's ``~gitbook/image`` proxy (its ``url=`` param is the
-direct, e.g. Firebase-storage, asset URL). So each page's ``.md`` (clean text,
-ordered image slots) and rendered HTML (ordered downloadable image URLs) are BOTH
-read, and each ``/files/<id>`` slot is resolved — exactly when the id appears in
-a URL, else positionally in document order. Image URLs are left absolute;
-remaining root-relative links are absolutized.
-"""
+"""GitBook helpers: a page's ``.md`` points images at ``/files/<id>`` paths that 404, so the
+rendered page's ``~gitbook/image`` URLs fill those slots, by id, else by position."""
 
 from __future__ import annotations
 
@@ -25,9 +15,8 @@ _IMG_PROXY_RE = re.compile(r"""~gitbook/image\?url=([^&"'\s]+)""")
 # GitBook's appended footer, in either heading form. Anchored on the whole
 # heading line — a doc's own section would carry more words after it.
 _FOOTER_RE = re.compile(r"\n#{1,6}\s+Agent Instructions(?::\s+Querying This Documentation)?\s*\n")
-# GitBook's llms.txt banner, in either form. The one-line form must match only
-# its own line: consuming the blockquote greedily swallows a content blockquote
-# that abuts it with no blank line between.
+# GitBook's llms.txt banner in either form. The one-line form matches only its own line, so a
+# content blockquote abutting it survives.
 _BANNER_RE = re.compile(
     r"^(?:"
     r"> ## Documentation Index[^\n]*\n(?:>[^\n]*\n?)*"
@@ -62,12 +51,8 @@ _MD_TARGET_RE = re.compile(r"\]\(([^)\s]+)")
 
 
 def discover_pages(llms_txt: str, section: str | None = None) -> list[str]:
-    """Ordered, de-duped per-page .md URLs from the llms.txt index; with ``section``,
-    only the section's own page and the pages beneath it.
-
-    The ``.md`` must be in the path: an index may list in-page anchors whose
-    fragment ends in ``.md``, and those are links into a page already listed.
-    """
+    """Ordered, de-duped page ``.md`` URLs from the llms.txt index (``.md`` in the path, not a
+    fragment's anchor); with ``section``, only that page and those beneath it."""
     seen: set[str] = set()
     pages: list[str] = []
     for url in _MD_URL_RE.findall(llms_txt):
@@ -94,10 +79,8 @@ def strip_banner(md: str) -> str:
 
 
 def _yaml_shaped(body: str) -> bool:
-    """Opens on a key line, and every other line is a key, a list item, indented or blank.
-
-    A ``#`` line counts as a YAML comment only in a run of lines holding a key; a
-    heading stands apart from its prose."""
+    """Opens on a key line, and every other line is a key, a list item, indented or blank; a ``#``
+    line is a YAML comment only in a run holding a key, since a heading stands apart."""
     lines = body.split("\n")
     comments: set[int] = set()
     run: list[int] = []
@@ -152,9 +135,8 @@ def lead_with_front_matter_title(md: str) -> str:
 
 
 def strip_agent_preamble(md: str) -> str:
-    """Drop front matter and the blocks before the first heading, or the pointer under
-    it, that send AI clients to an llms.txt index; a leading ``<!-- source -->``
-    comment is kept."""
+    """Drop front matter and the leading blocks, or the pointer under the first heading, that send
+    AI clients to an llms.txt index; a leading ``<!-- source -->`` comment stays."""
     comment = _SOURCE_COMMENT_RE.match(md)
     head = comment.group(0) if comment else ""
     body = _strip_front_matter(md[len(head) :])
@@ -170,10 +152,8 @@ def strip_agent_preamble(md: str) -> str:
 
 
 def strip_mdx_definitions(md: str) -> str:
-    """Drop top-level MDX ``import`` lines and ``export`` definitions outside code fences.
-
-    An export continues only over code-shaped lines (indented, or opening with a
-    closing bracket or tag) up to the one ending in ``;``, so prose is never swallowed."""
+    """Drop top-level MDX imports and exports outside fences; an export runs only over code-shaped
+    lines to the one ending in ``;``, so prose is never swallowed."""
     out: list[str] = []
     fence: str | None = None
     skipping = False

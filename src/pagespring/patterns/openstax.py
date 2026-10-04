@@ -1,18 +1,5 @@
-"""openstax — OpenStax textbooks (``openstax.org/books/<slug>/...``).
-
-OpenStax's reader (REX) serves no full server-side table of contents, but every
-page is a node in a Prev/Next linked list (``<a aria-label="Previous Page">`` /
-``"Next Page"``). acquire seeds at the book's first page — walking Prev back from
-the entry URL — then walks Next to the end, extracting each page's
-``<main class="page-content">`` body. The page chrome (book banner, toolbar, the
-Prev/Next bar itself) lives OUTSIDE ``<main>``, so extraction is clean; content
-images are root-relative ``/apps/image-cdn/…`` URLs that get absolutized.
-normalize concatenates the pages into ONE clean HTML file.
-
-One pattern covers the whole catalogue — every OpenStax book shares this shape.
-Point it at the book, e.g. ``https://openstax.org/books/microbiology`` (or any of
-its ``/pages/<page>`` URLs).
-"""
+"""openstax: OpenStax books, walked Prev to the first page then Next to the end (REX has no full
+server-side TOC), each page's ``<main class="page-content">`` with chrome left outside."""
 
 from __future__ import annotations
 
@@ -62,9 +49,7 @@ def _nav_href(soup: BeautifulSoup, label: str) -> str | None:
 
 
 def _book_title(soup: BeautifulSoup) -> str | None:
-    """The book's human title from the page ``<title>`` ("<page> - <book> |
-    OpenStax"), independent of the slug (which can drop words, e.g.
-    ``concepts-biology`` for "Concepts of Biology")."""
+    """Title from the page ``<title>`` ("<page> - <book> | OpenStax"), since a slug can drop words."""
     t = soup.find("title")
     if not isinstance(t, Tag):
         return None
@@ -101,9 +86,8 @@ def _extract(soup: BeautifulSoup, page_url: str) -> str | None:
 
 
 def _walk_to_first(seed: str) -> tuple[str, str]:
-    """Follow Prev links from ``seed`` back to the book's first page; return its
-    ``(url, html)``. Bounded by ``_MAX`` and cycle-guarded so a malformed chain
-    can't loop forever."""
+    """Follow Prev links from ``seed`` to the book's first page and return its ``(url, html)``,
+    bounded by ``_MAX`` and cycle-guarded."""
     url = seed
     seen: set[str] = set()
     _f, html = http.fetch_text(url)

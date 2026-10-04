@@ -53,6 +53,7 @@ pagespring ingest https://docs.vendor.com/llms-full.txt   # inlined full-docs fi
 pagespring ingest https://vendor.com/manual.epub           # doc archives (zip/tar/epub) → merged clean file
 pagespring ingest https://docs.vendor.com/sitemap.xml      # opt-in: crawl the pages a sitemap lists
 pagespring ingest https://github.com/owner/repo/tree/main/docs   # markdown/MDX docs kept in a repo
+pagespring ingest https://help.vendor.com/r/product/2.0/en/  # one publication of a Fluid Topics portal
 pagespring ingest ./openapi.json                # a local file or file:// path, not just a URL
 ```
 
@@ -63,6 +64,8 @@ The argument can be a **local file path or `file://` URL** for an **API spec** �
 **A sitemap URL is an explicit request to crawl it.** Point `ingest` at a `sitemap.xml` (or a sitemap index) for a site nothing else recognizes: every page it lists under its directory is fetched and reduced to its main content. The sitemap is taken as given, so choose one scoped to the manual — a multi-locale sitemap stages every language.
 
 **A wiki manual is its landing page plus the pages it links to.** For a MediaWiki site, seed at the manual's own landing page, not the wiki's main page, which links to everything.
+
+**A Fluid Topics portal holds many publications.** Seed at one publication's reader URL (`/r/<publication>/`, or any topic under it), not the portal's home page, which names none. Its inline images land in `incoming/<slug>/images/`, as an archive's figures do.
 
 A few flags worth knowing (run `--help` for the rest):
 

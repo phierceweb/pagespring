@@ -273,9 +273,7 @@ def test_title_less_chrome_shell_is_not_counted_as_lost(tmp_path, monkeypatch):
 
 
 def test_relative_image_src_is_absolutized(tmp_path, monkeypatch):
-    """Articles served with relative media/ image paths (Sway, Publisher, …) must be
-    absolutized against the article URL — the deliverable promises absolute assets.
-    Already-absolute srcs are left untouched."""
+    """Relative media/ paths are absolutized against the article URL; absolute ones stay."""
     sitemap = (
         "<urlset><url>"
         "<loc>https://support.microsoft.com/en-us/sway/create-in-sway</loc>"
@@ -331,9 +329,7 @@ def test_acquire_extracts_articles(tmp_path, monkeypatch):
 
 
 def test_a_zero_article_crawl_refuses_to_normalize(tmp_path):
-    """A hub whose shape changed — or a crawl the site quota-blocked outright — acquires
-    nothing, and a titled HTML shell wrapping zero articles is non-empty, so staging
-    would accept it over the previous good deliverable."""
+    """A titled shell around zero articles is non-empty, so staging would accept it over a good one."""
     raw = tmp_path / "raw"
     raw.mkdir()
     acq = AcquireResult(raw_dir=raw, kind="html", slug="windows-help", pages=0)
@@ -448,9 +444,7 @@ def test_a_direct_success_resets_the_block_breaker(tmp_path, monkeypatch):
 
 
 def test_the_sitemap_page_cap_stops_the_walk_and_reports_truncated(tmp_path, monkeypatch):
-    """A product whose sitemap never 404s — more pages than the cap, or an origin
-    that answers every _n.xml — must stop at the cap and say so: the articles on
-    the pages never requested cannot be counted one by one."""
+    """A sitemap that never 404s stops at the cap as truncated: unrequested pages can't be counted."""
     from pagespring.patterns import microsoft_support as mod
 
     requested: list[str] = []

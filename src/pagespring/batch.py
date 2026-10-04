@@ -68,9 +68,8 @@ def ingest_batch(
     if_changed: bool = False,
     replace: bool = False,
 ) -> Iterator[BatchOutcome]:
-    """``run_ingest`` each line in order with the same options, yielding its outcome
-    as it finishes. A source already in the batch, however spelled, is skipped, not
-    crawled again, and no line takes over a slug an earlier line staged."""
+    """``run_ingest`` each line with the same options, yielding outcomes as they finish. A source
+    already in the batch, however spelled, is skipped, and no line takes another line's slug."""
     first_seen: dict[str, int] = {}
     staged: set[str] = set()
     for i, (number, url) in enumerate(lines):

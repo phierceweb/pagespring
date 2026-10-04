@@ -23,11 +23,8 @@ def _lineage(key: str) -> list[str]:
 
 
 def reading_order(pages: list[str], sidebar: list[str]) -> list[str]:
-    """``pages`` in ``sidebar`` order; with no sidebar the given order stands.
-
-    A page the sidebar omits goes just before its first listed descendant (a
-    section page), else just after the listed pages under its nearest ancestor,
-    nearer ancestors first, then in tree order."""
+    """``pages`` in ``sidebar`` order (given order without one). An omitted page goes before its
+    first listed descendant, else after the listed pages under its nearest ancestor."""
     if not sidebar:
         return pages
     listed: dict[str, int] = {}

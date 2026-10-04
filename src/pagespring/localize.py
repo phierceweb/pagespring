@@ -27,12 +27,8 @@ class _ImagePass(NamedTuple):
 
 
 def _image_pass(deliverable: Path, incoming_dir: Path) -> _ImagePass:
-    """Localize ``deliverable``'s remote images into ``incoming_dir/images/``.
-
-    Ingest and localize share it: fetching without the reuse probe and the orphan
-    sweep re-downloads every image onto a fresh ``-2``/``-3`` name on each
-    re-ingest, stranding the previous run's files.
-    """
+    """Localize ``deliverable``'s remote images. Ingest and localize share it: skipping the reuse
+    probe and orphan sweep re-downloads every image onto a ``-2`` name on each re-ingest."""
     from pagespring import _image_cache, images
 
     images_dir = incoming_dir / "images"
@@ -50,12 +46,8 @@ def _image_pass(deliverable: Path, incoming_dir: Path) -> _ImagePass:
 
 
 def _recorded_image_pass(deliverable: Path, incoming_dir: Path, m: manifest.Manifest) -> _ImagePass:
-    """``_image_pass`` inside ``open_for_image_pass``, then the image count and the
-    file's hash into ``m``.
-
-    Also when the pass is cut short: the file then holds the pass's own checkpoints,
-    or is untouched and keeps the hash it had. A kill that skips this leaves the pass
-    marked open, which the next pass resumes from."""
+    """Run ``_image_pass`` inside ``open_for_image_pass``, then record the image count and hash,
+    even when cut short; a kill that skips this leaves the pass open for the next to resume."""
     open_for_image_pass(incoming_dir, m)
     finished = False
     try:
@@ -86,16 +78,12 @@ class LocalizeResult(TypedDict):
 
 
 def localize_images(slug: str) -> LocalizeResult:
-    """Download an already-staged deliverable's remote images into
-    ``incoming/<slug>/images/`` and re-point its refs — no re-crawl.
+    """Download a staged deliverable's remote images into ``images/`` and re-point refs, without a
+    re-crawl. Resumable: re-run until ``remaining`` is 0.
 
-    The acquire/normalize deliverable is self-contained with absolute image URLs by
-    design, so image localization is a separate, **resumable** step: re-run until
-    ``remaining`` is 0 (this is how a book whose image set exceeds a single run's
-    time budget gets fully localized). Updates the manifest's image count.
-
-    Raises ``PreconditionError`` if the slug was never ingested (no readable
-    manifest), or its deliverable is missing or no longer matches its record.
+    Raises:
+        PreconditionError: the slug has no readable manifest, or its deliverable is missing or
+            no longer matches its record.
     """
     incoming_dir = slug_dir(slug)
     m = read_usable(incoming_dir)

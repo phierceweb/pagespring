@@ -1,10 +1,5 @@
-"""Which markdown files a Docsify site is made of: the sidebar file ``loadSidebar``
-names, and the one of that name in each page's directory or above it, as the
-runtime looks one up per route.
-
-A missing file is often answered with the app's own ``index.html``, so that
-counts as absent too.
-"""
+"""Which markdown files a Docsify site is made of: the ``loadSidebar`` file in each page's directory
+or above it, as the runtime looks one up. An ``index.html`` answer means absent."""
 
 from __future__ import annotations
 
@@ -63,10 +58,8 @@ def plain(html: str) -> str:
 
 
 def _read(url: str, *, probe: bool) -> list[tuple[str, str]] | None:
-    """(label, target) per link of the sidebar file at ``url``; None when there is none.
-
-    A ``probe`` is a lookup the runtime makes on its own and falls back from on any
-    failure; otherwise only a refusal means absent (S3 answers a missing key with 403)."""
+    """(label, target) per link of the sidebar file at ``url``, or None: absent on any failure for a
+    ``probe``, as the runtime falls back, else only on a refusal (S3 answers 403)."""
     http.polite_sleep()
     try:
         _final, md = http.fetch_text(url)
@@ -126,11 +119,8 @@ def _dirs(route: str) -> list[str]:
 
 
 def sidebar_pages(site: Site, setting: str | bool | None, *, cap: int) -> list[Page] | None:
-    """The pages the sidebar lists, in order; None when the site renders no sidebar.
-
-    A directory's own sidebar file lists its pages right after the first page in
-    it. The homepage is left to the caller.
-    """
+    """The pages the sidebar lists in order, a directory's own sidebar after that directory's first
+    page; None without a sidebar. The homepage is left to the caller."""
     if setting is False:
         return None
     name = (setting if isinstance(setting, str) and setting else f"_sidebar{site.ext}").lstrip("/")

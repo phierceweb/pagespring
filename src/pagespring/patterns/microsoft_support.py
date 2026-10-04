@@ -1,15 +1,5 @@
-"""microsoft_support — Microsoft 365 end-user help (support.microsoft.com).
-
-acquire finds the product's article catalog via the per-product sitemap
-(``/_sitemaps/<product>_<locale>_<n>.xml``; the hub page server-renders only a
-fraction of the catalog). When no product sitemap exists it falls back to
-scraping the hub's ``/office/`` links. Each article's
-``<div class="learnArticleContent">`` body is extracted (title from the page
-``<h1>``); title-less chrome shells are skipped. normalize merges
-them. Image URLs are absolute (``--download-images`` localizes them).
-
-Point it at an app hub, e.g. ``https://support.microsoft.com/en-us/excel``.
-"""
+"""microsoft_support: Microsoft 365 help from the product's paged sitemap (the hub renders only part
+of the catalog), else the hub's links; each article's ``learnArticleContent`` body merged."""
 
 from __future__ import annotations
 
@@ -82,13 +72,8 @@ def _locale(url: str) -> str:
 
 
 def _sitemap_articles(product: str, locale: str) -> tuple[list[str], bool]:
-    """Article URLs from the per-product sitemap pages (…_1.xml, _2.xml, …), and
-    whether enumeration ended early; empty list when the product has no sitemap
-    (caller falls back to the hub).
-
-    The abort has to travel: the articles it cost were never discovered, so they
-    can't be counted one by one the way a failed page fetch can.
-    """
+    """Article URLs from the per-product sitemap pages and whether enumeration ended early, which
+    must travel since undiscovered articles can't count as lost; [] without a product sitemap."""
     links: list[str] = []
     for n in range(1, _MAX_SITEMAP_PAGES + 1):
         url = _SITEMAP_TPL.format(product=product, locale=locale, n=n)

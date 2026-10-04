@@ -1,19 +1,5 @@
-"""Hugo acquisition for docs_probe — sitemap-driven crawl.
-
-Hugo publishes a ``sitemap.xml`` at its *site* root, which on a multi-site host
-is a subdirectory (``/<product>/<locale>/``) rather than the origin — so the
-sitemap is discovered by walking up from the given URL. Keep only pages under
-that URL's directory, so pointing at one product on a shared host doesn't drag
-in its siblings. What one page holds is ``_hugo_page``'s concern.
-
-The sitemap lists pages in no reading order, so they are staged in the order of
-the theme's sidebar. A crawl over the page cap keeps the pages that come first in
-the fullest sidebar on the entry page and the first few sitemap pages (a landing
-page may have none). A list page is dropped once every page it lists is staged,
-since it only repeats their excerpts. Hugo also publishes a ``/print/`` view
-holding the whole site concatenated at the site root; including it would
-duplicate every other page.
-"""
+"""Hugo for docs_probe: the site-root sitemap's pages (found by walking up) under the seed's
+directory, in theme-sidebar order, capped after ordering; print and covered list pages dropped."""
 
 from __future__ import annotations
 
@@ -103,14 +89,8 @@ def _find_sitemap(base_dir: str) -> tuple[str, str]:
 
 
 def _page_locs(sitemap_url: str, sitemap: str) -> tuple[list[str], set[str], bool]:
-    """Page URLs from a sitemap, the site roots (sitemap directories) it spans, and
-    whether any child sitemap was unreadable.
-
-    A multilingual Hugo site publishes an index whose ``<loc>``s are child
-    *sitemaps*, one per language root, not pages — crawling those directly
-    collects nothing. An unreadable child takes its whole page block with it,
-    and those pages are never discovered, so only ``truncated`` can carry the loss.
-    """
+    """Page URLs, site roots and whether a child sitemap was unreadable: an index's children are
+    per-language sitemaps, and a lost one can only show as ``truncated``."""
     try:
         root = ET.fromstring(sitemap)
     except ET.ParseError as exc:

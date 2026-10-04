@@ -1,8 +1,4 @@
-"""adobe_helpx — Adobe AEM "helpx" product guides (mocked fetch).
-
-helpx emits no ``<meta name="generator">``; the guide is identified by host and
-the ``ul.tocList`` index, which lists every topic as a leaf link.
-"""
+"""adobe_helpx: guides identified by host and the ``ul.tocList`` index (mocked fetch)."""
 
 import pytest
 from pf_core.exceptions import InvalidInputError
@@ -217,9 +213,7 @@ def test_extract_drops_every_aem_chrome_component():
 
 
 def test_declines_pdf_urls_so_they_keep_routing_to_pdf_url():
-    """helpx serves PDFs at /pdf/<app>_reference.pdf. adobe_helpx is registered
-    ahead of pdf_url, so without this it hijacks them and derives the product
-    "pdf" — fetching a guide page that does not exist."""
+    """adobe_helpx runs ahead of pdf_url, so claiming /pdf/ would fetch a guide named "pdf"."""
     p = AdobeHelpxPattern()
     assert not p.match("https://helpx.adobe.com/pdf/illustrator_reference.pdf")
     assert p.match("https://helpx.adobe.com/illustrator/user-guide.html")

@@ -173,10 +173,7 @@ def test_docs_probe_routes_asciidoctor(tmp_path, fetched):
 
 
 def test_inner_container_wins_over_the_stock_wrapper(tmp_path, fetched):
-    """When the stock `#content` wraps the renamed `#contentOrg`, the more
-    specific id must win — a grouped selector returns the wrapper and drags the
-    search chrome in.
-    """
+    """A grouped selector returns the stock wrapper and drags in the search chrome."""
     _asciidoctor.acquire(f"{_BASE}/index.html", tmp_path, slug="x", title=None)
     merged = "\n".join(
         p.read_text(encoding="utf-8") for p in sorted((tmp_path / "raw").glob("*.html"))
@@ -194,9 +191,7 @@ _SINGLE = """<html><head><meta name="generator" content="Asciidoctor 2.0.20"/>
 
 
 def test_single_file_document_marks_itself_single_document(tmp_path, monkeypatch):
-    """One self-contained HTML file is Asciidoctor's DEFAULT output, so it is the
-    generator's most common shape — not a crawl that collapsed. Without this,
-    every stock Asciidoctor manual fails `audit --all --strict`."""
+    """Asciidoctor's default output is one file, so without this every stock manual fails audit."""
     monkeypatch.setattr(http, "fetch_text", lambda u, **k: (u, _SINGLE))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
@@ -225,10 +220,7 @@ def test_a_collapsed_multipage_crawl_is_not_marked_single_document(tmp_path, mon
 
 
 def test_absent_cross_reference_does_not_defeat_single_document(tmp_path, monkeypatch):
-    """A stock single-file manual still cross-references sibling docs, which may
-    simply not be published on that host. Counting a 404 as a lost page marks
-    every such manual as a collapsed crawl.
-    """
+    """Cross-references to docs this host doesn't publish are not lost pages."""
     from urllib.error import HTTPError
 
     linked = _SINGLE.replace(
@@ -301,11 +293,7 @@ def test_a_non_404_sibling_failure_is_still_counted_as_lost(tmp_path, monkeypatc
 
 
 def test_directory_form_seed_scopes_to_that_directory(tmp_path, monkeypatch):
-    """`.../en/` and `.../en` must scope to `.../en`, not its PARENT.
-
-    Stripping unconditionally sends every chapter one level too high; they 404,
-    pages collapses to 1, and single_document then suppresses the audit check
-    that would catch it."""
+    """Stripping unconditionally scopes one level too high, and single_document hides the collapse."""
     seen: list[str] = []
 
     def fake(url, **kwargs):
@@ -327,9 +315,7 @@ def test_directory_form_seed_scopes_to_that_directory(tmp_path, monkeypatch):
 
 
 def test_directory_seed_resolves_assets_inside_the_directory(tmp_path, monkeypatch):
-    """page_url is also the urljoin base for absolutize_refs, so a suffix-less
-    seed must carry a trailing slash or every relative asset resolves to the
-    parent and 404s — with audit silent about it."""
+    """The seed is the urljoin base: without its slash, relative assets resolve to the parent."""
 
     def fake(url, **kwargs):
         key = url if url.endswith(".html") else f"{url.rstrip('/')}/index.html"
@@ -359,9 +345,7 @@ def test_host_root_seed_does_not_produce_a_malformed_base(tmp_path, monkeypatch)
 
 
 def test_entry_redirect_reanchors_the_crawl(tmp_path, monkeypatch):
-    """Every page but the prefetched entry rebinds page_url from the fetch. A
-    seed that redirects into a locale dir must anchor base_dir, link resolution
-    and asset URLs to the post-redirect URL."""
+    """A seed redirecting into a locale dir anchors scope, links and assets on the final URL."""
     flat = "https://manual.vendor.example/mi/bo/kit10/index.html"
 
     def fake(url, **kwargs):
@@ -436,10 +420,7 @@ def test_seed_with_a_query_string_stays_well_formed():
 
 
 def test_sibling_that_fetches_but_cannot_extract_is_still_a_live_sibling(tmp_path, monkeypatch):
-    """A page that returns 200 but whose container is gone (theme change) proves
-    the document IS multipage. Counting only *staged* siblings would mark it
-    single_document, which suppresses audit's single_page_crawl.
-    """
+    """A 200 page with no container still proves the document is multipage."""
     good = (
         '<html><head><meta name="generator" content="Asciidoctor 2.0"/><title>G</title>'
         '</head><body><a href="ch2.html">Two</a>'
@@ -463,12 +444,7 @@ def test_sibling_that_fetches_but_cannot_extract_is_still_a_live_sibling(tmp_pat
 
 
 def test_stalled_crawl_stops_and_reports_truncated(tmp_path, monkeypatch):
-    """A crawl that keeps fetching but stops producing pages must bail, not spin.
-
-    Every request returns 200 and nothing is slow, so no socket timeout applies;
-    only progress separates a working crawl from a spinning one. Bailing with
-    work still queued surfaces as truncated, which audit already fails.
-    """
+    """Every request is healthy, so no timeout fires; bailing with work queued reads as truncated."""
     # Every sibling resolves to byte-identical content, so after the entry page
     # the hash dedup drops all of them — fetching without ever staging.
     nav = "".join(f'<a href="ch{i:03d}.html">x</a>' for i in range(40))

@@ -1,11 +1,5 @@
-"""audit — $0 deterministic checks over staged deliverables.
-
-Read-only (no network, no LLM): each check compares what the manifest claims
-against what's actually on disk, so a half-lost crawl, a hand-edited file, or
-an unfinished localize surfaces as a finding instead of passing silently
-downstream. Error-level findings mean the deliverable can't be trusted;
-warnings are real but survivable.
-"""
+"""audit: $0 read-only checks of what each manifest claims against what is on disk. Error-level
+findings mean the deliverable can't be trusted; warnings are real but survivable."""
 
 from __future__ import annotations
 
@@ -26,9 +20,8 @@ log = get_logger(__name__)
 
 Level = Literal["error", "warning"]
 
-# Deliberately not the localizer's matcher: a ref it declines to claim is one it
-# never downloads and never counts, so borrowing its count would report clean on
-# the one deliverable still remote.
+# Not the localizer's matcher: a ref it declines to claim is never downloaded or counted, so its
+# count would report clean on a deliverable still remote.
 _REMOTE_IMG_RE = re.compile(
     r'(?:<img\b[^>]*?\bsrc=["\']|!\[[^\]]*\]\()(https?://[^"\')\s]+)', re.IGNORECASE
 )
@@ -105,9 +98,8 @@ def audit_slug(slug: str) -> list[Finding]:
     )
     findings = _sha_findings(incoming_dir, m, doc_text)
 
-    # A page cap cut the crawl short, so the deliverable is partial. Nothing about
-    # the content shows it — when the source grew between versions, the truncated
-    # copy is still bigger than the last one and every other check passes.
+    # A page cap cut the crawl short, and nothing in the content shows it: when the source grew, the
+    # truncated copy still outweighs the last one.
     if m.get("truncated"):
         findings.append(
             _f(
@@ -117,9 +109,8 @@ def audit_slug(slug: str) -> list[Finding]:
             )
         )
 
-    # Pages discovered but never staged. `truncated` only reports a page CAP, so
-    # a crawl bled dry by throttling reports truncated=False and passes every
-    # content check — the deliverable is simply missing chunks.
+    # Pages discovered but never staged: `truncated` reports only a page cap, so a crawl bled dry by
+    # throttling passes every content check.
     lost = m.get("lost") or 0
     if lost:
         staged = m["pages"] or 0
@@ -140,11 +131,8 @@ def audit_slug(slug: str) -> list[Finding]:
             )
         )
 
-    # A crawl pattern that returned one page collapsed: the seed named a single
-    # page rather than the index. Unknown pattern ⇒ unclassifiable, so stay quiet;
-    # a PDF deliverable is one file however it was fetched (readthedocs serves a
-    # PDF build), so kind rules it out before the pattern does. A source that IS
-    # one document (a blog post, an article) says so at acquire time.
+    # One page from a crawl pattern: the seed named a page, not the index. Skipped for an unknown
+    # pattern, a PDF, or a source marked as one document.
     pattern = pattern_by_name(m["pattern"])
     if (
         m["kind"] != "pdf"
@@ -174,9 +162,7 @@ def audit_slug(slug: str) -> list[Finding]:
                         f"{remaining} remote image ref(s) remain — re-run localize",
                     )
                 )
-        # A local ref whose file is gone renders as a broken image, and no other
-        # check sees it: the check above counts only REMOTE refs, so a fully
-        # localized deliverable with a dead local ref audits clean.
+        # A local ref whose file is gone renders broken; the remote-ref check above can't see it.
         dangling = sorted(
             ref for ref in set(LOCAL_IMG_RE.findall(doc_text)) if not (incoming_dir / ref).exists()
         )
@@ -206,13 +192,8 @@ def audit_slug(slug: str) -> list[Finding]:
 
 
 def _corpus_findings(slugs: list[str]) -> dict[str, list[Finding]]:
-    """Checks that need the WHOLE corpus, keyed by the slug they attach to.
-
-    The defect exists only in the relation between two slugs, so no per-slug
-    check can reach it. Derived fresh from the manifests rather than persisted: a
-    duplicate may be ingested *after* the slug it collides with, so nothing written
-    at ingest time can be trusted to still be complete.
-    """
+    """Checks on the relation between slugs, keyed by the slug they attach to; derived fresh from
+    the manifests, since a duplicate can be ingested after the slug it collides with."""
     incoming = Path(cfg.INCOMING_DIR)
     by_sha: dict[str, list[str]] = {}
     by_url: dict[str, list[str]] = {}

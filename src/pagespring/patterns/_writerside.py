@@ -1,18 +1,9 @@
-"""JetBrains Writerside acquisition for docs_probe — HelpTOC.json-driven, no crawl.
-
-Every Writerside help instance publishes ``HelpTOC.json`` beside its topics: the
-full navigation tree, in reading order. Topics are flat files in one directory.
-The entry page a reader lands on is often a client-rendered starting page with
-no content or links at all, so discovery comes from the TOC alone. Each topic
-lands at its TOC depth: groups become headings, and a topic's own headings shift
-below them. Page cleanup lives in ``_writerside_page``.
-"""
+"""Writerside for docs_probe: topics from ``HelpTOC.json`` in TOC order (the entry page is often an
+empty client-rendered shell), each at its TOC depth with groups as headings."""
 
 from __future__ import annotations
 
-import html
 import json
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,10 +18,9 @@ from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.config import cfg
-from pagespring.liveness import ProgressWatchdog
 from pagespring.patterns._site import names_a_file, raw_stem
-from pagespring.patterns._writerside_page import MAX_HEADING, LabelNames, extract, shift_headings
+from pagespring.patterns._toc_stage import Section, TopicLost, stage_toc
+from pagespring.patterns._writerside_page import LabelNames, extract, shift_headings
 
 log = get_logger(__name__)
 
@@ -67,10 +57,8 @@ def _instance_dir(url: str) -> str:
 
 
 def _topic_url(href: object, instance: str) -> str | None:
-    """The topic's absolute URL, or None for a link that leaves the instance.
-
-    Topics are relative file names; an absolute or rooted href is an external
-    link, even one that lands on the same host."""
+    """The topic's absolute URL, or None for a link leaving the instance: topics are relative file
+    names, so an absolute or rooted href is external even on the same host."""
     if not isinstance(href, str) or not href or urlparse(href).scheme or href.startswith("/"):
         return None
     url = urldefrag(urljoin(instance, href)).url
@@ -109,11 +97,6 @@ def _toc_entries(raw: str, instance: str) -> list[_Entry]:
     return walk(top, 0)
 
 
-def _heading(entry: _Entry) -> str:
-    level = min(entry.depth + 1, MAX_HEADING)
-    return f"<h{level}>{html.escape(entry.title)}</h{level}>"
-
-
 def _identity(instance: str, slug: str, title: str | None) -> tuple[str, str | None]:
     """The slug extended by a non-generic instance directory, and the manual's
     name from the ``<topic> | <manual>`` page title."""
@@ -144,64 +127,42 @@ def acquire(base: str, workdir: Path, *, slug: str, title: str | None) -> Acquir
 
     raw_dir = workdir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    pending: list[str] = []
-    fetched: set[str] = set()
-    digests: set[str] = set()
     labels = LabelNames(instance)
-    saved = 0
-    lost = 0
-    watchdog = ProgressWatchdog(stall_after_s=cfg.CRAWL_STALL_AFTER_S, now=time.monotonic)
-    for entry in entries:
-        if entry.url is None:
-            pending.append(_heading(entry))
-            continue
-        if entry.url in fetched:
-            continue
-        if len(fetched) >= _MAX_PAGES:
-            break
-        if watchdog.stalled():
-            log.warning("writerside.stalled", saved=saved, idle_s=round(watchdog.idle_s()))
-            truncated = True
-            break
-        fetched.add(entry.url)
-        http.polite_sleep()
+
+    def fetch(entry: _Entry) -> Section:
+        url = entry.url or ""
         try:
-            final, body = http.fetch_text(entry.url)
+            final, body = http.fetch_text(url)
         except Exception as exc:
-            lost += 1
-            log.warning("writerside.fetch_error", url=entry.url, error=str(exc))
-            continue
+            raise TopicLost(f"{url}: {exc}") from exc
         node = (
             extract(body, final, title=entry.title, labels=labels)
             if _instance_dir(final) == instance
             else None
         )
         if node is None:
-            lost += 1
-            log.warning("writerside.no_article", url=entry.url, final=final)
-            continue
+            raise TopicLost(f"no article at {final} (from {url})")
         digest = content_hash(str(node))
-        if digest in digests:
-            log.info("writerside.duplicate_page", url=entry.url)
-            continue
-        digests.add(digest)
         shift_headings(node, entry.depth)
-        stem = raw_stem(entry.url[len(instance) :].removesuffix(".html"))
-        (raw_dir / f"{saved:04d}-{stem}.html").write_text(
-            f"<!-- source: {entry.url} -->\n<section>\n{''.join(pending)}\n{node}\n</section>\n",
-            encoding="utf-8",
-        )
-        pending.clear()
-        saved += 1
-        watchdog.progress()
+        stem = raw_stem(url[len(instance) :].removesuffix(".html"))
+        return Section(str(node), digest, url, stem)
 
-    log.info("writerside.acquire", toc=toc_url, found=len(topics), pages=saved, slug=slug)
+    staged = stage_toc(
+        entries,
+        raw_dir,
+        key=lambda entry: entry.url,
+        fetch=fetch,
+        max_pages=_MAX_PAGES,
+        event="writerside",
+    )
+
+    log.info("writerside.acquire", toc=toc_url, found=len(topics), pages=staged.pages, slug=slug)
     return AcquireResult(
         raw_dir=raw_dir,
         kind="html",
         slug=slug,
-        pages=saved,
+        pages=staged.pages,
         title=title,
-        truncated=truncated,
-        lost=lost,
+        truncated=truncated or staged.stalled,
+        lost=staged.lost,
     )

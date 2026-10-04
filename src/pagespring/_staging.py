@@ -18,11 +18,8 @@ from pagespring.config import cfg
 
 
 def _local_path(source: str) -> str | None:
-    """``source`` resolved to a filesystem path, or None if it names no local file.
-
-    None is the fail-safe answer: the caller then compares exactly, which never
-    clears a directory it cannot prove holds the same manual.
-    """
+    """``source`` as a filesystem path, or None; None makes the caller compare exactly, which never
+    clears a directory it cannot prove holds the same manual."""
     try:
         parts = urlsplit(source)
         if parts.scheme and parts.scheme != "file":
@@ -35,12 +32,8 @@ def _local_path(source: str) -> str | None:
 
 
 def source_key(source: str) -> str:
-    """The identity every spelling of one manual's source shares.
-
-    ``canonical_url`` returns "" for any non-http scheme, so local sources key
-    by resolved path: the same file typed ``./spec.json``, ``spec.json`` or
-    ``file://`` is one manual. Anything else keys as written.
-    """
+    """The identity every spelling of one source shares: the canonical URL, or for a local file
+    (``canonical_url`` is "" off http) the resolved path; anything else as written."""
     return canonical_url(source) or _local_path(source) or source
 
 
@@ -49,13 +42,29 @@ def _same_source(held_url: str, url: str) -> bool:
     return source_key(held_url) == source_key(url)
 
 
-def _unchanged_record(incoming_dir: Path, url: str, sha256: str) -> manifest.Manifest | None:
-    """The slug's record when it names this source, holds this content, and its
-    deliverable is still the file it describes; otherwise None (re-stage)."""
+def _bundle_staged(clean: Path, incoming_dir: Path) -> bool:
+    """Whether every file a pattern bundled beside ``clean`` is staged with the same bytes."""
+    bundle, staged = clean.parent / IMAGES_DIR, incoming_dir / IMAGES_DIR
+    if not bundle.is_dir():
+        return True
+    return all(
+        (staged / src.name).is_file() and (staged / src.name).read_bytes() == src.read_bytes()
+        for src in bundle.iterdir()
+        if src.is_file()
+    )
+
+
+def _unchanged_record(
+    incoming_dir: Path, url: str, sha256: str, *, clean: Path
+) -> manifest.Manifest | None:
+    """The slug's record when it names this source, holds this content (bundled images
+    included), and its deliverable is still the file it describes; otherwise None (re-stage)."""
     prior = manifest.read_manifest(incoming_dir)
     if not usable(prior) or not isinstance(prior["source_url"], str):
         return None
     if not _same_source(prior["source_url"], url) or prior["sha256"] != sha256:
+        return None
+    if not _bundle_staged(clean, incoming_dir):
         return None
     return prior if deliverable_intact(incoming_dir, prior) else None
 
@@ -71,9 +80,8 @@ def _guard_slug(
     single_fetch: bool,
     protected: bool = False,
 ) -> bool:
-    """Refuse to stage ``url`` over what ``incoming_dir`` holds; return whether
-    staging takes the slug over from a different manual. A ``protected`` slug is
-    never taken over."""
+    """Refuse to stage ``url`` over what ``incoming_dir`` holds; return whether staging takes the
+    slug over from a different manual. A ``protected`` slug is never taken over."""
     if not incoming_dir.exists():
         return False
     slug = incoming_dir.name
@@ -121,11 +129,8 @@ def _refuse_collapse(
     single_fetch: bool = False,
     holds_raw: bool = False,
 ) -> None:
-    """Refuse a same-source re-crawl that found a fraction of the staged pages.
-
-    A source that changed shape still normalizes to a non-empty shell, and staging
-    it clears the manual it replaces. A crawl cut short by its page cap proves
-    nothing about the source, so it never replaces a larger complete manual."""
+    """Refuse a same-source re-crawl that found a fraction of the staged pages (a changed source
+    still normalizes to a shell); a capped crawl never replaces a larger complete manual."""
     held_pages = held.get("pages") if isinstance(held, dict) else None
     if not isinstance(held_pages, int) or pages is None:
         return
@@ -169,12 +174,8 @@ def _clear_except(directory: Path, *, keep: set[str]) -> None:
 
 
 def stage_bundled_images(clean: Path, staged: Path, incoming_dir: Path) -> int | None:
-    """Copy the files a pattern bundled beside ``clean`` into ``incoming_dir/images/``.
-
-    Returns how many files images/ then holds, or None when nothing was bundled. A
-    bundled file owns its name, so a localize record under it is dropped; files the
-    staged deliverable no longer references are pruned (see ``prune_orphans``).
-    """
+    """Copy files bundled beside ``clean`` into ``images/``, dropping localize records under their
+    names and pruning orphans; returns the file count, or None when nothing was bundled."""
     bundle = clean.parent / IMAGES_DIR
     if not bundle.is_dir():
         return None

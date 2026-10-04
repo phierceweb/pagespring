@@ -1,19 +1,5 @@
-"""Merge a folder of saved Apple Support help pages into one clean HTML manual.
-
-Each saved Apple Support page is mostly Apple.com chrome (global nav, a TOC
-popover, breadcrumbs, footer, a "Was this helpful?" widget); the real help text
-lives inside ``<div id="article-section">``. Per app this:
-
-  1. Reads welcome.html's ``#modal-toc-container`` TOC tree to recover Apple's
-     real section hierarchy (groups -> child topics, possibly nested).
-  2. Extracts just the article body from each topic page (drops all chrome).
-  3. Assigns each item a heading level from its TOC depth (app title = H1, an
-     item at TOC depth d = H(2+d)) and shifts each topic's internal headings to
-     sit below that, for one faithful, properly-nested outline.
-  4. Tidies Apple's run-together "See also" cross-reference blocks into lists.
-
-Image ``src`` URLs stay absolute.
-"""
+"""Merge saved Apple Support topic pages into one HTML manual: each ``#article-section`` body,
+nested at its welcome-TOC depth, with the Apple.com chrome dropped and image URLs absolute."""
 
 from __future__ import annotations
 
@@ -42,10 +28,8 @@ def _slug_from(a: Tag) -> str | None:
 
 
 def toc_topic_slugs(welcome: Path, guide_slug: str) -> set[str]:
-    """Every topic of the guide that welcome's TOC links, saved or not.
-
-    The guide is the one welcome's canonical link names, else ``guide_slug``: a
-    ``--slug`` override renames the deliverable, not the guide."""
+    """Every topic linked from welcome's TOC, saved or not, for the guide its canonical link names
+    (``--slug`` renames the deliverable, not the guide)."""
     if not welcome.exists():
         return set()
     soup = BeautifulSoup(welcome.read_text(encoding="utf-8", errors="ignore"), _PARSER)
@@ -166,11 +150,8 @@ def extract_body(page_html: str, target_level: int) -> str | None:
 
 
 def build_merged_html(in_dir: Path, slug: str) -> tuple[str, list[str]]:
-    """Merge in_dir's saved Apple Support pages into one clean HTML document.
-
-    Returns the document and the slugs whose body could not be extracted; the
-    crawl counted those pages, so ``pages`` overstates the merge without them.
-    """
+    """Merge in_dir's saved pages into one HTML document; also returns the slugs whose body could
+    not be extracted, which the crawl's ``pages`` still counts."""
     welcome = in_dir / "welcome.html"
     title = app_title(slug, welcome)
     files_by_slug = {p.stem: p for p in in_dir.glob("*.html") if p.name != "welcome.html"}

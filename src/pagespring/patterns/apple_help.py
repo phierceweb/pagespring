@@ -1,10 +1,5 @@
-"""apple_help — Apple support web User Guides (support.apple.com/guide/<slug>/).
-
-acquire: BFS-crawl every topic page under /guide/<slug>/ for the platform,
-saving each page + welcome.html. normalize: strip Apple.com chrome and merge
-the saved pages into one clean <slug>.html whose heading hierarchy comes from
-the welcome TOC tree (see _apple_merge).
-"""
+"""apple_help: Apple Support User Guides (``support.apple.com/guide/<slug>/``), every topic for the
+platform crawled and merged under the welcome page's TOC (see ``_apple_merge``)."""
 
 from __future__ import annotations
 
@@ -29,9 +24,8 @@ log = get_logger(__name__)
 
 _MAX_PAGES = 6000  # a capped crawl sets truncated
 CRAWL_FAILURES = "crawl_failures.json"
-# Apple links each topic BOTH as `<words>-<token>` and bare `<token>`; the two
-# resolve to the same page. Dedup on the token or half the crawl re-fetches
-# pages already on disk. Token prefixes vary within one guide.
+# Apple links each topic as `<words>-<token>` and as bare `<token>`, one page; dedup on the token
+# (its prefix varies within a guide) or half the crawl re-fetches.
 _TOPIC_TOKEN_RE = re.compile(r"^[a-z]{2,6}(?:[0-9a-f]{6,}|_[a-z0-9]+)$")
 _VERSION_SEG_RE = re.compile(r"^[0-9.]+$")
 
@@ -70,14 +64,8 @@ def _topic_link_re(url: str, slug: str, platform: str) -> re.Pattern[str]:
 def _crawl(
     start_url: str, slug: str, platform: str | None, outdir: Path
 ) -> tuple[int, bool, int, str]:
-    """BFS every topic page under /guide/<slug>/ for the platform into outdir.
-
-    Apple embeds the full TOC as JSON in every page, so topic paths are
-    harvested by regex from the page text — no DOM parse needed at this stage.
-    A seed naming no platform takes it, and its locale, from where Apple
-    redirects the first fetch. The URLs it failed to fetch go to ``CRAWL_FAILURES``
-    in outdir, where a replay can count them. Returns (saved, truncated, lost, platform).
-    """
+    """BFS every topic page under /guide/<slug>/ into outdir, harvesting paths from each page's TOC
+    JSON; failures go to ``CRAWL_FAILURES``. Returns (saved, truncated, lost, platform)."""
     path_re = _topic_link_re(start_url, slug, platform) if platform else None
 
     def topic_key(u: str) -> str:

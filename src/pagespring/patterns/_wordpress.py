@@ -1,15 +1,5 @@
-"""WordPress acquisition for docs_probe — one post via the REST API, no crawl.
-
-WordPress declares each post's REST endpoint in the page head:
-
-    <link rel="alternate" type="application/json" href=".../wp-json/wp/v2/posts/<id>" />
-
-Reading that beats deriving a path — the install may sit in a subdirectory
-(``/blog/``), and ``pagespring.http`` exposes no response headers, so the
-``Link:`` header route is unavailable.
-
-Scope is ONE post. A whole-blog crawl is a blog scrape, not a manual.
-"""
+"""WordPress for docs_probe: one post through the REST endpoint the head declares, which holds even
+for an install in a subdirectory. A whole blog is a scrape, not a manual."""
 
 from __future__ import annotations
 
@@ -43,10 +33,8 @@ _CHROME_CSS = "#rank-math-toc, .rank-math-toc"
 
 
 def is_wordpress(html: str) -> bool:
-    """Generator meta, or the wp-json link the head declares.
-
-    Hardened installs strip the generator tag, so the REST link is the reliable
-    tell — and it is the same link ``acquire`` reads."""
+    """Generator meta, or the wp-json link the head declares, which hardened installs keep when they
+    strip the generator tag."""
     if "wordpress" in generator_meta(html):
         return True
     endpoint = rest_endpoint(html)

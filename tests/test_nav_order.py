@@ -6,9 +6,6 @@ _DOCS = "https://docs.example.com/docs"
 
 
 def test_a_page_the_sidebar_omits_is_placed_with_its_section():
-    """A section page the sidebar omits goes before its first listed child; any other
-    omitted page goes after the listed pages under its nearest ancestor, nearer
-    ancestors first."""
     nav = [_DOCS, f"{_DOCS}/a/one", f"{_DOCS}/a/two", f"{_DOCS}/b/one"]
     sitemap_order = [
         f"{_DOCS}/b/one/",

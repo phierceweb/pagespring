@@ -69,9 +69,7 @@ def _flat(html: str) -> str:
 
 
 def test_picture_collapses_to_its_img():
-    """Apple ships <source media="(not all)"> — a query that never matches —
-    holding the dark-mode variant. It is inert markup the localizer cannot see;
-    the <img> fallback carries the image."""
+    """A ``media="(not all)"`` source never renders, so the ``<img>`` fallback carries the image."""
     out = _flat(
         '<picture><source media="(not all)" srcset="https://cdn/dark.png"/>'
         '<img alt="Main window" src="https://cdn/light.png"/></picture>'
@@ -237,9 +235,8 @@ def test_largest_declared_width_wins_across_candidates():
 
 @pytest.mark.parametrize("dead_media", ["(not all)", "not all"])
 def test_a_source_whose_media_never_matches_is_excluded(dead_media):
-    """A dark-mode asset parked behind a query no browser selects. The width
-    descriptor is the point: without it, plain `<img src>` precedence already
-    wins and the exclusion is never what the assertion proves."""
+    """The width descriptor is the point: without it, plain ``src`` precedence wins and the
+    exclusion goes unproven."""
     out = _flat(
         "<picture>"
         f'<source media="{dead_media}" srcset="https://cdn/dark.png 2400w"/>'

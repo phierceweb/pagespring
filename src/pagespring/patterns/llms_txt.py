@@ -1,15 +1,5 @@
-"""llms_txt — docs sites that publish an llms.txt index + per-page markdown.
-
-Many modern docs platforms (Mintlify, GitBook, Anthropic's platform.claude.com)
-expose ``/llms.txt`` listing every page, each with a per-page ``.md`` URL.
-``acquire`` fetches the index, optionally filters to a section, and downloads
-each page's markdown; ``normalize`` concatenates them in order. The output is
-already clean markdown.
-
-Point it at either the ``llms.txt`` URL directly (gets the whole site), or a
-section base URL like ``https://platform.claude.com/docs/en/docs/claude-code``
-(uses ``<host>/llms.txt`` and keeps only ``.md`` links under that prefix).
-"""
+"""llms_txt: sites publishing an llms.txt index of per-page ``.md`` URLs, the whole index or one
+section's prefix; an ``llms-full.txt`` is taken whole as the deliverable."""
 
 from __future__ import annotations
 
@@ -49,10 +39,8 @@ def _is_llms(url: str, *names: str) -> bool:
 
 
 def _clean_page(raw: str) -> str:
-    """A saved page without its platform boilerplate, links absolute against its source.
-
-    An ``llms-full.txt`` inlines many pages under one URL that is none of theirs, so
-    only its root-relative links resolve."""
+    """A saved page without its platform boilerplate, links made absolute against its source; an
+    ``llms-full.txt`` belongs to no page URL, so only root-relative links resolve."""
     md = strip_boilerplate(raw)
     source = _SOURCE_RE.match(md)
     if source is None:

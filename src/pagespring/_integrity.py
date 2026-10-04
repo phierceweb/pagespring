@@ -37,9 +37,8 @@ def usable(m: object) -> TypeGuard[manifest.Manifest]:
 
 
 def image_pass_ran(slug_dir: Path, m: manifest.Manifest, doc_text: str) -> bool:
-    """Whether an image pass may have re-pointed refs: images>0 (0 after a kill
-    mid-pass), or images/ exists *and* the file still carries a local ref (a
-    re-ingest keeps the dir)."""
+    """Whether an image pass may have re-pointed refs: images>0 (0 after a kill mid-pass), or
+    images/ exists and the file still carries a local ref (a re-ingest keeps the dir)."""
     return m.get("images", 0) > 0 or (
         (slug_dir / "images").is_dir() and bool(LOCAL_IMG_RE.search(doc_text))
     )
@@ -53,10 +52,8 @@ def _pass_digest(path: Path) -> str:
 
 
 def integrity(slug_dir: Path, m: manifest.Manifest) -> Integrity:
-    """How the file on disk stands against ``m``: ``localized_sha256`` once an image
-    pass recorded one, else ``sha256``. While a pass is open, a file that differs only
-    where the pass writes is its progress: interrupted. A file an image pass re-pointed
-    without recording a hash has nothing to be compared with: unverifiable."""
+    """How the file stands against its recorded hash: a difference only where an open image pass
+    writes is progress, and a pass that recorded no hash leaves it unverifiable."""
     name = m.get("deliverable")
     if not isinstance(name, str) or not name:
         return "damaged"
@@ -96,14 +93,8 @@ def read_usable(slug_dir: Path) -> manifest.Manifest:
 
 
 def open_for_image_pass(slug_dir: Path, m: manifest.Manifest) -> None:
-    """Refuse an image pass over a deliverable that no longer matches its record,
-    then mark the pass open in the manifest until it records its outcome.
-
-    The pass records the file's hash as verified, so it must not run over damage.
-    A pass that ran without recording a hash left nothing to compare: warn, proceed.
-    The pass checkpoints the file as images land; the mark lets a killed pass's
-    checkpoints read as progress, and anything else still as damage.
-    """
+    """Refuse an image pass over a deliverable that no longer matches its record, then mark the pass
+    open so a killed pass's checkpoints read as progress rather than damage."""
     state = integrity(slug_dir, m)
     deliverable = slug_dir / m["deliverable"]
     if state == "damaged":

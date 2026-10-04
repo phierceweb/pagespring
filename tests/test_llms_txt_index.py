@@ -1,12 +1,5 @@
-"""llms.txt drift gate: the root AI-discovery index must list every shipped doc.
-
-The pf-core convention (its test_llms_txt.py), adapted: every docs/*.md plus
-the root README/CHANGELOG/CONTRIBUTING/SECURITY must appear as an absolute
-raw.githubusercontent URL. (tests/test_llms_txt.py is the llms_txt PATTERN's
-suite — this file gates the repo's own index.) CLAUDE.md and
-CODE_OF_CONDUCT.md are deliberately excluded: assistant orientation and
-community boilerplate, not documentation.
-"""
+"""Drift gate: the root llms.txt must list every shipped doc by raw URL; CLAUDE.md and
+CODE_OF_CONDUCT.md are not docs. ``test_llms_txt.py`` is the pattern's suite."""
 
 from pathlib import Path
 

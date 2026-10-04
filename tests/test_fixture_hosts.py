@@ -1,9 +1,5 @@
-"""Fixture hosts: tests name reserved hosts, not the sites that were ingested.
-
-The sdist ships ``tests/``, so a real vendor host or product name in a fixture
-publishes what was ingested. A host must be reserved (RFC 2606/6761) or listed
-below for a stated reason.
-"""
+"""Tests name reserved hosts, not the sites that were ingested: the sdist ships ``tests/``. A host
+must be reserved (RFC 2606/6761) or its domain listed below with a reason."""
 
 from __future__ import annotations
 

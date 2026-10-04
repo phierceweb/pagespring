@@ -1,12 +1,4 @@
-"""_clickhelp — ClickHelp webHelp exports (mocked fetch).
-
-ClickHelp emits NO ``<meta name="generator">``, so docs_probe's meta sniff can
-never claim it — the tells are its own asset paths (``CHWebHelp.css``,
-``_webHelpScripts/Master/``) and ``<body class="WebHelp_body">``.
-
-The whole page index is one JS file, ``_webHelpScripts/Master/toc_nav.js``,
-holding the TOC as data plus the URL template. No crawling required.
-"""
+"""_clickhelp: told by its asset paths, with ``toc_nav.js`` in place of a crawl (mocked fetch)."""
 
 import pytest
 from pf_core.exceptions import InvalidInputError

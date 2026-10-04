@@ -1,16 +1,5 @@
-"""MDX source to plain markdown: the JSX goes, the prose stays.
-
-Capitalized components and fragments lose their tags and keep their children; a
-line-alone component's ``title`` prop becomes a bold line (a link when it has an
-``href``), a code sample passed as a tagged template prop (``example={css`...`}``) a
-fenced block, and a literal array of string rows (``rows={[["a", "b"]]}``) a table.
-Expressions are dropped unless they are a string literal, a fragment of text, or markup
-outside any component (a component's markup child is a rendered demo). Lowercase tags
-are HTML and stay, minus JSX-only attribute syntax. MDX has no indented code blocks, so
-the indent that only nested children inside a dropped block tag is removed. Front
-matter, fenced code and code spans are left as written; markup that never closes is left
-as text.
-"""
+"""MDX to plain markdown: components lose their tags and keep their children, prop samples become
+fences and tables, HTML and code stay, and markup that never closes is text."""
 
 from __future__ import annotations
 

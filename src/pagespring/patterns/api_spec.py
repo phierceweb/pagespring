@@ -1,15 +1,5 @@
-"""api_spec — OpenAPI/Swagger specs and Postman collections.
-
-Recognizes a *content shape* rather than a host: API contract files. ``match``
-claims spec-ish URLs/paths (a ``.json``/``.yaml``/``.yml`` extension, or an
-``openapi``/``swagger``/``postman`` token in the final path segment); ``acquire``
-fetches or reads the file, content-sniffs OpenAPI vs Postman, and records the
-operation count; ``normalize`` renders it to ONE clean markdown file.
-
-Point it at a spec URL (``ingest https://…/openapi.json``), a local file
-(``ingest ./vendor-openapi.json``), or a Swagger UI, Redoc or Scalar page, whose
-named spec is found and fetched (see _spec_ui).
-"""
+"""api_spec: OpenAPI/Swagger specs and Postman collections, matched by extension or a spec token in
+the last path segment, from a URL, a local file, or a reference UI page naming one."""
 
 from __future__ import annotations
 
@@ -100,9 +90,8 @@ def sniff_format(data: dict[str, Any]) -> str | None:
 
 
 def _title_slug(data: dict[str, Any], fmt: str, src: str) -> tuple[str, str]:
-    """Human title + output slug from ``info.title`` (OpenAPI) / ``info.name``
-    (Postman), plus version for OpenAPI, falling back to the source's last path
-    segment."""
+    """Title and slug from ``info.title`` (OpenAPI, plus version) or ``info.name`` (Postman), else
+    the source's last path segment."""
     raw_info = data.get("info")
     info: dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
     title = str(info.get("title") or info.get("name") or "").strip()

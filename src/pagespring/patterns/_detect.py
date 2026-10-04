@@ -1,9 +1,5 @@
-"""The docs_probe ladder: which strategy a URL's entry page names, found without crawling.
-
-``detect`` runs strongest evidence first: content type, then the tells of tools that
-emit no generator tag, then ``<meta name="generator">`` and the platforms that can drop
-it, then the probes that cost a request. It is the live list — don't restate it here.
-"""
+"""The docs_probe ladder: the strategy a URL's entry page names, found without crawling. ``detect``
+is the live order, strongest evidence first; don't restate it here."""
 
 from __future__ import annotations
 
@@ -18,6 +14,8 @@ from pagespring.patterns import (
     _antora,
     _clickhelp,
     _docsify,
+    _flare,
+    _fluidtopics,
     _gitbook,
     _hugo,
     _mdbook,
@@ -48,11 +46,8 @@ _MAGIC_WINDOW = 1024
 
 
 def _is_mkdocs_index(body: str | None) -> bool:
-    """A real MkDocs search index, not just a URL that answered.
-
-    A site that serves 200 for unknown paths makes "the file exists" meaningless,
-    so the body must parse as a search index.
-    """
+    """A real MkDocs search index: a site answering 200 for any path makes existence meaningless, so
+    the body must parse as one."""
     if body is None:
         return False
     try:
@@ -81,11 +76,8 @@ _META_ROUTES = ("mkdocs", "docusaurus", "hugo", "asciidoctor")
 
 @dataclass(frozen=True)
 class Detection:
-    """Where ``acquire`` hands a URL off, found without crawling.
-
-    ``route`` names the hand-off: ``pdf``, ``openapi``, an API reference UI, a
-    generator strategy, or ``llms_txt``. ``via`` is the evidence it matched on.
-    """
+    """Where ``acquire`` hands a URL off: ``route`` names the hand-off (``pdf``, ``openapi``, a
+    reference UI, a generator strategy, ``llms_txt``), ``via`` the evidence."""
 
     route: str
     via: str
@@ -102,10 +94,8 @@ class Detection:
 
 
 def _fetch_page(url: str) -> tuple[str, str] | ClientError:
-    """``url``'s (final URL, text), or the error when its body outgrew the text budget.
-
-    Only a document download outgrows it; pdf_url fetches that under the download
-    budget and checks the magic bytes itself."""
+    """``url``'s (final URL, text), or the error when the body outgrew the text budget; only a
+    document download does, and pdf_url fetches that under the download budget."""
     try:
         return http.fetch_text(url)
     except ClientError as exc:
@@ -180,6 +170,12 @@ def detect(url: str) -> Detection:
         return found("st4", "entry_tells")
     if _writerside.is_writerside(home):
         return found("writerside", "help_app_hooks")
+    # Flare writes no generator meta either; its runtime attributes sit on every page's <html>.
+    if _flare.is_flare(home):
+        return found("flare", "runtime_attrs")
+    # A Fluid Topics portal serves one app shell for every URL; its API holds the content.
+    if _fluidtopics.is_fluidtopics(home):
+        return found("fluidtopics", "app_shell")
     # mdBook writes no generator meta; its page template carries a comment instead.
     if _mdbook.is_mdbook(home):
         return found("mdbook", "comment")
@@ -217,9 +213,9 @@ def detect(url: str) -> Detection:
         f"unrecognized docs site: {base} — probed for an API reference UI "
         "(Swagger UI/Redoc/Scalar), the generator meta tag "
         "(MkDocs/Docusaurus/Hugo/Asciidoctor/Antora/Starlight/VitePress/WordPress/MediaWiki/"
-        "Sphinx), the tells of ClickHelp, Paligo, SCHEMA ST4, Writerside, mdBook, Docsy and "
-        "Docsify, _static/ assets (Sphinx), search/search_index.json (MkDocs), and llms.txt at "
-        "and above the URL's path; "
+        "Sphinx), the tells of ClickHelp, Paligo, SCHEMA ST4, Writerside, MadCap Flare, Fluid "
+        "Topics, mdBook, Docsy and Docsify, _static/ assets (Sphinx), "
+        "search/search_index.json (MkDocs), and llms.txt at and above the URL's path; "
         f"none matched{f' (generator tags: {gen})' if gen else ''}. The source needs its "
         "own pattern (see docs/architecture.md, 'Adding a new pattern')."
     )

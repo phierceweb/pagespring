@@ -203,10 +203,8 @@ def test_hc_must_lead_the_path():
 
 
 def test_attachment_url_is_not_claimed():
-    """`/hc/.../article_attachments/<id>` is a binary file, not an article.
-
-    Claiming it would make a lone PDF acquire the whole help center; declining lets
-    docs_probe's %PDF- sniff route it to pdf_url."""
+    """An attachment is a file: claimed, a lone PDF would pull the whole center; declined,
+    docs_probe's sniff routes it to pdf_url."""
     url = "https://vendor.zendesk.com/hc/en-us/article_attachments/37651641721111"
 
     assert not ZendeskHelpPattern().match(url)
@@ -271,9 +269,7 @@ def test_whole_center_ingest_is_not_a_single_document(tmp_path, monkeypatch):
 
 
 def test_article_slug_keeps_the_vendor_host():
-    """Two vendors both publish a "Getting Started" article. A title-only slug
-    collides, and ingest clears the dir first — so the second silently destroys
-    the first, with no duplicate_* finding to catch it (contents differ)."""
+    """A title-only slug collides across vendors, and the second ingest clears the first unflagged."""
     one = _slug("https://support.a.com/hc/en-us/articles/111-Getting-Started")
     two = _slug("https://support.b.com/hc/en-us/articles/222-Getting-Started")
 

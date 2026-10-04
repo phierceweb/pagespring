@@ -1,9 +1,5 @@
-"""conftest's corpus guard — the suite's last line of defence.
-
-`incoming/` is gitignored, so whatever the guard misses is destroyed with no copy
-to recover. Everything here is aimed at a stand-in corpus: a guard that has
-stopped working must fail this file, not prove it by deleting a manual.
-"""
+"""conftest's corpus guard, aimed at a stand-in corpus: a broken guard must fail here, not prove
+itself by deleting a manual."""
 
 import importlib
 import pkgutil
@@ -67,10 +63,7 @@ def test_overwriting_inside_the_corpus_is_refused(stand_in_corpus, tmp_path):
 
 
 def test_atomic_writes_inside_the_corpus_are_refused(stand_in_corpus):
-    """The manifest, the image sidecar, the localized deliverable and every
-    downloaded image are staged through pf-core's atomic writers, which reach the
-    filesystem via `os.replace` — none of the `Path`/`shutil` calls guarded above.
-    """
+    """pf-core's atomic writers go through ``os.replace``, which the Path and shutil guards miss."""
     slug = stand_in_corpus / "precious"
 
     with pytest.raises(AssertionError, match="real corpus"):

@@ -4,6 +4,28 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.14.0] — 2026-10-04
+
+### Added
+
+- **`docs_probe` recognizes MadCap Flare HTML5 help** by the runtime attributes on
+  every page, from its entry shell or any topic URL, and acquires the topics its
+  TOC data lists in tree order, nested at their depth, with no crawl.
+- **`docs_probe` recognizes Fluid Topics portals** by their app shell and reads
+  the publication a `/r/` or `/reader/` URL names through the portal's API, in
+  tree order. Inline images are bundled as files beside the deliverable.
+
+### Changed
+
+- **pf-core pin raised to `~=0.25.0`.**
+
+### Fixed
+
+- **`--if-changed` and `refresh` re-stage a bundled image whose bytes changed**
+  under the same name; an unchanged deliverable no longer keeps the old image.
+- **A Writerside topic skipped as a repeat, a duplicate or a failed fetch still
+  heads the topics under it**, so they keep their nesting.
+
 ## [0.13.0] — 2026-09-30
 
 ### Added

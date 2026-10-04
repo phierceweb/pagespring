@@ -1,11 +1,5 @@
-"""pdf_url — a direct link to a PDF manual.
-
-acquire: download the PDF. normalize: pass it through unchanged — the PDF is the
-deliverable. Covers vendor gear manuals (direct ``.pdf`` links) and Read-the-Docs
-PDF builds (``…/_/downloads/[<alias>/]<lang>/<ver>/pdf/``, which serve a PDF at
-an extensionless path). Any other extensionless URL is left to docs_probe, which
-sniffs the response for a PDF.
-"""
+"""pdf_url: a direct PDF link, or a Read the Docs ``/_/downloads/…/pdf/`` build, passed through as
+the deliverable; other extensionless URLs are docs_probe's to sniff."""
 
 from __future__ import annotations
 
@@ -61,9 +55,8 @@ class PdfUrlPattern:
         raw_dir.mkdir(parents=True, exist_ok=True)
         slug = _slug_from_url(url)
         _final, data, meta = http.fetch_bytes_meta(url)
-        # A vendor "PDF" URL that 301s to an HTML landing page still returns 200;
-        # staged unchecked it becomes a .pdf that isn't one, and audit never
-        # content-checks a kind:pdf deliverable.
+        # A "PDF" URL that redirects to an HTML page still answers 200, and audit never
+        # content-checks a kind:pdf deliverable, so check the magic bytes here.
         if _PDF_MAGIC not in data[:_MAGIC_WINDOW]:
             raise InvalidInputError(
                 f"{url} returned {len(data)} bytes that are not a PDF "

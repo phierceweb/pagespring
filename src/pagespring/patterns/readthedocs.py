@@ -1,18 +1,5 @@
-"""readthedocs — manuals hosted on Read the Docs (``*.readthedocs.io``).
-
-RTD projects publish downloadable builds at
-``https://<proj>.readthedocs.io/_/downloads/<lang>/<version>/pdf/`` (an
-extensionless URL that serves the PDF); a subproject served at
-``/projects/<alias>/<lang>/<version>/`` publishes its own at
-``/_/downloads/<alias>/<lang>/<version>/pdf/``. acquire derives the alias,
-language and version from the page URL (default ``en/latest``), downloads that
-build, and passes the PDF through — the same deliverable shape as pdf_url. A 404
-at the download URL (no build published) falls back to a Sphinx crawl of the
-rendered docs; any other fetch failure propagates (exit 4).
-
-Declined, so the patterns that own them claim them: any path under
-``/_/downloads/``, and a URL naming a PDF, API spec or archive file.
-"""
+"""readthedocs: an RTD project's PDF build (``/_/downloads/[<alias>/]<lang>/<version>/pdf/``), else
+a Sphinx crawl when that 404s; download and file URLs go to their own patterns."""
 
 from __future__ import annotations
 
@@ -48,11 +35,8 @@ def _lang_version(path: str) -> tuple[str, str]:
 
 
 def _subproject(path: str) -> tuple[str, str, str] | None:
-    """(alias, lang, version) for a ``/projects/<alias>/…`` path, else None.
-
-    An alias may span segments (``api/python``); it runs up to the first
-    language segment that has a version after it.
-    """
+    """(alias, lang, version) for a ``/projects/<alias>/…`` path, else None; an alias may span
+    segments, up to the first language segment with a version after it."""
     segs = [s for s in path.split("/") if s]
     if len(segs) < 2 or segs[0] != "projects":
         return None

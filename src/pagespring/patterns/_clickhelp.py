@@ -1,16 +1,5 @@
-"""ClickHelp acquisition for docs_probe — TOC-as-data, no crawl.
-
-ClickHelp's webHelp export ships **no** ``<meta name="generator">``, so the meta
-sniff can never claim it; the tells are its own asset paths and body class.
-
-The entire page index is one file — ``<root>/_webHelpScripts/Master/toc_nav.js``
-— holding the TOC as a JS array of nodes plus the topic URL template. Reading it
-replaces a crawl: every topic id is known up front.
-
-Per topic: keep ``#pnlTopicContentContainer``, strip the chrome that sits
-*inside* it (the footer and the Next link are within the container, not around
-it), and absolutize the ``../Storage/...`` asset refs.
-"""
+"""ClickHelp for docs_probe: no generator meta, so it is told by its asset paths; the TOC and topic
+URL template in ``_webHelpScripts/Master/toc_nav.js`` replace a crawl."""
 
 from __future__ import annotations
 
@@ -38,9 +27,8 @@ log = get_logger(__name__)
 _MAX_TOPICS = 5000
 _TOC_PATH = "_webHelpScripts/Master/toc_nav.js"
 _CONTENT_ID = "pnlTopicContentContainer"
-# Chrome rendered INSIDE the content container. Match the whole pager/mini-TOC
-# family by prefix: naming only the one variant visible on the page you happen
-# to inspect leaves the siblings behind on every topic.
+# Chrome rendered inside the content container; the pager and mini-TOC match by prefix, since each
+# page shows a different member of the family.
 _INNER_CHROME_CSS = (
     "div.footer, div.CHBreadcrumbs, "
     "[class^=CHNavLink], [class*=' CHNavLink'], "
@@ -56,11 +44,8 @@ def is_clickhelp(html: str) -> bool:
 
 
 def manual_root(url: str) -> str:
-    """The publication root: topics live at ``<root>/HTML/<id>.html``.
-
-    Accepts the entry file or its bare directory: a trailing segment is dropped
-    only when it names a file, or the root resolves one level too high.
-    """
+    """The publication root (topics at ``<root>/HTML/<id>.html``) from the entry file or its bare
+    directory: only a trailing segment naming a file is dropped."""
     p = urlparse(url)
     path = p.path.rstrip("/")
     head, _, last = path.rpartition("/")
@@ -71,11 +56,7 @@ def manual_root(url: str) -> str:
 
 
 def slug_from_path(url: str) -> str:
-    """Slug from the publication directory, never the host.
-
-    One vendor serves many manuals from one host, so a host-derived slug
-    collides across their products.
-    """
+    """Slug from the publication directory, never the host: one vendor host serves many manuals."""
     segs = [s for s in urlparse(manual_root(url)).path.split("/") if s]
     for seg in reversed(segs):
         if seg.lower() not in {"manual", "manuals", "html", "docs"}:

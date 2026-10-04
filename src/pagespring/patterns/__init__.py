@@ -1,6 +1,2 @@
-"""Source patterns.
-
-Each module here implements the Pattern protocol (see pagespring/base.py) for one
-source type — match(url) / acquire(url) / normalize(acq) — and registers itself
-in pagespring/registry.py.
-"""
+"""Source patterns: each module implements the Pattern protocol (``pagespring.base``) for one source
+type and is registered in ``pagespring.registry``."""

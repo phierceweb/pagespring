@@ -1,11 +1,5 @@
-"""The refresh sweep: re-check every ``incoming/<slug>/`` against its live
-source and re-stage what changed.
-
-``refresh_slug`` re-ingests one slug from its manifest's ``source_url`` with
-``--if-changed`` semantics (byte-identical → untouched); ``refresh_all`` sweeps
-every slug (or those of named patterns) and ``refresh_slugs`` a named set, each
-isolating per-slug failures so one dead source can't stop the sweep.
-"""
+"""The refresh sweep: re-ingest slugs from their manifests' ``source_url`` with ``--if-changed``
+semantics, isolating each failure so one dead source can't stop the sweep."""
 
 from __future__ import annotations
 

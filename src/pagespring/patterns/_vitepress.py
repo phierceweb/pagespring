@@ -1,15 +1,5 @@
-"""VitePress acquisition for docs_probe — sidebar-driven crawl.
-
-The default theme server-renders the current section's sidebar into every doc
-page, in reading order. The page set is the entry page's sidebar plus every
-further sidebar a listed page renders: a guide that links one reference page
-brings the reference's sidebar with it. Then each same-host link in the top
-nav menu opens its section's sidebar, in nav order; a nav page without one (a
-blog, a team page) is skipped. A sitemap is optional and unordered.
-
-A home page renders no sidebar, so an entry without one follows the hero's
-first same-host action link. Content is the ``.vp-doc`` container.
-"""
+"""VitePress for docs_probe: the entry's sidebar, each sidebar a listed page adds, then each top-nav
+section's (a home page follows its hero action); content is ``.vp-doc``."""
 
 from __future__ import annotations
 

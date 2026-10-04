@@ -1,11 +1,5 @@
-"""Asciidoctor acquisition for docs_probe — same-directory crawl.
-
-Asciidoctor's multi-page output splits a book into sibling ``.html`` files that
-all carry the same nav, so the page set is reachable from any one of them.
-
-A page carrying neither content-container id is an error, not a guess — a
-speculative selector ladder stages a hollow deliverable when a theme changes.
-"""
+"""Asciidoctor for docs_probe: a crawl of the sibling ``.html`` files the shared nav links. A page
+with neither content id fails rather than guessing, which would stage a hollow page."""
 
 from __future__ import annotations
 
@@ -42,10 +36,8 @@ _CONTENT_IDS = ("contentOrg", "content")
 
 
 def _base_dir(url: str) -> str:
-    """The directory the sibling pages live in.
-
-    Operates on the path: a host root has nothing to strip, and a directory-form
-    URL keeps its last segment."""
+    """The directory the sibling pages live in, from the path: a host root has nothing to strip, and
+    a directory-form URL keeps its last segment."""
     p = urlparse(url.split("?", 1)[0].split("#", 1)[0])
     path = p.path
     if path.endswith("/"):
@@ -58,10 +50,8 @@ def _base_dir(url: str) -> str:
 
 
 def _normalize_seed(url: str) -> str:
-    """Give a directory seed its trailing slash back.
-
-    ``docs_probe`` hands over ``url.rstrip("/")``, and this is the urljoin base
-    for links and assets — without the slash they resolve into the parent."""
+    """Give a directory seed back the trailing slash docs_probe strips; it is the urljoin base for
+    links and assets."""
     p = urlparse(url.split("#", 1)[0])
     if names_a_file(p.path.rstrip("/").rsplit("/", 1)[-1]):
         return urlunparse(p)
@@ -69,11 +59,8 @@ def _normalize_seed(url: str) -> str:
 
 
 def _same_dir_links(html: str, page_url: str, base_dir: str) -> list[str]:
-    """Sibling ``.html`` URLs in document order — the author's reading order.
-
-    Scoped to ``base_dir`` so the nav's parent-directory language switcher and
-    any offsite link stay out of the crawl.
-    """
+    """Sibling ``.html`` URLs in document order, scoped to ``base_dir`` so the parent-directory
+    language switcher and offsite links stay out."""
     out: list[str] = []
     soup = BeautifulSoup(html, "html.parser")
     for a in soup.find_all("a", href=True):

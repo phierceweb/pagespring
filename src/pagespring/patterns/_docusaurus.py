@@ -1,11 +1,5 @@
-"""Docusaurus acquisition for docs_probe — sitemap-driven crawl.
-
-Docusaurus server-renders page content into ``<article>`` and publishes a
-standard ``sitemap.xml``. Keep only URLs under the base path the user gave
-(pointing at ``/docs`` selects the docs, not the blog) and drop versioned
-siblings (``/docs/2.4.1/…``, ``/docs/next/…``) so exactly the current docs
-land. Per page: extract ``<article>``, drop nav chrome, absolutize refs.
-"""
+"""Docusaurus for docs_probe: the sitemap's pages under the seed's base path (``/docs``, not the
+blog), versioned siblings dropped, each page's ``<article>`` without nav chrome."""
 
 from __future__ import annotations
 
@@ -36,11 +30,8 @@ _CHROME_CSS = "nav, a.theme-edit-this-page, div.theme-doc-toc-mobile"
 
 
 def _versions(urls: list[str], base: str) -> set[str]:
-    """First segments under ``base`` that name a docs version.
-
-    A bare version name always does, whether or not an old version's paths still
-    match the current docs. A name that only starts like one (``2.0-migration``)
-    does when it repeats a current page's path."""
+    """First segments under ``base`` that name a docs version: a bare version name always does; one
+    that only starts like one (``2.0-migration``) does when it repeats a current page's path."""
     rests = {u[len(base) :].strip("/") for u in urls if u.startswith(base + "/")}
     heads = (r.split("/", 1) for r in rests if "/" in r)
     return {

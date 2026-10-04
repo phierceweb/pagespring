@@ -1,11 +1,5 @@
-"""One Writerside topic page as a clean fragment.
-
-Article topics server-render into ``article.article``; starting pages are
-client-rendered shells whose text lives in a ``data-topic`` JSON file. The help
-app's client also renders several article blocks from data attributes (code
-samples, tab titles, callout and heading labels, the TL;DR box); those are
-rebuilt as plain HTML so the fragment carries what a reader sees.
-"""
+"""One Writerside topic as a clean fragment: ``article.article``, or a starting page from its
+``data-topic`` JSON, with client-rendered blocks rebuilt as plain HTML."""
 
 from __future__ import annotations
 
@@ -43,10 +37,8 @@ _CLIENT_ATTRS = (
 
 
 class LabelNames:
-    """Heading label names from the instance's ``config.json``, fetched on first use.
-
-    A primary label shows its name and a secondary label its short name, as the
-    help app renders them."""
+    """Heading label names from the instance's ``config.json``, fetched on first use: a primary
+    label shows its name, a secondary its short name, as the help app renders them."""
 
     def __init__(self, instance: str) -> None:
         self._url = f"{instance}config.json"

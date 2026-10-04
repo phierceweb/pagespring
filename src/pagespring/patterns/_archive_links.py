@@ -1,11 +1,5 @@
-"""Links between an HTML archive's members, re-pointed inside the one deliverable.
-
-A link naming a member file becomes an in-document ``#fragment``. Whether its target
-made it into the deliverable, and where that member starts, is known only once every
-member is read, so links are marked member by member and resolved over the joined text.
-Members often repeat an id (a Sphinx ``examples`` section on every page), so an id an
-earlier member holds is renamed, and the links to it follow.
-"""
+"""Links between an HTML archive's members, resolved to in-document ``#fragment``s once every member
+is read; an id an earlier member holds is renamed, and its links follow."""
 
 from __future__ import annotations
 

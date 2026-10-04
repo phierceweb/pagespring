@@ -1,9 +1,5 @@
-"""Render an OpenAPI 3.x / Swagger 2.0 spec to clean markdown — one section per
-operation, with params, request body, responses, and resolved ``$ref`` schemas.
-
-Pure transformation over a parsed dict; no network, no file I/O. Fields of the
-wrong type are ignored rather than raised on.
-"""
+"""Render an OpenAPI 3.x / Swagger 2.0 dict to markdown, one section per operation with resolved
+``$ref`` schemas; fields of the wrong type are ignored, not raised on."""
 
 from __future__ import annotations
 

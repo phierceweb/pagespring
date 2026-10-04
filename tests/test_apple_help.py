@@ -193,10 +193,7 @@ def test_uncapped_crawl_is_not_truncated(tmp_path, monkeypatch):
 
 
 def test_same_topic_under_short_and_long_url_is_fetched_once(tmp_path, monkeypatch):
-    """Apple links each topic BOTH as /<slug>-<token>/ and bare /<token>/. Both
-    resolve to the same page, so deduping on the raw path segment queues it twice —
-    a re-fetch that writes nothing, which a watchdog counting saved files reads as a
-    stall."""
+    """Deduping on the raw segment fetches each topic twice; a saved-file watchdog sees a stall."""
     welcome = (
         "<html><body>"
         '<a href="/guide/logicpro/aaf-files-lgcp6f2262ba/12.3/mac/15.6">long</a>'
@@ -329,11 +326,7 @@ def test_a_topic_whose_fetch_raises_counts_as_lost(tmp_path, monkeypatch):
 
 
 def test_stalled_crawl_stops_and_reports_truncated(tmp_path, monkeypatch):
-    """A crawl that keeps fetching but stops producing pages must bail, not spin.
-
-    Every request is healthy, so no timeout applies. Bailing with work still queued
-    makes it a truncated result, which audit fails.
-    """
+    """Every request is healthy, so no timeout fires; bailing with work queued makes it truncated."""
     from pagespring.patterns import apple_help as mod
 
     # Every topic resolves to the SAME file, so after the first save nothing new
@@ -512,9 +505,7 @@ def test_a_versioned_topic_seed_fetches_that_releases_welcome_page(tmp_path, mon
 
 @pytest.mark.parametrize("crawl_lost", [0, 1], ids=["never-queued", "fetch-failed"])
 def test_a_toc_topic_the_crawl_never_saved_counts_as_lost_once(tmp_path, crawl_lost):
-    """A link shape the crawl cannot follow leaves TOC entries unfetched; the merge skips
-    them silently, so they are reported against the TOC — without counting a topic
-    whose failed fetch the crawl already reported."""
+    """The merge skips unfetched TOC entries silently, so they are counted against the TOC, once."""
     raw = tmp_path / "raw"
     raw.mkdir()
     for name in ("welcome.html", "whats-new-num123.html"):

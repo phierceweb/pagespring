@@ -74,9 +74,7 @@ def test_acquire_uses_post_redirect_base_for_source_comments(tmp_path, monkeypat
 
 
 def test_page_record_text_is_not_repeated_under_its_sections(tmp_path, monkeypatch):
-    """MkDocs' index carries each page TWICE: one page-level record holding the
-    whole page's text, then one record per section holding the same text again.
-    Emitting both makes half of the deliverable a verbatim duplicate."""
+    """The index holds each page twice, as a page record and as per-section records."""
     index = json.dumps(
         {
             "docs": [
@@ -104,9 +102,8 @@ def test_page_record_text_is_not_repeated_under_its_sections(tmp_path, monkeypat
 
 
 def test_page_blob_is_trimmed_when_only_a_later_section_carries_text(tmp_path, monkeypatch):
-    """A heading immediately followed by a sub-heading indexes as a text-free section, so
-    the trim anchors on the first section carrying text; the FIRST section leaves the
-    page blob whole, duplicating every section body."""
+    """A heading right above a sub-heading indexes with no text, so the trim anchors on the first
+    section that has some."""
     index = json.dumps(
         {
             "docs": [

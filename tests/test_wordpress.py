@@ -141,10 +141,8 @@ def test_marks_itself_a_single_document(tmp_path, fetched):
 
 
 def test_nav_only_post_raises_rather_than_staging_an_empty_section(tmp_path, monkeypatch):
-    """The guard must run AFTER cleaning. A post whose body is only a TOC block
-    passes a raw-content check, then cleans to nothing — and single_document
-    plus pages=1 switch off both of audit's content checks, so the hollow
-    deliverable stages silently."""
+    """A TOC-only body passes a raw check and cleans to nothing, while single_document and pages=1
+    mute audit, so the guard runs after cleaning."""
     nav_only = json.dumps(
         {
             "slug": "empty",

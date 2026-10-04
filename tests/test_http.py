@@ -1,9 +1,5 @@
-"""http — the shim's own contracts (no network).
-
-Retries, backoff, redirect walking, charset resolution, and validator handling
-belong to ``pf_core.fetch`` and are pinned by its tests; pinned here is only what
-pagespring adds. Requests are intercepted at the fetch core's ``_open`` seam.
-"""
+"""http: only what the shim adds over ``pf_core.fetch``, whose own tests pin retries, redirects and
+charsets; requests are intercepted at ``Fetcher._open`` (no network)."""
 
 from __future__ import annotations
 
@@ -245,12 +241,8 @@ class TestPoliteSleep:
 
 
 class TestFetchSizeCaps:
-    """Every helper caps the fetcher it builds.
-
-    pf-core's default is unlimited and every URL here is one pagespring does not
-    control. Asserted through the public helpers: a cap a helper never passes is
-    the bug, and a hand-built fetcher would not show it.
-    """
+    """Every helper caps the fetcher it builds (pf-core's default is unlimited); asserted through
+    the public helpers, since a cap one never passes is the bug."""
 
     def test_every_helper_caps_the_fetcher_it_builds(self, seam):
         seam.queue.extend([_Resp(), _Resp(), _Resp(), _http_error(304)])  # 304 lands on the last

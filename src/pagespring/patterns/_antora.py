@@ -1,14 +1,5 @@
-"""Antora acquisition for docs_probe — one component version, in nav order.
-
-Antora renders the current component version's navigation into every page, so
-the entry page's ``nav.nav-menu`` is both the page list and the reading order.
-The sitemap at the site root adds the pages the nav leaves out: on a site with
-several components it is an index of ``sitemap-<component>.xml`` files, and it
-lists every published version, so only the component's own file is read and
-only URLs under the version's directory are kept. A page found only there is
-staged when it carries the ``h1.page`` title authored pages render; extensions
-generate tag and category listings without one.
-"""
+"""Antora for docs_probe: one component version in nav order, plus pages only the component's own
+sitemap lists under the version's directory that render an authored ``h1.page`` title."""
 
 from __future__ import annotations
 
@@ -108,10 +99,8 @@ def _nav(soup: BeautifulSoup, page_url: str) -> tuple[str | None, list[str]]:
 
 
 def _scope_root(anchors: list[str], links: list[str]) -> str:
-    """Deepest directory holding every anchor and most of the nav's pages.
-
-    A nav can link another component, so one stray entry must not widen the
-    scope; a start page below the version root must not narrow it."""
+    """Deepest directory holding every anchor and most nav pages: one stray link to another
+    component must not widen the scope, nor a deep start page narrow it."""
     root = _common_dir([_dir(a) for a in anchors])
     while _parent(root) != root and (
         not all(_clean(a).startswith(root) for a in anchors)

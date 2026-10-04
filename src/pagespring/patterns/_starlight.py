@@ -1,18 +1,5 @@
-"""Starlight acquisition for docs_probe — sitemap-driven crawl in sidebar order.
-
-Starlight declares its sitemap in the page head (``<link rel="sitemap">``, present
-only when the site builds one) and server-renders the whole sidebar into every
-page. The sitemap is the complete page list but alphabetical; the sidebar is the
-reading order but omits pages reached from index pages. So pages come from the
-sitemap in sidebar order, each unlisted page after its nearest listed relative.
-Without a sitemap the sidebar is the page list.
-
-Scope is the seed's locale under the seed's directory. Starlight mirrors every
-page into every locale, so the locale roots from the entry page's ``hreflang``
-alternates bound the crawl. A seed with nothing below it (``/getting-started/``,
-where a site root often redirects) is a page, not a section: it takes the whole
-locale.
-"""
+"""Starlight for docs_probe: the head-declared sitemap's pages in sidebar order, unlisted ones
+beside their nearest relative, scoped to the seed's locale and directory."""
 
 from __future__ import annotations
 
@@ -44,10 +31,8 @@ _IN_BODY_CHROME_CSS = "a.sl-anchor-link"
 
 
 def is_starlight(html: str) -> bool:
-    """Generator meta, or the markdown body class ``acquire`` extracts.
-
-    A site that overrides Starlight's ``Head`` loses the generator tag but not the
-    container every content page renders into."""
+    """Generator meta, or the markdown body class ``acquire`` extracts, which a site overriding
+    Starlight's ``Head`` keeps when it loses the generator tag."""
     for tag in _GENERATOR_RE.findall(html):
         if "generator" in tag.lower() and _STARLIGHT_CONTENT_RE.search(tag):
             return True
@@ -72,10 +57,8 @@ def _root_url(url: str, segs: tuple[str, ...]) -> str:
 
 
 def _locale_roots(soup: Tag, page_url: str) -> tuple[tuple[str, ...] | None, set[tuple[str, ...]]]:
-    """(this page's locale root, every locale root) as lowercased path segments.
-
-    Each ``hreflang`` alternate is this page's path under another locale's root, so
-    the segments the two do not share are the two roots."""
+    """(this page's locale root, every locale root) as lowercased segments: each ``hreflang``
+    alternate is this path under another root, so the segments they don't share are the roots."""
     own_segs = _segs(page_url)
     host = urlparse(page_url).netloc.lower()
     own: tuple[str, ...] | None = None
@@ -113,10 +96,8 @@ def _in_locale(url: str, own: tuple[str, ...] | None, roots: set[tuple[str, ...]
 
 
 def _sidebar(soup: Tag, page_url: str) -> tuple[list[str], set[tuple[str, str]] | None]:
-    """The sidebar's page links in order (absolute, fragment and query dropped), and
-    the keys of those that adopt unlisted pages: None when every link does (a flat
-    sidebar), else only the links inside a group — a top-level link beside groups
-    is site navigation (a blog, a playground), not a section of the manual."""
+    """The sidebar's page links in order, and the keys of those adopting unlisted pages: None when
+    all do, else group links only (a top-level link beside groups is site navigation)."""
     for css in _SIDEBAR_CSS:
         nav = soup.select_one(css)
         if isinstance(nav, Tag):
@@ -140,12 +121,8 @@ def _sidebar(soup: Tag, page_url: str) -> tuple[list[str], set[tuple[str, str]] 
 def _reading_order(
     pages: list[str], sidebar: list[str], adopters: set[tuple[str, str]] | None = None
 ) -> list[str]:
-    """``pages`` in sidebar order, each unlisted page slotted beside its relatives.
-
-    An unlisted section index goes before the first listed page under it; any other
-    unlisted page goes after the last adopting listed page under its deepest shared
-    ancestor, the closer relatives first. Ties keep sitemap order. With ``adopters``
-    set, a page sharing no section with an adopter is not part of the manual."""
+    """``pages`` in sidebar order, unlisted ones beside their closest listed relatives (a section
+    index first); with ``adopters`` set, a page sharing no section with one is dropped."""
     rank = {_sitemap.page_key(u): i for i, u in enumerate(sidebar)}
     listed = sorted(
         (p for p in pages if _sitemap.page_key(p) in rank),
@@ -203,10 +180,8 @@ def _heading(main: Tag) -> list[Tag]:
 
 
 def _extract(html: str, page_url: str) -> str | None:
-    """The title and markdown body as one cleaned fragment (None without a body).
-
-    Everything else in ``<main>`` — banners, the edit/pagination footer, the
-    sponsor and copyright blocks a site adds by overriding components — is frame."""
+    """The title and markdown body as one cleaned fragment, None without a body; everything else in
+    ``<main>`` (banners, footers, sponsor blocks a site adds) is frame."""
     soup = BeautifulSoup(html, "html.parser")
     main = soup.find("main")
     if not isinstance(main, Tag):

@@ -102,10 +102,7 @@ def test_acquire_downloads_and_slugs(tmp_path, monkeypatch):
 
 
 def test_acquire_rejects_a_response_that_is_not_a_pdf(tmp_path, monkeypatch):
-    """helpx.adobe.com/pdf/<x>_reference.pdf 301s to an HTML landing page and
-    returns 200 text/html. Without a magic-byte check the HTML is staged as
-    <slug>.pdf and the deliverable is a lie no later check can catch — audit
-    never content-checks a kind:pdf deliverable."""
+    """A PDF link can redirect to an HTML page answering 200, and audit never checks PDF content."""
     import pytest
     from pf_core.exceptions import InvalidInputError
 

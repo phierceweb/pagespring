@@ -1,8 +1,5 @@
-"""Smoke tests — proves the pf-core consumer wiring is sound.
-
-Verifies that pf-core[cli] and pf_core.config are importable, that the CLI app
-and the AppConfig subclass both construct, and that the release strings agree.
-"""
+"""Smoke tests: pf-core wiring imports, the CLI app and AppConfig subclass construct, and the
+release strings agree."""
 
 import tomllib
 from pathlib import Path

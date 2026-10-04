@@ -1,15 +1,5 @@
-"""_paligo — Paligo HTML5 publications (mocked fetch).
-
-Two entry points, and only one of them is self-identifying:
-
-- a **topic** page carries ``<meta name="generator" content="Paligo">``
-- the **portal** shell (the URL a human lands on) carries no generator meta at
-  all, no ``<main>``, and none of the content — just links into ``<locale>/``.
-
-The page index is the search corpus, ``<base>/js/fuzzydata.js``: an
-``indexDict`` whose entries carry a ``url`` each. Many entries share a page
-(one per anchor), so they dedupe down to the real page set.
-"""
+"""_paligo: a topic page names the generator, the portal shell names nothing; ``js/fuzzydata.js``
+holds one entry per anchor, deduped to the pages (mocked fetch)."""
 
 import pytest
 from pf_core.exceptions import InvalidInputError

@@ -1,14 +1,5 @@
-"""zendesk_help — Zendesk Help Center sites (e.g. support.<vendor>.com/hc/...).
-
-Uses the Help Center REST API (no scraping): ``/api/v2/help_center/<locale>/
-articles.json`` is paginated and returns each article's title + HTML body.
-acquire fetches all articles; normalize merges them into one HTML doc. Image
-URLs stay absolute (``--download-images`` localizes them).
-
-Point it at the help center, e.g. ``https://support.<vendor>.com/hc/en-us``,
-or at one ``/sections/<id>-...`` / ``/categories/<id>-...`` to pull just that
-slice — the right form when one center covers several products.
-"""
+"""zendesk_help: Zendesk Help Centers through the paginated REST API, the whole center or the
+section, category or article the URL names (one center often covers several products)."""
 
 from __future__ import annotations
 
@@ -54,11 +45,8 @@ def _api_base_and_locale(url: str) -> tuple[str, str]:
 
 
 def _articles_endpoint(url: str) -> str:
-    """Articles endpoint, narrowed when the URL names an article/section/category.
-
-    A bare ``/hc/<locale>`` pulls the whole help center — right for a
-    single-product vendor, wrong for one that ships many under one center.
-    """
+    """Articles endpoint for the URL, narrowed to an article, section or category when it names one;
+    a bare ``/hc/<locale>`` pulls the whole center."""
     origin, locale = _api_base_and_locale(url)
     base = f"{origin}/api/v2/help_center/{locale}"
     path = urlparse(url).path
@@ -72,10 +60,8 @@ def _articles_endpoint(url: str) -> str:
 
 
 def _slug(url: str) -> str:
-    """Host id, plus the article's own name when the URL names one.
-
-    Both halves are load-bearing: a host-only slug collides across articles, an
-    article-only slug collides across vendors."""
+    """Host id, plus the article's name when the URL names one: host alone collides across articles,
+    article alone across vendors."""
     article = _ARTICLE_RE.search(urlparse(url).path)
     host = domain_of(url).removeprefix("support.")
     host_slug = slugify(host.split(".")[0]) or "help"

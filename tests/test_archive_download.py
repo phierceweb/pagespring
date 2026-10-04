@@ -169,9 +169,7 @@ def _epub3_bytes() -> bytes:
 
 
 def test_epub3_xhtml_chapters_are_the_deliverable(tmp_path, monkeypatch):
-    """EPUB 3 names content documents .xhtml. A sniff that knows only .html/.htm
-    classifies the book as markdown, filters every chapter out, and stages the
-    stray COPYRIGHT.txt as the entire deliverable with a healthy-looking manifest."""
+    """A .html/.htm-only sniff reads an EPUB 3 as markdown and stages its stray COPYRIGHT.txt."""
     _serve(monkeypatch, _epub3_bytes())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://standardebooks.org/x/y/downloads/book.epub", tmp_path)
@@ -321,10 +319,8 @@ def _mixed_zip_bytes() -> bytes:
 
 
 def test_stray_xhtml_does_not_flip_a_markdown_archive_to_html(tmp_path, monkeypatch):
-    """.xhtml is an EPUB content-document convention. Counted as an HTML member
-    everywhere, it flips this archive's kind to html, filters both .md docs out,
-    and stages the boilerplate as the whole deliverable — silently, since
-    `single_fetch` suppresses audit's single_page_crawl on the 1-page result."""
+    """Counted everywhere, a stray .xhtml flips a markdown archive to html and stages the
+    boilerplate, silently, since ``single_fetch`` mutes single_page_crawl."""
     _serve(monkeypatch, _mixed_zip_bytes())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/project-docs.zip", tmp_path)
@@ -351,9 +347,7 @@ def _uppercase_html_zip_bytes() -> bytes:
 
 
 def test_uppercase_html_members_are_sniffed_as_html(tmp_path, monkeypatch):
-    """A case-sensitive sniff classifies a zip of .HTML pages as markdown, filters
-    every page out, and stages the packaging README as the entire deliverable —
-    with a healthy-looking manifest. pathlib globs case-sensitively even on APFS."""
+    """pathlib globs case-sensitively even on APFS, so a .HTML zip would stage its README."""
     _serve(monkeypatch, _uppercase_html_zip_bytes())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/manual.zip", tmp_path)
@@ -380,9 +374,7 @@ def _text_zip_with_stray_html() -> bytes:
 
 
 def test_one_stray_html_does_not_flip_a_text_archive_to_html(tmp_path, monkeypatch):
-    """One .html member must not reclassify a text archive: the html filter then drops
-    every .txt and stages the stub as the whole deliverable — the .xhtml case above,
-    through the plain .html branch."""
+    """The .xhtml case through the plain .html branch: one stub must not filter out every .txt."""
     _serve(monkeypatch, _text_zip_with_stray_html())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/python-3.14-docs-text.zip", tmp_path)
@@ -409,9 +401,7 @@ def _html_zip_with_packaging_readme() -> bytes:
 
 
 def test_an_equal_member_count_stages_the_html_manual_not_the_readme(tmp_path, monkeypatch):
-    """A tie is an HTML archive: the text family here is the packaging README, and
-    resolving to markdown filters the manual out and stages the README as the whole
-    deliverable — with a valid manifest and a clean audit, so nothing else catches it."""
+    """A tie is an HTML archive: the README is the text family, and a wrong call audits clean."""
     _serve(monkeypatch, _html_zip_with_packaging_readme())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/manual.zip", tmp_path)
@@ -435,9 +425,7 @@ def _text_zip_with_one_stub() -> bytes:
 
 
 def test_a_lone_stub_does_not_outvote_a_lone_text_chapter(tmp_path, monkeypatch):
-    """The mirror of the case above: breaking the tie on raw counts alone swings this
-    one the wrong way, staging the stub and dropping the only chapter. Which family
-    holds the junk is the signal, not how many members each has."""
+    """The junk's family decides, not member counts; a raw tie-break would drop the only chapter."""
     _serve(monkeypatch, _text_zip_with_one_stub())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/docs.zip", tmp_path)
@@ -450,9 +438,7 @@ def test_a_lone_stub_does_not_outvote_a_lone_text_chapter(tmp_path, monkeypatch)
 
 
 def test_a_local_archive_is_read_from_disk(tmp_path):
-    """`classify ./manual.zip` answers archive_download, so ingest has to honour it.
-    Handing the bare path to the fetcher fails on scheme — an error naming neither
-    the file nor anything the caller can act on."""
+    """``classify`` routes a local path here, so ingest must read it rather than fetch it."""
     archive = tmp_path / "widget-manual.zip"
     archive.write_bytes(_html_zip_with_packaging_readme())
     work = tmp_path / "work"
@@ -506,9 +492,7 @@ def _epub_with_same_named_chapters() -> bytes:
 
 
 def test_spine_members_sharing_a_basename_are_not_confused(tmp_path, monkeypatch):
-    """Two chapters can share a basename in different folders. Matching the spine on
-    basename alone collapses them onto one Path: one is emitted twice and the other
-    pushed out of reading order to the end."""
+    """Matching the spine by basename collapses two same-named chapters onto one path."""
     _serve(monkeypatch, _epub_with_same_named_chapters())
     p = ArchiveDownloadPattern()
     acq = p.acquire("https://x.com/book.epub", tmp_path)

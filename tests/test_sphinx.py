@@ -185,9 +185,7 @@ def test_extract_drops_scripts_and_styles():
 
 
 def test_a_page_reachable_twice_is_staged_once(tmp_path, monkeypatch):
-    """Sphinx themes link the start page as `index.html` from every breadcrumb, so a
-    directory-URL crawl meets its own entry page under a second name; staging both
-    duplicates the body and overstates `pages`."""
+    """Breadcrumbs link the start page as ``index.html``, so a directory crawl meets it twice."""
     home = """<html><body><div role="main">
       <h1>Welcome</h1><p>Index body.</p>
       <a href="index.html">Home</a>

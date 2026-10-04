@@ -1,12 +1,5 @@
-"""The per-slug ``manifest.json`` — the provenance record written beside each
-``incoming/<slug>/`` deliverable.
-
-It records where a manual came from, which pattern acquired it, and a content
-hash — so the hand-off is self-describing, and so ``ingest
---if-changed`` can tell whether a re-fetch produced anything new. Every field
-is an *acquisition* fact; nothing here instructs the downstream converter.
-Pure stdlib; no network, no pattern machinery.
-"""
+"""The per-slug ``manifest.json``: where a manual came from, which pattern acquired it, and a
+content hash. Every field is an acquisition fact, never an instruction to the converter."""
 
 from __future__ import annotations
 
@@ -109,11 +102,8 @@ def build_manifest(
 
 
 def write_manifest(slug_dir: Path, manifest: Manifest) -> Path:
-    """Write ``manifest`` as pretty JSON to ``slug_dir/manifest.json``; return it.
-
-    Atomic: a kill mid-write leaves the previous manifest intact rather than a
-    truncated one, which reads as a corpus-wide `manifest_missing`.
-    """
+    """Write ``manifest`` to ``slug_dir/manifest.json`` atomically and return it; a torn write would
+    read as a corpus-wide ``manifest_missing``."""
     path = slug_dir / MANIFEST_NAME
     atomic_write_text(path, json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return path
@@ -134,13 +124,8 @@ def find_by_sha(incoming_root: Path, sha256: str, *, exclude_slug: str) -> str |
 
 
 def read_manifest(slug_dir: Path) -> Manifest | None:
-    """Read ``slug_dir/manifest.json``; ``None`` if absent or unreadable.
-
-    Tolerant by design: a slug dir without a manifest, or a corrupt one, must
-    not crash ``status`` or ``--if-changed`` — they treat ``None`` as "no record".
-    Unreadable covers undecodable bytes, unparseable JSON, and a parseable
-    non-object, which callers would index by key and raise ``TypeError`` on.
-    """
+    """``slug_dir/manifest.json``, or None when absent, undecodable, unparseable or not an object;
+    callers read None as "no record", so a corrupt file never crashes a sweep."""
     path = slug_dir / MANIFEST_NAME
     if not path.exists():
         return None

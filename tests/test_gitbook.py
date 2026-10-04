@@ -1,8 +1,5 @@
-"""gitbook — match + acquire/normalize over a synthetic GitBook (no network).
-
-Reproduces GitBook's double-encoded ``~gitbook/image`` proxy so the
-``/files/<id>`` → real-URL resolution is exercised for real.
-"""
+"""gitbook over a synthetic site, with GitBook's double-encoded ``~gitbook/image`` proxy so image
+resolution runs for real (no network)."""
 
 import re
 import urllib.parse
@@ -83,9 +80,7 @@ def test_strip_banner_both_variants():
 
 
 def test_strip_banner_keeps_adjacent_content_blockquote():
-    """A legit content blockquote directly abutting the banner (no blank line
-    between) must survive — the single-paragraph banner is one line, and its
-    strip must not swallow the following blockquote."""
+    """The one-line banner's strip must not swallow a content blockquote abutting it."""
     from pagespring.patterns._gitbook import strip_banner
 
     md = (
@@ -142,9 +137,8 @@ def test_acquire_resolves_images_strips_footer_absolutizes(tmp_path, monkeypatch
 
 
 def test_anchor_links_ending_in_md_are_not_pages(tmp_path, monkeypatch):
-    """An llms.txt can list in-page anchors like `/api/create#create-params.md`. The
-    `.md` is in the FRAGMENT, not the path: a link into a page already listed, whose
-    urlparse().path stem has no .md for normalize's *.md glob to find."""
+    """The ``.md`` in ``/api/create#create-params.md`` is in the fragment: an anchor into a listed
+    page, not a page."""
     llms = (
         "- [A](https://ex.com/a.md)\n"
         "- [Anchor](https://ex.com/a#section-one.md)\n"

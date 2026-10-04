@@ -1,9 +1,5 @@
-"""Archive members a deliverable references, bundled beside it.
-
-An EPUB or doc zip names its figures by paths inside the extracted archive, which
-is discarded after normalize. ``MemberImages`` copies each referenced member into
-``IMAGES_DIR`` beside the normalized file and re-points the ref at the copy.
-"""
+"""Archive members a deliverable references, copied into ``IMAGES_DIR`` beside it with refs
+re-pointed: the extracted archive is discarded after normalize."""
 
 from __future__ import annotations
 
@@ -46,10 +42,8 @@ class MemberImages:
         self.copied = 0
 
     def ref(self, target: str, member: Path, *, only_present: bool = False) -> str | None:
-        """The ``images/<name>`` ref for ``target`` as written in ``member``, or None to
-        leave it (a URL, a fragment, or with ``only_present`` a path the archive lacks).
-
-        A path the archive lacks or escapes is re-pointed uncopied, so audit reports it."""
+        """The ``images/<name>`` ref for ``target``, or None for a URL, a fragment, or (with
+        ``only_present``) a missing path; a missing or escaping path is re-pointed uncopied."""
         found = member_path(target, member, self._root)
         if found is None:
             return None
@@ -66,10 +60,8 @@ class MemberImages:
         return f"{IMAGES_DIR}/{name}"
 
     def rewrite_html(self, soup: Tag, member: Path) -> None:
-        """Re-point ``soup``'s ``<img>`` and SVG ``<image>`` refs into the bundle.
-
-        A re-pointed ``<img>`` loses its ``srcset``: a renderer prefers it to ``src``,
-        and its candidates name archive paths."""
+        """Re-point ``soup``'s ``<img>`` and SVG ``<image>`` refs into the bundle, dropping
+        ``srcset``: a renderer prefers it, and its candidates name archive paths."""
         for tag, attr in _HTML_REFS:
             for el in soup.find_all(tag):
                 value = el.get(attr)
@@ -99,16 +91,21 @@ class MemberImages:
         return _RST_IMAGE_RE.sub(repl, text)
 
     def _claim(self, filename: str) -> str:
-        """A lowercase, filesystem-safe name no other member of the bundle holds."""
-        stem, dot, ext = filename.rpartition(".")
-        if not dot:
-            stem, ext = filename, ""
-        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-.").lower() or "image"
-        ext = re.sub(r"[^a-z0-9]+", "", ext.lower())
-        suffix = f".{ext}" if ext else ""
-        name, n = f"{stem}{suffix}", 1
-        while name in self._taken:
-            n += 1
-            name = f"{stem}-{n}{suffix}"
-        self._taken.add(name)
-        return name
+        return claim_name(filename, self._taken)
+
+
+def claim_name(filename: str, taken: set[str]) -> str:
+    """A lowercase, filesystem-safe name for a bundled file that ``taken`` does not hold yet;
+    it is added to ``taken``."""
+    stem, dot, ext = filename.rpartition(".")
+    if not dot:
+        stem, ext = filename, ""
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-.").lower() or "image"
+    ext = re.sub(r"[^a-z0-9]+", "", ext.lower())
+    suffix = f".{ext}" if ext else ""
+    name, n = f"{stem}{suffix}", 1
+    while name in taken:
+        n += 1
+        name = f"{stem}-{n}{suffix}"
+    taken.add(name)
+    return name

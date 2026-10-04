@@ -34,12 +34,8 @@ class RenormalizeResult(TypedDict):
 
 
 def run_renormalize(slug: str) -> RenormalizeResult:
-    """Re-run the pattern's CURRENT normalize against ``incoming/<slug>/raw/``
-    and re-stage the deliverable — no acquire, no network.
-
-    Raw is copied to a fresh workdir so a mutating normalize can't corrupt the
-    kept copy; the ``AcquireResult`` is rebuilt from the manifest.
-    """
+    """Re-run the pattern's current normalize on ``incoming/<slug>/raw/`` and re-stage, offline; raw
+    is copied first so a mutating normalize can't corrupt the kept copy."""
     incoming_dir = slug_dir(slug)
     m = read_usable(incoming_dir)
     raw_src = incoming_dir / "raw"
@@ -95,9 +91,8 @@ def run_renormalize(slug: str) -> RenormalizeResult:
         _stage_file(clean, staged)
         if old.exists() and old.name != staged.name:
             old.unlink()
-        # Stale localized images would poison the next localize: its collision
-        # set seeds from images/, forcing re-downloads onto suffixed names. A
-        # byte-identical replay names the very URLs the cache was fetched from.
+        # A changed file drops images/: its names would push the next localize onto suffixed names.
+        # A byte-identical replay names the very URLs the cache was fetched from.
         if sha256 != m["sha256"]:
             shutil.rmtree(incoming_dir / "images", ignore_errors=True)
 

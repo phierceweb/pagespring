@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
-"""Refuse code that hand-rolls what pf-core already provides.
-
-Every rule names its replacement. Exemptions are per file with a reason, never
-a blanket skip.
-
-    bin/check-framework            # the whole package
-    bin/check-framework a.py b.py  # just these
-"""
+"""Refuse code that hand-rolls what pf-core provides; each failure names the replacement. Usage:
+``bin/check-framework [file ...]``, the whole package by default."""
 
 from __future__ import annotations
 

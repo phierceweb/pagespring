@@ -78,22 +78,8 @@ def run_ingest(
     replace: bool = False,
     protected_slugs: Collection[str] = (),
 ) -> IngestResult:
-    """Acquire + normalize ``url`` into ``incoming/<slug>/`` and return stats.
-
-    The result is one clean file (absolute asset URLs) under ``incoming/<slug>/``,
-    plus a ``manifest.json`` recording its provenance and a content hash. With
-    ``download_images``, an html/markdown source's remote images are pulled into
-    ``incoming/<slug>/images/`` and refs re-pointed there (PDF sources skip this).
-    With ``keep_raw``, the raw crawl is kept alongside in ``raw/``.
-
-    With ``if_changed``, a re-fetch that normalizes to byte-identical content
-    leaves the existing deliverable untouched and returns ``changed=False`` (the
-    crawl still runs — the slug is only known after acquire).
-
-    ``slug_override`` renames the staged identity (dir, manifest, deliverable
-    filename), folded via slugify. No other source takes over a slug in
-    ``protected_slugs``, even with ``replace``: a batch's earlier lines staged them.
-    """
+    """Acquire and normalize ``url`` into ``incoming/<slug>/`` with its manifest; returns stats.
+    ``if_changed`` still crawls but stages nothing identical; protected slugs resist ``replace``."""
     pattern = classify(url)
     if pattern is None:
         raise NoPatternError(url)
@@ -106,10 +92,8 @@ def run_ingest(
         # trust: a malformed or truncated gzip, or one over the size cap.
         except (urllib.error.URLError, TimeoutError, ConnectionError, ClientError) as exc:
             raise AcquireError(url, str(exc)) from exc
-        # Before normalize — patterns also use acq.slug in content (title fallback).
-        # The pattern-derived slug is folded too, not just the override: it comes
-        # from a remote URL, and `incoming/<slug>` is later cleared with rmtree,
-        # so a slug of ".." would delete everything outside the corpus.
+        # Fold before normalize, which uses acq.slug. The pattern's slug comes from a remote URL and
+        # `incoming/<slug>` is later rmtree'd, so a ".." slug would delete outside the corpus.
         if slug_override is not None:
             folded = fold_slug(slug_override)
             if not folded:
@@ -125,9 +109,8 @@ def run_ingest(
         if not clean.exists() or clean.stat().st_size == 0:
             raise EmptyOutputError(url)
 
-        # Hash + size the normalized deliverable BEFORE staging/image-localization:
-        # this is the content identity --if-changed compares against, and (on the
-        # default no-image path) the on-disk file's own hash.
+        # Hash the normalized file before staging or localizing: the identity --if-changed compares,
+        # and on the no-image path the on-disk file's own hash.
         sha256 = manifest.sha256_file(clean)
         size_bytes = clean.stat().st_size
         incoming_dir = Path(cfg.INCOMING_DIR) / acq.slug
@@ -137,12 +120,11 @@ def run_ingest(
 
         # --if-changed: an unchanged re-fetch preserves the existing deliverable,
         # its localized images, and its mtime — nothing is re-staged.
-        prior = _unchanged_record(incoming_dir, url, sha256) if if_changed else None
+        prior = _unchanged_record(incoming_dir, url, sha256, clean=clean) if if_changed else None
         if prior is not None:
             log.info("ingest.unchanged", pattern=pattern.name, slug=acq.slug, sha256=sha256)
-            # refresh probes with these; a source that re-stamped identical bytes
-            # would never answer 304 to the ones it replaced. A record older than
-            # the validator fields keeps its shape.
+            # Record the validators served: a source that re-stamped identical bytes would never
+            # match the old ones. A record older than the validator fields keeps its shape.
             fresh = (acq.etag, acq.last_modified)
             if "etag" in prior and (prior.get("etag"), prior.get("last_modified")) != fresh:
                 prior["etag"], prior["last_modified"] = acq.etag, acq.last_modified
@@ -208,9 +190,8 @@ def run_ingest(
             manifest.write_manifest(incoming_dir, record)
         _stage_file(clean, staged)
         manifest.write_manifest(incoming_dir, record)
-        # Only once the new deliverable is in place: the clear is unrecoverable.
-        # A same-source re-ingest keeps its image cache — a refresh brings the same
-        # image URLs back. A takeover's cache describes the displaced manual.
+        # Clear only after the new file lands. A same-source re-ingest keeps its image cache; a
+        # takeover's cache describes the displaced manual.
         keep = {manifest.MANIFEST_NAME, staged.name}
         if not takeover:
             keep |= {"images", images_mod.SIDECAR_NAME}

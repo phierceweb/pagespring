@@ -1,22 +1,5 @@
-"""Pattern registry + URL classification.
-
-``classify(url)`` walks PATTERNS in order and returns the first whose ``match``
-accepts the URL, or None when no pattern recognizes the source (only reachable
-for a non-web argument — a local file path or ``file://`` URL — since
-``docs_probe`` claims every remaining http(s) URL).
-
-Order matters — first match wins (PATTERNS below is the list):
-  - host-specific patterns first,
-  - then extension/content patterns so a `.json`/`.yaml` spec or `.pdf` on a
-    `docs.*` host routes correctly rather than falling through to the broader
-    patterns below; api_spec also claims URLs whose last segment contains an
-    ``openapi``/``swagger``/``postman`` token, and sitemap_crawl a URL naming a
-    sitemap file (opt-in: nothing else reaches it),
-  - gitbook next, narrowed to `*.gitbook.io` (its own hosting, not custom domains),
-  - docs_probe LAST — a content-probing catch-all that claims any remaining
-    http(s) URL and sniffs the generator at acquire time. It must stay last:
-    everything above it is a cheaper, more specific match.
-"""
+"""Pattern registry: ``classify`` returns the first pattern whose ``match`` accepts a URL. Order:
+host-specific, then extension and content, then gitbook, then ``docs_probe`` last."""
 
 from __future__ import annotations
 

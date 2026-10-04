@@ -1,11 +1,5 @@
-"""archive_download — documentation shipped as a downloadable archive.
-
-acquire: download a ``.zip`` / ``.tar.*`` / ``.epub`` and extract it. normalize:
-concatenate the extracted text/markdown files (sorted) into one file, or, for an
-HTML archive, the HTML pages. Covers Python's docs archives
-(``python-3.x-docs-text.zip`` — clean plain text) and the Read-the-Docs /
-Sphinx ecosystem.
-"""
+"""archive_download: docs shipped as a ``.zip``, ``.tar.*`` or ``.epub``, extracted and joined into
+one file, the text members or the HTML pages, an EPUB in spine order."""
 
 from __future__ import annotations
 
@@ -42,9 +36,8 @@ _MEDIA = ["img", "image", "svg", "video", "audio", "object", "embed", "iframe", 
 
 
 def _html_exts(raw_dir: Path) -> tuple[str, ...]:
-    """HTML member extensions for this archive. ``.xhtml`` counts only inside an
-    EPUB container: elsewhere a stray one must not flip the kind sniff to html
-    and filter the real .md/.txt docs out of the deliverable."""
+    """HTML member extensions: ``.xhtml`` counts only in an EPUB, since a stray one elsewhere would
+    flip the kind sniff and filter the real docs out."""
     epub = any(raw_dir.rglob("*.opf")) or any(
         p.read_text(encoding="utf-8", errors="replace").strip() == "application/epub+zip"
         for p in raw_dir.rglob("mimetype")
@@ -82,11 +75,8 @@ class _Package(NamedTuple):
 
 
 def _package(raw_dir: Path) -> _Package:
-    """The OPF's reading order, navigation documents and title.
-
-    The spine is the only authoritative order: filenames sort ch10 between ch1
-    and ch2, and Gutenberg names its cover ``wrap0000`` so it lands last.
-    """
+    """The OPF's reading order, navigation documents and title; the spine is the only true order
+    (filenames sort ch10 before ch2, and Gutenberg's cover ``wrap0000`` last)."""
     empty = _Package([], set(), None)
     opf = next(iter(sorted(raw_dir.rglob("*.opf"))), None)
     if opf is None:
@@ -194,9 +184,8 @@ class ArchiveDownloadPattern:
         members = [(p.suffix.lower(), p.stem.lower()) for p in raw_dir.rglob("*")]
         n_html = sum(1 for suffix, _ in members if suffix in htmly)
         n_text = sum(1 for suffix, _ in members if suffix in _TEXTY)
-        # Which family carries the archive, not which is merely present: a text
-        # archive shipping one search.html would otherwise filter out every doc,
-        # and one README would outweigh the single page it describes.
+        # Which family carries the archive, not which is present: one stray search.html must not
+        # filter out a text archive, nor one README outweigh the single page it describes.
         n_docs = sum(1 for suffix, stem in members if suffix in _TEXTY and stem not in _PACKAGING)
         kind: SourceKind = "html" if n_html > n_docs else "markdown"
         slug = _slug_from(url)

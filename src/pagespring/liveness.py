@@ -1,12 +1,5 @@
-"""Progress watchdog for queue-driven crawls.
-
-A crawl can keep fetching successfully while producing nothing new — every
-request returns 200 and nothing is slow, so no socket timeout sees it. Only
-progress distinguishes a working crawl from a spinning one.
-
-A stalled crawl breaks its loop with work still queued, so it surfaces through
-the existing truncation path rather than a separate error channel.
-"""
+"""Progress watchdog for queue-driven crawls, which can fetch 200s forever while saving nothing. A
+stall breaks the loop with work queued, so it surfaces as ``truncated``."""
 
 from __future__ import annotations
 
@@ -17,16 +10,8 @@ from pf_core.exceptions import InvalidInputError
 
 
 class ProgressWatchdog:
-    """Tracks time since the last real progress; ``stalled()`` when it exceeds
-    the window.
-
-    Args:
-        stall_after_s: Idle seconds before the crawl counts as stalled.
-            ``0`` disables the watchdog. Negative is a caller error, not a
-            quiet opt-out — a typo'd config must fail loudly rather than
-            silently remove the guard.
-        now: Monotonic clock, injectable for tests.
-    """
+    """Time since the last real progress; ``stalled()`` past ``stall_after_s`` idle seconds. 0
+    disables it, and a negative window raises, so a typo'd config can't silently drop the guard."""
 
     def __init__(self, *, stall_after_s: float, now: Callable[[], float] = time.monotonic) -> None:
         if stall_after_s < 0:

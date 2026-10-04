@@ -263,9 +263,7 @@ def test_an_illustrated_epub_stages_its_figures_and_audits_clean(tmp_path, monke
 
 
 def test_damage_to_a_bundled_deliverable_is_an_error(tmp_path, monkeypatch):
-    """Local refs are what an image pass leaves, so a bundle without a recorded hash
-    would read as an unverifiable localize: damage would pass as a warning, and an
-    unchanged re-fetch would keep the damaged file."""
+    """Bundled local refs read as a localize, so without a recorded hash damage would only warn."""
     _serve(monkeypatch, _illustrated_epub())
     orchestrate.run_ingest("https://x.com/book.epub")
     deliverable = _slug_dir(tmp_path) / "book.html"
@@ -308,6 +306,21 @@ def test_a_reingest_drops_figures_the_new_edition_no_longer_references(tmp_path,
 
     assert [p.name for p in (_slug_dir(tmp_path) / "images").iterdir()] == ["a.png"]
     assert res["images"] == 1
+    assert audit.audit_slug("book") == []
+
+
+def test_an_unchanged_refetch_still_restages_a_figure_whose_bytes_changed(tmp_path, monkeypatch):
+    """The figure keeps its name, so the deliverable is byte-identical across editions."""
+    first = _epub({"ch.xhtml": '<img src="fig.png"/>'}, {"OEBPS/fig.png": FIG_A})
+    second = _epub({"ch.xhtml": '<img src="fig.png"/>'}, {"OEBPS/fig.png": FIG_B})
+    _serve(monkeypatch, first)
+    orchestrate.run_ingest("https://x.com/book.epub")
+    _serve(monkeypatch, second)
+
+    res = orchestrate.run_ingest("https://x.com/book.epub", if_changed=True)
+
+    assert res["changed"] is True
+    assert (_slug_dir(tmp_path) / "images" / "fig.png").read_bytes() == FIG_B
     assert audit.audit_slug("book") == []
 
 

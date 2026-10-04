@@ -1,10 +1,5 @@
-"""One Hugo page: its content fragment, the reading order its sidebar gives, and
-whether it is a generated view, a list of other pages or an empty section rather
-than a page of the manual.
-
-Content lives in ``<main>`` across the Hugo docs themes, and in Docsy's
-``div.td-content`` inside it.
-"""
+"""One Hugo page: its content fragment (``<main>``, Docsy's ``div.td-content`` inside it), its
+sidebar's reading order, and whether it is a generated, list or empty page."""
 
 from __future__ import annotations
 
@@ -19,9 +14,8 @@ from pagespring.patterns._site import absolutize_refs, flatten_responsive_images
 # Most specific first: a Docsy site layout may repeat the title and add a TOC
 # around td-content, inside <main>.
 _CONTAINERS = ("div.td-content", "main")
-# Theme chrome inside the content container. Most themes render the whole chapter
-# list into every page, often in a plain <div> rather than a <nav>. An unlisted
-# theme's chrome simply survives, which is the safe failure.
+# Theme chrome inside the content container; most themes render the whole chapter list into every
+# page, often as a plain <div>. An unlisted theme's chrome survives: the safe failure.
 _CHROME_CSS = ", ".join(
     (
         "nav, header:not(.gdoc-post__header), footer",

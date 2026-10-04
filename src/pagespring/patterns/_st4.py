@@ -1,20 +1,8 @@
-"""SCHEMA ST4 (Quanos) acquisition for docs_probe — TOC-driven, no crawl.
-
-ST4 output has two faces, the split that also makes Paligo unrecognizable from
-its landing page: a **topic** page announces the generator, the **entry** page
-advertises only the publisher's stylesheet. Detection is therefore tell-based.
-
-The page index is ``<base>/js/treedata.json`` — named .json and served as
-application/json, but a JavaScript source file, not JSON.
-
-Only the tree's **leaves** hold content; branch pages are client-rendered
-shells, so their titles exist nowhere but the tree and are synthesized into the
-fragment that opens each chapter.
-"""
+"""SCHEMA ST4 for docs_probe, identified by tells (the entry page names only a stylesheet);
+``js/treedata.json``, JavaScript despite its name, gives the leaf topics and chapter titles."""
 
 from __future__ import annotations
 
-import html
 import json
 import re
 from pathlib import Path
@@ -34,6 +22,7 @@ from pagespring.patterns._site import (
     flatten_responsive_images,
     names_a_file,
     strip_scripts,
+    toc_heading,
 )
 
 log = get_logger(__name__)
@@ -60,22 +49,16 @@ def is_st4(html: str) -> bool:
 
 
 def publication_base(url: str) -> str:
-    """The directory holding the topics and ``js/treedata.json``.
-
-    Accepts both the entry file and its bare directory — a trailing segment is
-    only stripped when it names a file.
-    """
+    """The directory holding the topics and ``js/treedata.json``, from the entry file or its bare
+    directory: only a trailing segment naming a file is stripped."""
     trimmed = url.split("?", 1)[0].split("#", 1)[0].rstrip("/")
     head, _, last = trimmed.rpartition("/")
     return head if names_a_file(last) else trimmed
 
 
 def _json_array_at(text: str, start: int) -> str:
-    """Slice the bracket-balanced array beginning at ``start``.
-
-    A regex to the next assignment would cut early on a ``]`` inside a title,
-    and the file appends more assignments after the array.
-    """
+    """Slice the bracket-balanced array at ``start``: a regex to the next assignment cuts early on a
+    ``]`` inside a title."""
     depth = 0
     in_str = False
     escaped = False
@@ -143,11 +126,8 @@ def _walk(nodes: list[TocNode], depth: int = 0) -> list[tuple[int, TocNode, bool
 
 
 def _strip_query(root: Tag) -> None:
-    """Drop ``?page=`` viewer routes from topic cross-links.
-
-    The query expands a TOC branch and shows a descendant; the same topic is
-    also linked bare, so leaving it makes one page two targets.
-    """
+    """Drop ``?page=`` viewer routes from topic cross-links, which link the same topic bare too;
+    kept, one page becomes two targets."""
     for tag in root.find_all("a"):
         href = tag.get("href")
         if isinstance(href, str) and href:
@@ -172,11 +152,6 @@ def _extract(page_html: str, page_url: str, depth: int) -> str | None:
     absolutize_refs(node, page_url)
     _strip_query(node)
     return str(node)
-
-
-def _heading(depth: int, text: str) -> str:
-    level = min(depth + 1, _MAX_HEADING)
-    return f"<h{level}>{html.escape(text)}</h{level}>"
 
 
 def acquire(url: str, workdir: Path, *, slug: str, title: str | None) -> AcquireResult:
@@ -210,7 +185,7 @@ def acquire(url: str, workdir: Path, *, slug: str, title: str | None) -> Acquire
     lost = 0
     for depth, node, is_branch in flat:
         if is_branch:
-            pending.append(_heading(depth, node.get("text", "")))
+            pending.append(toc_heading(depth, node.get("text", "")))
             continue
         if saved >= _MAX_PAGES:
             break

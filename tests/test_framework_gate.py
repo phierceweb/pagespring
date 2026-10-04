@@ -1,9 +1,5 @@
-"""`bin/check-framework` — each rule against source that breaks it, and against
-source that only mentions it.
-
-The gate fails silently: a regex that stops matching leaves the package
-unchecked with nothing else in the suite noticing.
-"""
+"""``bin/check-framework``: each rule against source that breaks it and source that only mentions
+it, since a regex that stops matching fails silently."""
 
 from __future__ import annotations
 

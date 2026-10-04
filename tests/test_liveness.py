@@ -1,9 +1,4 @@
-"""liveness — progress watchdog for queue-driven crawls.
-
-A crawl can keep fetching successfully while saving nothing — re-fetching
-duplicates that write no files, say. No socket timeout can see this, since every
-request completes fine. Only progress can.
-"""
+"""liveness: a crawl can fetch successfully while saving nothing, which only progress can show."""
 
 import pytest
 from pf_core.exceptions import InvalidInputError

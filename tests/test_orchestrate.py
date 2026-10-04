@@ -1,8 +1,4 @@
-"""Ingest orchestration (mocked pattern; no network).
-
-The clean download stages to ``incoming/<slug>/``; an autouse fixture points
-that at a tmp dir so tests never write into the real repo.
-"""
+"""Ingest orchestration with a mocked pattern; an autouse fixture stages into a tmp dir."""
 
 import pathlib
 import re
@@ -68,10 +64,7 @@ def test_no_pattern_raises(monkeypatch):
 
 
 def test_reingest_replaces_stale_artifacts(tmp_path, monkeypatch):
-    """A re-run leaves only the fresh deliverable — no orphaned clean files and a
-    fresh raw/. The image cache is the deliberate exception (see
-    test_reingest_preserves_images_and_sidecar): re-downloading every image on
-    every refresh costs far more than leaving unreferenced files on disk."""
+    """Only the image cache survives a re-run: re-downloading it costs more than stray files."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     orchestrate.run_ingest("https://x", keep_raw=True)
 
@@ -116,9 +109,7 @@ class _UntrustedBodyPattern(_FakePattern):
 
 
 def test_acquire_client_error_wrapped(monkeypatch):
-    """A body the fetch core refused to trust (corrupt gzip, over the size cap)
-    leaves acquire as ClientError — it must reach the CLI as AcquireError too,
-    not as an unhandled traceback."""
+    """A body the fetch core refused (bad gzip, over the cap) must reach the CLI as AcquireError."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _UntrustedBodyPattern())
     with pytest.raises(orchestrate.AcquireError):
         orchestrate.run_ingest("https://docs.example.com/manual")
@@ -159,10 +150,7 @@ class _ZeroFragmentHtmlPattern(_FakePattern):
 
 
 def test_zero_fragment_html_crawl_fails_and_preserves_previous(tmp_path, monkeypatch):
-    """A zero-page html crawl through the real docs_probe normalize must raise
-    EmptyOutputError before staging — a hollow shell must not clobber a prior
-    good deliverable (the same invariant as test_empty_output_fails_and_preserves_previous,
-    exercised through the real html branch instead of a fake that writes "")."""
+    """The empty-output invariant through the real docs_probe html branch."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _ZeroFragmentHtmlPattern())
     slug_dir = tmp_path / "incoming" / "fakeapp"
     slug_dir.mkdir(parents=True)
@@ -188,9 +176,7 @@ class _ZeroArticleMicrosoftPattern(_FakePattern):
 
 
 def test_zero_article_microsoft_crawl_fails_and_preserves_previous(tmp_path, monkeypatch):
-    """The titled shell wrapping zero articles is non-empty, so EmptyOutputError never
-    fires and staging would accept it: normalize has to refuse first, before the
-    staging clear, or the previous good deliverable is gone."""
+    """A titled shell around zero articles is non-empty, so normalize must refuse before the clear."""
     url = "https://support.microsoft.com/en-us/fakeapp"
     monkeypatch.setattr(orchestrate, "classify", lambda u: _ZeroArticleMicrosoftPattern())
     slug_dir = tmp_path / "incoming" / "fakeapp"
@@ -381,9 +367,7 @@ def test_if_changed_skips_restage_when_identical(tmp_path, monkeypatch):
 
 
 def test_if_changed_restages_when_the_deliverable_is_gone(tmp_path, monkeypatch):
-    """The manifest's sha describes a file that must still be there. The sha alone reports
-    "unchanged" forever for a slug whose deliverable was deleted, and refresh can
-    never heal it."""
+    """Trusting the sha alone, a deleted deliverable would stay "unchanged" and never heal."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     orchestrate.run_ingest("https://x")
     slug_dir = tmp_path / "incoming" / "fakeapp"
@@ -461,9 +445,7 @@ def test_if_changed_restages_when_content_differs(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("body", ['{"pages": 3}', "[1, 2, 3]", '"a string"'])
 def test_if_changed_refuses_an_unreadable_manifest_instead_of_crashing(tmp_path, monkeypatch, body):
-    """The --if-changed compare runs before the collision guard: a parseable non-manifest
-    must reach the exit-2 refusal, not crash with KeyError/TypeError into exit 1, which
-    `audit --strict` also uses for real findings."""
+    """A parseable non-manifest must reach the exit-2 refusal; exit 1 means real audit findings."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     slug_dir = tmp_path / "incoming" / "fakeapp"
     slug_dir.mkdir(parents=True)
@@ -478,9 +460,7 @@ def test_if_changed_refuses_an_unreadable_manifest_instead_of_crashing(tmp_path,
 
 
 def test_if_changed_does_not_report_a_different_source_unchanged(tmp_path, monkeypatch):
-    """Byte-identical content from another URL is still a collision: answering
-    `unchanged` would leave the slug holding a manual nobody asked to ingest, under a
-    manifest that names the old source."""
+    """Identical bytes from another URL are still a collision, not ``unchanged``."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     orchestrate.run_ingest("https://vendor-a.example/manual")
     slug_dir = tmp_path / "incoming" / "fakeapp"
@@ -660,9 +640,8 @@ def test_a_localize_killed_mid_pass_can_be_resumed(tmp_path, monkeypatch):
 
 
 class _RawDrivenPattern(_FakePattern):
-    """A fake whose normalize derives its output from raw/ contents — so a
-    renormalize replay visibly reflects both the kept raw and the current
-    normalize code (``prefix``)."""
+    """A fake whose output derives from raw/ and ``prefix``, so a replay shows both the kept raw and
+    the current normalize."""
 
     def __init__(self, prefix: str = "v1"):
         self.prefix = prefix
@@ -675,9 +654,6 @@ class _RawDrivenPattern(_FakePattern):
 
 
 def test_renormalize_replays_from_kept_raw_without_network(tmp_path, monkeypatch):
-    """renormalize re-runs the pattern's CURRENT normalize against the kept
-    raw/ and re-stages the deliverable — no acquire, no re-crawl. The kept
-    raw/ survives for the next replay."""
     p = _RawDrivenPattern(prefix="v1")
     monkeypatch.setattr(orchestrate, "classify", lambda url: p)
     orchestrate.run_ingest("https://x", keep_raw=True)
@@ -702,9 +678,7 @@ def test_renormalize_replays_from_kept_raw_without_network(tmp_path, monkeypatch
 
 
 def test_renormalize_unchanged_output_leaves_slug_dir_untouched(tmp_path, monkeypatch):
-    """A replay whose output is byte-identical to the staged deliverable
-    reports changed=False and re-stages nothing — deliverable mtime and any
-    localized images/ stay exactly as they were (the refactor-was-safe signal)."""
+    """An identical replay leaves mtime and images/ alone: the refactor-was-safe signal."""
     p = _RawDrivenPattern(prefix="v1")
     monkeypatch.setattr(orchestrate, "classify", lambda url: p)
     orchestrate.run_ingest("https://x", keep_raw=True)
@@ -863,10 +837,7 @@ def test_renormalize_unknown_pattern_raises(tmp_path, monkeypatch):
 
 
 def test_renormalize_updates_manifest_and_resets_image_count(tmp_path, monkeypatch):
-    """A changed replay refreshes the deliverable's facts (sha256, bytes) and
-    resets the localized-image count — the new file's refs are absolute again.
-    Provenance of the crawl (source_url, ingested_at, pattern, pages) is
-    untouched."""
+    """A changed replay refreshes the file facts and resets the image count; crawl provenance stays."""
     p = _RawDrivenPattern(prefix="v1")
     monkeypatch.setattr(orchestrate, "classify", lambda url: p)
     orchestrate.run_ingest("https://docs.example.com/foo", keep_raw=True)
@@ -890,10 +861,7 @@ def test_renormalize_updates_manifest_and_resets_image_count(tmp_path, monkeypat
 
 
 def test_renormalize_changed_clears_stale_localized_images(tmp_path, monkeypatch):
-    """A changed replay removes images/ — its files were named for the OLD
-    deliverable's refs, and localize seeds its collision set from the dir, so
-    stale files would force every re-download onto a suffixed name and orphan
-    the originals. Same principle as ingest's replace: no stale artifacts."""
+    """Stale images, named for the old refs, would push every re-download onto a suffixed name."""
     p = _RawDrivenPattern(prefix="v1")
     monkeypatch.setattr(orchestrate, "classify", lambda url: p)
     orchestrate.run_ingest("https://docs.example.com/foo", keep_raw=True)
@@ -911,9 +879,7 @@ def test_renormalize_changed_clears_stale_localized_images(tmp_path, monkeypatch
 
 
 def test_ingest_warns_when_content_duplicates_another_slug(tmp_path, monkeypatch):
-    """The same manual ingested from a second URL (different slug) is flagged:
-    result carries duplicate_of naming the existing slug. Still staged — the
-    duplicate might be deliberate; the warning is the product."""
+    """Still staged, since the duplicate might be deliberate; the warning is the product."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     orchestrate.run_ingest("https://vendor-a.example/manual")
 
@@ -952,9 +918,7 @@ def test_ingest_slug_override_controls_naming(tmp_path, monkeypatch):
 
 
 def test_ingest_stages_deliverable_under_final_slug_name(tmp_path, monkeypatch):
-    """A pattern that names its output during acquire (pdf_url writes
-    raw/<url-slug>.pdf) can't know about --slug — staging renames centrally,
-    so the documented incoming/<slug>/<slug>.<ext> shape always holds."""
+    """pdf_url names its file at acquire, before ``--slug`` is known, so staging renames centrally."""
 
     class _MisnamedOutputPattern(_FakePattern):
         def normalize(self, acq, workdir):
@@ -999,9 +963,8 @@ class _TitledPattern(_FakePattern):
 
 
 def test_renormalize_reconstructs_title_from_manifest(tmp_path, monkeypatch):
-    """The manifest records acquire's title, and a replay feeds it back into
-    normalize — an unchanged pattern therefore reproduces byte-identical output
-    (changed=False) instead of degrading the heading to the slug."""
+    """Fed the recorded title, an unchanged pattern replays byte-identical instead of falling back
+    to the slug."""
     p = _TitledPattern()
     monkeypatch.setattr(orchestrate, "classify", lambda url: p)
     orchestrate.run_ingest("https://x", keep_raw=True)
@@ -1041,9 +1004,6 @@ def test_renormalize_replaces_deliverable_when_name_changes(tmp_path, monkeypatc
 
 
 def test_localize_images_reuses_unchanged_before_downloading(tmp_path, monkeypatch):
-    """On a refreshed deliverable the image URLs come back the same. An image the
-    sidecar already holds, and the server reports unchanged, must be re-pointed
-    locally instead of re-downloaded."""
     from pagespring import images
 
     slug_dir = tmp_path / "incoming" / "bk"
@@ -1125,12 +1085,7 @@ def test_localize_during_an_outage_keeps_every_cached_image(tmp_path, monkeypatc
 
 
 def test_reingest_preserves_images_and_sidecar(tmp_path, monkeypatch):
-    """A re-ingest replaces the deliverable but must KEEP images/ and images.json.
-
-    Wiping them defeats the sidecar entirely: a refresh brings the same image
-    URLs back, and with no local files or validators every image is re-downloaded.
-    Stale clean files and raw/ are still cleared — only the image cache survives.
-    """
+    """Wiping the image cache re-downloads every image on refresh; stale files and raw/ still go."""
     from pagespring import images
 
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
@@ -1203,9 +1158,7 @@ def test_localize_prunes_orphans_once_fully_localized(tmp_path, monkeypatch):
 
 
 def test_manifest_records_whether_raw_was_kept(tmp_path, monkeypatch):
-    """`renormalize` needs raw/, and nothing outside the directory listing says
-    whether it is there — so a later image or normalize change can't be planned
-    without guessing which slugs replay for free and which need a re-crawl."""
+    """Only the manifest says which slugs replay for free without listing every directory."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
 
     orchestrate.run_ingest("https://x", keep_raw=True)
@@ -1230,9 +1183,7 @@ def test_kept_raw_reflects_the_directory_not_the_flag(tmp_path, monkeypatch):
 
 
 def test_keep_raw_is_ignored_for_pdf_deliverables(tmp_path, monkeypatch):
-    """`pdf_url.normalize` hands back the downloaded file unchanged, so a replay
-    can only ever produce identical bytes — raw/ would be a second copy of the
-    deliverable."""
+    """A PDF normalize is a passthrough, so raw/ would be a second copy of the deliverable."""
 
     class _PdfPattern(_FakePattern):
         def acquire(self, url, workdir):
@@ -1254,9 +1205,7 @@ def test_keep_raw_is_ignored_for_pdf_deliverables(tmp_path, monkeypatch):
 
 
 def test_localize_is_a_no_op_for_pdf_deliverables(tmp_path, monkeypatch):
-    """A PDF has no text refs to re-point, and reading it as UTF-8 raises — an
-    exception the CLI's PreconditionError handler does not catch, so one PDF would
-    stop `localize --all` before it reaches the HTML slugs."""
+    """Reading a PDF as UTF-8 raises an error the CLI doesn't catch, stopping ``localize --all``."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     orchestrate.run_ingest("https://x")
     slug_dir = tmp_path / "incoming" / "fakeapp"
@@ -1298,10 +1247,7 @@ def _mock_image_fetch(monkeypatch, *, unchanged=True):
 
 
 def test_reingest_with_images_keeps_one_copy_of_each_image(tmp_path, monkeypatch):
-    """A second --download-images ingest of the same source must leave ONE file
-    per image. Without the reuse probe every image re-downloads onto a suffixed
-    name (logo-2.png), stranding the previous run's copy, and the image set grows
-    on every refresh."""
+    """Without the reuse probe each image re-downloads onto a suffixed name, growing every refresh."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _RemoteImagePattern())
     _mock_image_fetch(monkeypatch)
 
@@ -1317,9 +1263,7 @@ def test_reingest_with_images_keeps_one_copy_of_each_image(tmp_path, monkeypatch
 
 
 def test_ingest_records_the_localized_sha(tmp_path, monkeypatch):
-    """The image pass re-points refs, so the staged sha no longer describes the
-    file on disk — without the post-pass hash the deliverable carries no
-    integrity record at all."""
+    """The image pass re-points refs, so only the post-pass hash describes the file on disk."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _RemoteImagePattern())
     _mock_image_fetch(monkeypatch)
 
@@ -1332,9 +1276,7 @@ def test_ingest_records_the_localized_sha(tmp_path, monkeypatch):
 
 
 def test_renormalize_clears_the_localized_sha(tmp_path, monkeypatch):
-    """A replay re-stages a deliverable whose refs are absolute again, so the
-    post-localize hash is reset alongside the image count — left standing, it
-    would make audit report a permanent sha_mismatch."""
+    """Left standing, the post-localize hash would make audit report a permanent sha_mismatch."""
     p = _RemoteImagePattern(prefix="v1")
     monkeypatch.setattr(orchestrate, "classify", lambda url: p)
     _mock_image_fetch(monkeypatch)
@@ -1375,17 +1317,8 @@ class _HostilePattern(_FakePattern):
     ["..", ".", "", "../..", "/", "./..", "a/../..", "a/../../b", "\\", "....//", "  ..  "],
 )
 def test_pattern_slug_cannot_escape_incoming(tmp_path, monkeypatch, slug):
-    """A pattern-derived slug is sanitized like ``--slug`` is.
-
-    ``incoming/..`` is the repo root, and re-ingest wipes its target with
-    ``shutil.rmtree`` — so an unsanitized slug turns one ingest into a
-    recursive delete of everything outside the corpus.
-
-    The invariant is not "every odd slug is refused": one that folds to a safe
-    component (``a/../..`` -> ``a``) may proceed. It is that the run either
-    refuses outright or writes strictly inside ``incoming/`` — and either way
-    touches nothing above it.
-    """
+    """``incoming/..`` is the repo root and re-ingest rmtrees its target: the run must refuse or
+    write strictly inside ``incoming/`` (``a/../..`` may fold to ``a``)."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _HostilePattern(slug))
     # A file that MUST survive: it sits where the traversal would land.
     sentinel = tmp_path / "DO_NOT_DELETE.txt"
@@ -1564,9 +1497,7 @@ def test_an_ingest_killed_before_the_deliverable_lands_can_be_rerun(tmp_path, mo
 
 
 def test_reingest_of_a_different_source_refuses_to_take_the_slug_over(tmp_path, monkeypatch):
-    """Two manuals whose derived slug collides: the second must not delete the
-    first's deliverable and raw/ or overwrite its manifest. incoming/ is
-    gitignored, so there is no copy to recover."""
+    """incoming/ is gitignored, so a colliding second manual must not delete or overwrite the first."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     orchestrate.run_ingest("https://vendor-a.example/files/manual.pdf")
 
@@ -1595,9 +1526,7 @@ def test_reingest_of_the_same_source_is_allowed_across_url_spellings(tmp_path, m
 
 
 def test_replace_takes_the_slug_over_and_drops_the_prior_image_cache(tmp_path, monkeypatch):
-    """A deliberate takeover must not inherit the previous source's images: they
-    belong to a manual that is no longer here, and prune_orphans only sweeps
-    them if a later localize pass happens to reach zero remaining."""
+    """A takeover's inherited images belong to the displaced manual; prune sweeps them only by luck."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     orchestrate.run_ingest("https://vendor-a.example/manual.pdf")
 
@@ -1613,9 +1542,7 @@ def test_replace_takes_the_slug_over_and_drops_the_prior_image_cache(tmp_path, m
 
 
 def test_replace_on_the_same_source_keeps_the_image_cache(tmp_path, monkeypatch):
-    """The keep-set is keyed on takeover, not on --replace: `--replace` against the
-    source already staged there is still a refresh, and re-downloading every image
-    is the cost the cache exists to avoid."""
+    """Keyed on takeover, not ``--replace``: a same-source replace is still a refresh."""
     from pagespring import images
 
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
@@ -1646,9 +1573,7 @@ def test_replace_on_the_same_source_keeps_the_image_cache(tmp_path, monkeypatch)
 
 
 def test_reingest_of_a_different_local_file_refuses_to_take_the_slug_over(tmp_path, monkeypatch):
-    """`canonical_url` returns "" for every non-http scheme, so a canonical compare
-    would make every saved spec equal to every other — and api_spec derives the
-    same slug from every vendor's `openapi.json`."""
+    """``canonical_url`` is "" off http, and api_spec slugs every vendor's openapi.json alike."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     orchestrate.run_ingest("/specs/vendor-a/openapi.json")
 
@@ -1675,9 +1600,7 @@ def test_reingest_of_the_same_local_file_is_allowed(tmp_path, monkeypatch):
 
 
 def test_reingest_of_the_same_local_file_respelled_is_allowed(tmp_path, monkeypatch):
-    """Shell completion alone turns `./openapi.json` into `openapi.json`; refusing
-    that second run would point the user at --replace, which is documented as
-    deleting a *different* manual."""
+    """Shell completion drops ``./`` from ``./openapi.json``; that must not need ``--replace``."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     spec = tmp_path / "openapi.json"
     spec.write_text("{}", encoding="utf-8")
@@ -1693,9 +1616,7 @@ def test_reingest_of_the_same_local_file_respelled_is_allowed(tmp_path, monkeypa
 
 
 def test_reingest_refuses_a_slug_dir_holding_content_with_no_manifest(tmp_path, monkeypatch):
-    """`read_manifest` returns None for an absent manifest, and the guard cannot read
-    that as 'nothing here': a slug dir without one — which `status`, `refresh` and
-    `audit` all accept — may be someone's only copy."""
+    """A manifest-less slug dir, which status, refresh and audit accept, may be the only copy."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     slug_dir = tmp_path / "incoming" / "fakeapp"
     slug_dir.mkdir(parents=True)
@@ -1783,9 +1704,8 @@ def test_replace_takes_over_a_slug_dir_with_no_readable_manifest(tmp_path, monke
     ],
 )
 def test_same_source_truth_table(held, new, same):
-    """Local sources have no canonical form (`canonical_url` answers "" for every
-    non-http scheme), so they compare by resolved path: canonically every saved spec
-    would equal every other, and as raw strings one file typed two ways would differ."""
+    """Local sources compare by resolved path: canonically every spec matches, and as raw strings
+    one file differs from itself."""
     assert _staging._same_source(held, new) is same
 
 
@@ -1834,9 +1754,8 @@ def test_reingest_refuses_a_manifest_whose_source_url_is_not_a_string(tmp_path, 
 
 
 def test_reingest_refuses_a_held_url_with_an_invalid_port(tmp_path, monkeypatch):
-    """`canonical_url` answers "" for a URL it cannot parse, which must not read as
-    "no recorded source": an unparseable held URL refuses, and --replace still gets
-    through."""
+    """An unparseable held URL (canonical "") refuses rather than reading as no source;
+    ``--replace`` gets through."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     slug_dir = tmp_path / "incoming" / "fakeapp"
     slug_dir.mkdir(parents=True)
@@ -1854,9 +1773,7 @@ def test_reingest_refuses_a_held_url_with_an_invalid_port(tmp_path, monkeypatch)
 
 
 def test_a_relative_local_source_is_recorded_absolutely(tmp_path, monkeypatch):
-    """refresh replays the recorded source_url from wherever it runs, and `_local_path`
-    resolves it against the CWD, so a relative spelling makes the slug's identity mean
-    a different file in every directory."""
+    """A relative source_url would name a different file wherever refresh runs."""
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     vendor_a = tmp_path / "vendor-a"
     vendor_a.mkdir()

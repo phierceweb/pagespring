@@ -1,16 +1,5 @@
-"""github_markdown — docs kept as markdown or MDX in a GitHub repo (e.g. laravel/docs).
-
-acquire: resolve the repo's default branch, list its ``.md`` and ``.mdx`` files
-**recursively** via the git-trees API (scoped to a subdir when the URL includes one),
-order them by the repo's table-of-contents file if present (Laravel's
-``documentation.md``) else by path, and download each raw file. normalize:
-concatenate in order, each ``.mdx`` page reduced to plain markdown first.
-
-Point it at the repo: ``https://github.com/<owner>/<repo>`` — optionally
-``/tree/<branch>`` or ``/tree/<branch>/<subdir>`` to scope a big/nested repo
-(e.g. a single product area of MicrosoftDocs/*), or a ``/blob/`` URL naming a
-``.md``/``.mdx`` file to scope to its directory.
-"""
+"""github_markdown: a repo's ``.md`` and ``.mdx`` files from the git-trees API, scoped by a tree or
+blob URL, ordered by a root ``documentation.md`` TOC or by path, MDX reduced to markdown."""
 
 from __future__ import annotations
 

@@ -150,9 +150,7 @@ def test_llms_full_txt_slug_comes_from_the_host(tmp_path, monkeypatch):
 
 
 def test_match_survives_query_fragment_and_case(monkeypatch):
-    """`endswith` on the raw URL would let a query string, fragment, or uppercase
-    spelling route llms-full.txt to docs_probe, which crawls the whole site
-    instead of taking the inlined body."""
+    """A raw ``endswith`` sends a query'd or uppercase llms-full.txt to docs_probe's site crawl."""
     p = LlmsTxtPattern()
     assert p.match("https://docs.foo.com/llms-full.txt?v=2")
     assert p.match("https://docs.foo.com/llms-full.txt#top")
@@ -213,9 +211,7 @@ def test_section_filter_stops_at_a_path_boundary(tmp_path, monkeypatch):
 
 
 def test_section_filter_ignores_host_case(tmp_path, monkeypatch):
-    """An uppercase-host seed routes here and must still match the lowercase .md
-    links, or it stages 0 pages and fails later as 'the source may have changed
-    shape'."""
+    """An uppercase-host seed must still match the lowercase .md links, or it stages nothing."""
     index = "- [A](https://docs.claude.com/en/docs/claude-code/a.md)\n"
 
     def fake_fetch(url, **kw):

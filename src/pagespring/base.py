@@ -1,10 +1,5 @@
-"""The Pattern contract — the unit that ties acquire + normalize together for
-one source type.
-
-A pattern recognizes a family of source URLs (``match``), downloads the raw
-pages (``acquire``), and turns them into one clean file with absolute asset
-URLs (``normalize``). That file is the deliverable and pagespring stops there.
-"""
+"""The Pattern contract: ``match`` a family of source URLs, ``acquire`` the raw pages, and
+``normalize`` them into the one clean deliverable file."""
 
 from __future__ import annotations
 
@@ -15,9 +10,8 @@ from typing import Literal, Protocol, runtime_checkable
 # The deliverable's format; a "pdf" is the downloaded file, passed through normalize as-is.
 SourceKind = Literal["html", "markdown", "pdf"]
 
-# Files a deliverable references that no URL serves (an archive's own figures) go
-# in this directory beside the normalized file, referenced as ``images/<name>``;
-# staging copies them into ``incoming/<slug>/images/``.
+# Files no URL serves (an archive's own figures) go here beside the normalized file, as
+# ``images/<name>``; staging copies them into ``incoming/<slug>/images/``.
 IMAGES_DIR = "images"
 
 
@@ -48,12 +42,8 @@ class AcquireResult:
 
 @runtime_checkable
 class Pattern(Protocol):
-    """One source type's acquire/normalize knowledge.
-
-    Implementations are instances (see pagespring/patterns/*); the registry holds
-    one of each. All *source-specific* knowledge (crawl rules, chrome selectors,
-    TOC walking, image-scheme resolution) lives in the pattern.
-    """
+    """One source type's acquire/normalize knowledge; the registry holds one instance of each, and
+    every source-specific rule (crawl scope, chrome, TOC walking, image schemes) lives here."""
 
     name: str
 

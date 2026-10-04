@@ -1,6 +1,5 @@
-"""Upkeep of a slug's existing ``images/`` cache around a download pass: lowercase
-mixed-case names, re-point refs at cached files the server still serves unchanged,
-and prune files the deliverable no longer references."""
+"""Upkeep of a slug's ``images/`` cache around a download pass: case-fold names, reuse what the
+server still serves unchanged, prune what the deliverable no longer references."""
 
 from __future__ import annotations
 
@@ -26,13 +25,8 @@ log = get_logger(__name__)
 
 
 def normalize_case(doc_path: Path, slug_dir: Path) -> int:
-    """Lowercase any mixed-case image filename, re-pointing its refs and record.
-
-    Names are lowercase by construction (see ``local_name``). On a case-insensitive
-    filesystem a download onto a mixed-case file keeps that capitalisation, and
-    ``prune_orphans`` then finds no lowercase ref matching it and deletes a file the
-    deliverable needs.
-    """
+    """Lowercase mixed-case image filenames with their refs and records: on a case-insensitive disk
+    a download keeps the old case, and ``prune_orphans`` then deletes a file still in use."""
     images_dir = slug_dir / "images"
     if not images_dir.is_dir():
         return 0
@@ -58,18 +52,8 @@ def normalize_case(doc_path: Path, slug_dir: Path) -> int:
 
 
 def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
-    """Re-point refs at the images the sidecar already holds; returns how many
-    refs that settled without ``download_images``.
-
-    Run before ``download_images`` on a refreshed deliverable. A URL absent from
-    the sidecar is never probed — it has to be fetched anyway.
-
-    An unchanged probe reuses the cached file. Anything else is ambiguous — the probe
-    answers False for a network error too — so the image is fetched: identical bytes reuse
-    the file, changed bytes replace it under the same name (a fresh download would
-    write ``banner-2.png`` beside an orphaned ``banner.png``). A failed fetch keeps
-    the file and its record and leaves the ref remote for the next pass.
-    """
+    """Re-point refs at sidecar images the server still serves unchanged; returns how many settled.
+    Otherwise refetch: new bytes replace the file in place, a failed fetch keeps file and ref."""
     records = {r["source_url"]: r for r in read_sidecar(slug_dir)}
     if not records:
         return 0
@@ -77,10 +61,8 @@ def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
     text = doc_path.read_text(encoding="utf-8")
     reused = refreshed = 0
     for url in remote_image_urls(doc_path):
-        # sidecar keys and the probe are the decoded URL actually fetched — a ref
-        # carrying `&amp;` probed as-is is a different URL than the one the stored
-        # validators describe, so it could never match. The document still holds the
-        # escaped form, which is what the rewrite below must match.
+        # Probe the decoded URL the sidecar keys on (an `&amp;` ref never matches its validators);
+        # the rewrite below must still match the escaped form the document holds.
         decoded = unescape(url)
         rec = records.get(decoded)
         if rec is None or not (images_dir / rec["local"]).is_file():
@@ -97,9 +79,8 @@ def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
                 continue
             if rec["sha256"] != cached_sha:
                 refreshed += 1
-        # The localizer's own anchored rewriter, never a bare replace: CDN
-        # sizing variants make one image URL a prefix of another, and an
-        # unanchored replace corrupts the longer ref into a dangling local one.
+        # The localizer's anchored rewriter: CDN sizing variants make one URL a prefix of another,
+        # so a bare replace corrupts the longer ref.
         text = _core._retarget(text, url, f"images/{rec['local']}")
         reused += 1
     if reused:
@@ -138,14 +119,8 @@ def _refetch_into(rec: ImageRecord, images_dir: Path, url: str) -> bool:
 
 
 def prune_orphans(doc_path: Path, slug_dir: Path) -> int:
-    """Delete images the deliverable no longer references, and their records.
-
-    Refuses while any remote ref remains: mid-localize the refs have not been
-    rewritten yet, so every local file would look unreferenced and the whole
-    cache would be deleted. Referencing is decided by the *document*, not the
-    sidecar — a same-URL replacement overwrites its record, leaving the stale
-    file untracked.
-    """
+    """Delete images the document no longer references (the sidecar can miss a replaced file), and
+    their records. Refuses while a ref is remote: mid-localize, every file looks unreferenced."""
     images_dir = slug_dir / "images"
     if not images_dir.is_dir():
         return 0

@@ -1,9 +1,5 @@
-"""paths — the one folding point between a command-line slug and a directory.
-
-Every slug-taking command resolves through ``slug_dir``. The path it returns is
-passed to ``shutil.rmtree`` and ``Path.unlink``, so these pin that no input can
-name a directory outside ``incoming/``.
-"""
+"""paths: every slug-taking command resolves through ``slug_dir``, whose result reaches ``rmtree``
+and ``unlink``, so no input may name a directory outside ``incoming/``."""
 
 from __future__ import annotations
 
@@ -51,13 +47,8 @@ def test_a_slug_that_names_nothing_is_refused(slug):
     ],
 )
 def test_every_slug_entry_point_folds_before_touching_disk(call, monkeypatch, tmp_path):
-    """A traversal slug must never reach a path outside the corpus, whatever each
-    entry point then does with it (renormalize unlinks; localize prunes).
-
-    Asserted on the directory resolved, not on a surviving file: all four bail on
-    a missing manifest, so an unguarded slug looks harmless until the traversal
-    target happens to hold a manifest.json.
-    """
+    """Asserted on the resolved directory: every entry point bails on a missing manifest, so an
+    unguarded slug looks harmless until the target holds one."""
     monkeypatch.setattr(cfg, "INCOMING_DIR", str(tmp_path))
     looked_at: list[Path] = []
     real = manifest_mod.read_manifest

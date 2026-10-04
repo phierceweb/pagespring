@@ -13,9 +13,8 @@ from pagespring.patterns.docs_probe import DocsProbePattern
 _O = "https://docs.example.com"
 _V = f"{_O}/widget/latest/"
 
-# The entry page's nav as Antora renders it: relative hrefs, a heading with no
-# page, a repeated link, a fragment, an offsite link, another component and an
-# attachment.
+# The entry nav as Antora renders it: relative hrefs, a page-less heading, a repeat, a fragment, an
+# offsite link, another component and an attachment.
 _ENTRY_NAV = """
 <ul class="nav-list"><li class="nav-item" data-depth="0"><ul class="nav-list">
 <li class="nav-item"><a class="nav-link" href="config/">Configure</a>

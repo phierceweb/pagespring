@@ -1,8 +1,5 @@
-"""JSX syntax inside MDX: where a tag or an expression ends, and what a tag carries.
-
-Every ``skip_*`` returns the index just past the construct, or None when it never
-closes — the caller then treats the opening character as text.
-"""
+"""JSX inside MDX: where a tag or expression ends, and what a tag carries. Each ``skip_*`` returns
+the index past the construct, or None when it never closes (the caller keeps it as text)."""
 
 from __future__ import annotations
 
@@ -49,13 +46,8 @@ def _skip_template(src: str, k: int, *, ends: dict[int, int | None]) -> int | No
 
 
 def skip_expression(src: str, i: int, *, ends: dict[int, int | None] | None = None) -> int | None:
-    """Past the ``}`` balancing the ``{`` at ``i``.
-
-    JavaScript strings, template literals and comments are skipped whole. A quote
-    with no partner on its line is JSX text (an apostrophe), not a string.
-
-    ``ends`` collects the answer for every ``{`` of ``src`` the walk passes; a caller
-    trying each ``{`` of one source shares it, or each unclosed one rescans the rest."""
+    """Past the ``}`` balancing the ``{`` at ``i``, skipping strings and comments (a lone quote is
+    an apostrophe). Share ``ends`` across calls, or each unclosed ``{`` rescans the rest."""
     if ends is None:
         ends = {}
     if i in ends:
@@ -94,10 +86,8 @@ def skip_expression(src: str, i: int, *, ends: dict[int, int | None] | None = No
 
 
 def skip_tag(src: str, k: int, *, ends: dict[int, int | None] | None = None) -> int | None:
-    """Past the ``>`` ending the tag whose attributes start at ``k``.
-
-    A blank line ends the attempt unless the tag closes right after it, so a stray
-    ``<Name`` in prose cannot swallow the paragraphs that follow."""
+    """Past the ``>`` ending the tag whose attributes start at ``k``; a blank line ends the attempt
+    unless the tag closes right after, so a stray ``<Name`` can't swallow paragraphs."""
     n = len(src)
     while k < n:
         c = src[k]

@@ -1,9 +1,4 @@
-"""The per-slug manifest.json — provenance record beside each deliverable.
-
-Pure stdlib (hashlib/json/datetime); no network, no pattern machinery. These
-pin the build → write → read contract and the hash that `ingest --if-changed`
-compares against.
-"""
+"""manifest.json: the build, write, read contract and the hash ``ingest --if-changed`` compares."""
 
 import hashlib
 
@@ -74,9 +69,8 @@ def test_write_then_read_round_trips(tmp_path):
 
 
 def test_localized_sha256_defaults_to_none_and_round_trips(tmp_path):
-    """The deliverable's hash after localize re-pointed its refs: None until an
-    image pass runs, and preserved through write→read — audit reads it back as
-    the localized file's integrity record."""
+    """None until an image pass runs, and kept through write and read: audit's integrity record for
+    a localized file."""
     assert _sample()["localized_sha256"] is None
 
     m = _sample()
@@ -97,9 +91,7 @@ def test_read_manifest_corrupt_returns_none(tmp_path):
 
 @pytest.mark.parametrize("payload", ["[1, 2, 3]", '"a string"', "null", "42", "true"])
 def test_read_manifest_non_object_json_returns_none(tmp_path, payload):
-    """JSON that parses but is not an object is not a manifest. Every caller reads it by
-    key, so handing one back raises TypeError instead of the clean "no manifest —
-    ingest it first"."""
+    """Every caller indexes by key, so a non-object must read as no manifest, not raise TypeError."""
     (tmp_path / manifest.MANIFEST_NAME).write_text(payload, encoding="utf-8")
     assert manifest.read_manifest(tmp_path) is None
 
@@ -112,10 +104,7 @@ def test_read_manifest_invalid_utf8_returns_none(tmp_path):
 
 
 def test_a_failed_write_leaves_the_previous_manifest_intact(tmp_path, monkeypatch):
-    """The write is atomic. A bare `write_text` truncates the target first, so a
-    kill during ingest's image pass would strand the slug with no provenance —
-    a whole-corpus `manifest_missing` from one interrupted run.
-    """
+    """A bare ``write_text`` truncates first; one interrupted run would leave the slug unrecorded."""
     import pf_core.utils.io as io_mod
 
     original = _sample()

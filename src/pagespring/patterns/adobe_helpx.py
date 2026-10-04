@@ -1,12 +1,5 @@
-"""adobe_helpx — Adobe AEM product guides (helpx.adobe.com/<product>/…).
-
-The product is a path segment, and the guide entry
-(``/<product>/user-guide.html``) carries the whole topic index as ``ul.tocList``
-leaf links. No crawl — read the index, fetch each topic.
-
-helpx emits no ``<meta name="generator">``, so it can only be claimed by host —
-hence a top-level pattern rather than a docs_probe sub-module.
-"""
+"""adobe_helpx: Adobe AEM guides (``helpx.adobe.com/<product>/``), whose ``user-guide.html`` lists
+every topic as ``ul.tocList`` leaves. No generator meta, so it is claimed by host."""
 
 from __future__ import annotations
 
@@ -28,9 +21,8 @@ log = get_logger(__name__)
 _HOST = "helpx.adobe.com"
 _MAX_PAGES = 3000
 _CONTENT_CSS = "main"
-# The TOC sidebar and a whole AEM component suite live INSIDE main, one set per
-# topic. The CTA footer is a div.xf experience fragment, which the `footer`
-# element selector does not reach.
+# The TOC sidebar and an AEM component suite live inside main on every topic; the CTA footer is a
+# div.xf fragment the `footer` selector misses.
 _CHROME_CSS = (
     "div.sideNavigation, div.tocContainer, ul.tocList, "
     "div.contentcard, div.feedbackV2, div.pagenavigationarrows, div.socialmediashare, "

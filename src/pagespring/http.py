@@ -1,17 +1,5 @@
-"""Shared HTTP fetch — pagespring's policy over ``pf_core.fetch``.
-
-The fetch core (stdlib urllib; never httpx) supplies status-aware retries,
-redirect walking, charset resolution, and cache validators. This module pins
-pagespring's identifying User-Agent (override with ``PAGESPRING_UA``), keeps the
-``timeout=`` keyword the patterns pass, and owns the polite crawl delay.
-
-Three invariants the patterns depend on: raw ``urllib`` exceptions propagate (they
-branch on ``HTTPError.code``), TLS certificates are always verified — no env var
-disables that here — and a URL resolving to a non-public address raises
-``InvalidInputError`` before any request goes out, unless
-``URL_FETCH_ALLOW_PRIVATE=1`` opts the process out for a deliberately internal
-source.
-"""
+"""pagespring's policy over ``pf_core.fetch``: User-Agent, ``timeout=``, crawl delay, size caps. Raw
+urllib errors propagate, TLS is always verified, and private addresses are refused."""
 
 from __future__ import annotations
 
@@ -61,32 +49,24 @@ def _download_max_bytes() -> int:
 
 
 def _fetcher(retries: int = 2, *, max_bytes: int | None = None) -> Fetcher:
-    """A fetch core carrying pagespring's UA — resolved per call, not cached, so
-    ``PAGESPRING_UA`` can change mid-process.
-
-    ``verify_tls`` is explicit because pf-core's switch is process-wide.
-    ``max_bytes`` bounds the decoded body as well as the wire read, so a
-    compressed response cannot exhaust memory as it inflates.
-    """
+    """A fetch core with pagespring's UA, built per call so ``PAGESPRING_UA`` can change; TLS is
+    explicit (pf-core's switch is process-wide), and the cap bounds the inflated body."""
     return Fetcher(user_agent=_ua(), retries=retries, verify_tls=True, max_bytes=max_bytes)
 
 
 def fetch_text(
     url: str, *, timeout: float = 30, retries: int = 2, encoding: str | None = None
 ) -> tuple[str, str]:
-    """Return (final_url, decoded_text) after following redirects.
-
-    Decodes with ``encoding`` when given, else the response's Content-Type
-    charset, else utf-8 — always with replacement, never raising."""
+    """(final_url, text) after redirects, decoded by ``encoding``, else the Content-Type charset,
+    else utf-8, with replacement."""
     return _fetcher(retries, max_bytes=_text_max_bytes()).get_text(
         url, timeout_s=timeout, encoding=encoding
     )
 
 
 def fetch_bytes(url: str, *, timeout: float = 180, retries: int = 2) -> tuple[str, bytes]:
-    """Return (final_url, raw_bytes) — for binary downloads (PDFs, archives,
-    images). Longer default timeout than fetch_text: vendor PDFs/doc archives
-    can be tens of MB on slow CDNs."""
+    """(final_url, bytes) for binary downloads, with a longer timeout: vendor PDFs and archives can
+    be tens of MB on a slow CDN."""
     return _fetcher(retries, max_bytes=_download_max_bytes()).get_bytes(url, timeout_s=timeout)
 
 
@@ -99,10 +79,8 @@ def fetch_bytes_meta(
 
 
 def not_modified(url: str, *, etag: str | None, last_modified: str | None) -> bool:
-    """One conditional GET: True on a definitive 304, or on a 200 carrying the
-    strong ETag it sent. False on anything else — changed content, no validators
-    to send, or any error — so a caller can always fall back to the full fetch
-    path safely. Never raises."""
+    """One conditional GET: True on a 304, or a 200 carrying the strong ETag it sent; False on
+    anything else, errors included, so the caller can always fall back to a full fetch."""
     return _fetcher(max_bytes=_text_max_bytes()).not_modified(
         url, etag=etag, last_modified=last_modified
     )

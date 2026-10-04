@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from contextlib import suppress
+from html import escape
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
@@ -17,10 +18,8 @@ _FILE_SUFFIX_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]{1,5}$")
 
 
 def names_a_file(segment: str) -> bool:
-    """True when a path segment looks like a filename rather than a directory.
-
-    Crawl patterns strip a trailing filename to get the base directory; stripping
-    a directory instead scopes the crawl one level too high."""
+    """Whether a path segment names a file rather than a directory; stripping a directory instead
+    scopes a crawl one level too high."""
     return bool(_FILE_SUFFIX_RE.search(segment))
 
 
@@ -49,18 +48,16 @@ def _host_and_path(url: str) -> tuple[str, str]:
 
 
 def under_section(url: str, section: str) -> bool:
-    """Whether ``url`` is ``section`` or beneath it: the same host, case-folded and
-    without ``www.``, under either scheme, and a path-segment prefix, since a raw
-    string prefix also absorbs siblings (/guide swallowing /guide-advanced)."""
+    """Whether ``url`` is ``section`` or beneath it: same host (case-folded, ``www.`` dropped,
+    either scheme) and a path-segment prefix, so /guide never swallows /guide-advanced."""
     host, path = _host_and_path(url)
     section_host, section_path = _host_and_path(section)
     return host == section_host and (path == section_path or path.startswith(f"{section_path}/"))
 
 
 def llms_section(seed: str, index: str, pages: list[str]) -> str | None:
-    """``seed`` as a section of the index at directory ``index``, when the index sits
-    above it and lists pages beneath it. A seed naming one page is an entry point to
-    the whole index. ``pages`` are the index's ``.md`` URLs."""
+    """``seed`` as a section of the index at ``index`` when the index sits above it and lists
+    ``.md`` pages beneath it; a seed naming one page is an entry point to the whole index."""
     section = llms_index_candidates(seed)[0].rsplit("/", 1)[0]
     if section == index:
         return None
@@ -78,9 +75,8 @@ _MAX_REFRESH_DELAY_S = 10
 
 
 def meta_refresh_target(html: str, page_url: str) -> str | None:
-    """Where a ``<meta http-equiv="refresh">`` shell sends the reader, when that is
-    another page on the same site; None otherwise. A refresh in ``<noscript>`` is the
-    no-JS fallback, never followed by a reader running scripts."""
+    """Where a ``<meta http-equiv="refresh">`` shell sends the reader on the same site, else None;
+    one in ``<noscript>`` is the no-JS fallback a scripted reader never follows."""
     soup = BeautifulSoup(html, "html.parser")
     for meta in soup.find_all("meta"):
         if not isinstance(meta, Tag) or str(meta.get("http-equiv") or "").lower() != "refresh":
@@ -127,17 +123,17 @@ def generator_meta(html: str) -> str:
     return ", ".join(str(t.get("content") or "").lower() for t in tags if isinstance(t, Tag))
 
 
-def absolutize_refs(root: Tag, page_url: str) -> None:
+def absolutize_refs(root: Tag, page_url: str, *, keep: tuple[str, ...] = ()) -> None:
     """Make every <a href> / <img src> under root absolute against page_url.
 
-    Fragment-only, mailto:, data:, and already-absolute refs are left alone."""
+    Fragment-only, mailto:, data:, already-absolute and ``keep``-prefixed refs are left alone."""
     for tag in root.find_all(["a", "img"]):
         for attr in ("href", "src"):
             val = tag.get(attr)
             if (
                 isinstance(val, str)
                 and val
-                and not val.startswith(("http://", "https://", "#", "mailto:", "data:"))
+                and not val.startswith(("http://", "https://", "#", "mailto:", "data:", *keep))
             ):
                 tag[attr] = urljoin(page_url, val)
 
@@ -146,6 +142,29 @@ def strip_scripts(root: Tag) -> None:
     """Drop <script>/<style>/<noscript> from an extracted fragment."""
     for junk in root.find_all(["script", "style", "noscript"]):
         junk.decompose()
+
+
+_HEADING_RE = re.compile(r"^h[1-6]$")
+
+
+def toc_heading(depth: int, title: str) -> str:
+    """The heading a TOC entry at ``depth`` gets: ``h{depth + 1}``, capped at h6."""
+    level = min(depth + 1, 6)
+    return f"<h{level}>{escape(title)}</h{level}>"
+
+
+def seat_headings(node: Tag, *, depth: int, name: str) -> None:
+    """Seat a section at its TOC depth: its first heading becomes ``h{depth + 1}`` and the rest
+    move with it, none above it or past h6. A section with no heading gets ``name``."""
+    top = min(depth + 1, 6)
+    heads = node.find_all(_HEADING_RE)
+    if not heads:
+        if name:
+            node.insert(0, BeautifulSoup(toc_heading(depth, name), "html.parser"))
+        return
+    shift = top - int(heads[0].name[1])
+    for head in heads:
+        head.name = f"h{min(max(int(head.name[1]) + shift, top), 6)}"
 
 
 _CARRIERS = (
@@ -171,10 +190,8 @@ def _is_real_ref(value: object) -> bool:
 
 
 def _srcset_candidates(srcset: str) -> list[tuple[str, int, float]]:
-    """(url, declared width, pixel density) per srcset candidate.
-
-    Rejects a ``data:`` value whole: its own comma would split into base64
-    fragments that look like relative URLs."""
+    """(url, declared width, pixel density) per srcset candidate; a ``data:`` value is rejected
+    whole, since its own comma splits into fragments that look like URLs."""
     if not _is_real_ref(srcset):
         return []
     out: list[tuple[str, int, float]] = []
@@ -200,10 +217,8 @@ def _declared_width(url: str) -> int:
 
 
 def _candidates(img: Tag, sources: list[Tag]) -> list[tuple[int, float, int, str]]:
-    """(width, density, -precedence, url) for every rendition of one image.
-
-    A source behind a media query that can never match is excluded — the page
-    never renders it."""
+    """(width, density, -precedence, url) for every rendition of one image, minus any behind a media
+    query that never matches."""
     out: list[tuple[int, float, int, str]] = []
     local = img.get("src")
     if isinstance(local, str) and local.startswith("images/"):
@@ -228,10 +243,8 @@ def _candidates(img: Tag, sources: list[Tag]) -> list[tuple[int, float, int, str
 
 
 def _best_ref(img: Tag, sources: list[Tag] | None = None) -> str | None:
-    """The image's one true URL: widest declared rendition, then precedence.
-
-    With no width declared anywhere this falls back to ``src``, the publisher's
-    canonical asset."""
+    """The image's one true URL: widest declared rendition, then precedence; ``src``, the canonical
+    asset, when no width is declared."""
     cands = _candidates(img, sources or [])
     if not cands:
         return None
@@ -239,11 +252,8 @@ def _best_ref(img: Tag, sources: list[Tag] | None = None) -> str | None:
 
 
 def flatten_responsive_images(root: Tag) -> None:
-    """Reduce every responsive image to one plain ``<img src>``, widest first.
-
-    The localizer follows ``<img src>`` and markdown ``](…)`` only, so anything
-    parked in ``<picture>``/``srcset``/``data-src`` ships remote whatever
-    ``localize`` does."""
+    """Reduce every responsive image to one plain ``<img src>``, widest first: the localizer follows
+    only ``src`` and markdown refs, so ``srcset`` and ``data-src`` would ship remote."""
 
     def settle(img: Tag, sources: list[Tag]) -> bool:
         """Resolve and apply this image's one URL; False when there is none."""

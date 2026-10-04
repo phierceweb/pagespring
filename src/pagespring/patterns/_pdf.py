@@ -1,8 +1,5 @@
-"""PDF page counting, shared by the patterns that stage a PDF deliverable.
-
-A real parser is required: PDF 1.5+ keeps the page tree in compressed object
-streams, so scanning for ``/Type /Page`` both misses and double-counts.
-"""
+"""PDF page counting for patterns that stage a PDF; a real parser, since PDF 1.5+ keeps the page
+tree in compressed object streams that a ``/Type /Page`` scan misses."""
 
 from __future__ import annotations
 
@@ -15,11 +12,8 @@ log = get_logger(__name__)
 
 
 def page_count(path: Path) -> int | None:
-    """Number of pages in ``path``, or None when it cannot be determined.
-
-    None rather than a guess: a damaged or password-protected PDF is still a
-    valid deliverable, and a fabricated count is worse than an absent one.
-    """
+    """Pages in ``path``, or None when undeterminable: a damaged or encrypted PDF is still a valid
+    deliverable, and a made-up count is worse than none."""
     try:
         return len(pdfium.PdfDocument(str(path)))
     except (pdfium.PdfiumError, OSError, ValueError) as exc:

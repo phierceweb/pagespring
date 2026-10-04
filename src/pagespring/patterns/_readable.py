@@ -1,11 +1,5 @@
-"""Main-content extraction for crawled docs pages.
-
-``main_content`` finds the content node, most specific evidence first; ``clean``
-reduces it to what a reader sees. Screen-reader-only text, icons, copy buttons and
-tab strips go, tab panels are shown under their labels, code blocks rendered one
-``<div>`` per line (Expressive Code) get their line breaks back, shiki token spans
-flatten to plain code, and MathJax formulas become MathML.
-"""
+"""Main-content extraction for crawled pages: ``main_content`` finds the node and ``clean`` reduces
+it to what a reader sees, with tab labels, code text and MathML kept."""
 
 from __future__ import annotations
 
@@ -31,10 +25,8 @@ def _top_level_articles(root: Tag) -> list[Tag]:
 
 
 def main_content(soup: Tag) -> Tag | None:
-    """The page's content node, most specific evidence first.
-
-    An ``<article>`` inside ``<main>`` wins only when it holds most of main's
-    text; several articles are cards in a landing page, not the content."""
+    """The page's content node, most specific evidence first; an ``<article>`` in ``<main>`` wins
+    only with most of main's text, since several articles are landing-page cards."""
     main = soup.find("main")
     if not isinstance(main, Tag):
         main = soup.select_one('[role="main"]')
@@ -136,10 +128,8 @@ def _line_text(line: Tag) -> str:
 
 
 def _label_tab_panels(root: Tag) -> None:
-    """Show every tab panel and head it with its tab's label.
-
-    The tab strip goes once every tab in it labels a panel; otherwise it stays,
-    since it is then the only place the labels survive."""
+    """Show every tab panel under its tab's label; the strip goes only once every tab labels a
+    panel, since otherwise it holds the only copy of some labels."""
     factory = BeautifulSoup("", "html.parser")
     used: set[int] = set()
     for panel in root.select('[role="tabpanel"]'):

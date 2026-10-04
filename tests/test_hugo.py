@@ -1,10 +1,5 @@
-"""_hugo — sitemap-driven crawl for Hugo-built docs sites (mocked fetch).
-
-Hugo publishes a sitemap at its *site* root — which on a multi-site host is a
-subdirectory, not the origin, so the sitemap is discovered by walking up. Content
-lives in ``<main>`` in every supported Hugo docs theme; the theme's sidebar sets
-the reading order.
-"""
+"""_hugo: sitemap found by walking up from the seed, content in ``<main>``, order from the theme
+sidebar (mocked fetch)."""
 
 import pytest
 from pf_core.exceptions import ClientError, InvalidInputError
@@ -294,9 +289,7 @@ def test_an_unreadable_child_sitemap_truncates_the_result(tmp_path, monkeypatch,
 
 
 def test_a_dotted_version_dir_is_not_treated_as_a_filename():
-    """A versioned manual root ends in a dotted directory; popping it as a filename
-    scopes the crawl at the product level and merges sibling versions into one
-    deliverable."""
+    """Popping a dotted version dir as a filename scopes at the product and merges sibling versions."""
     assert _hugo._base_dir("https://help.ex.com/docs/ozone/11.0/") == (
         "https://help.ex.com/docs/ozone/11.0"
     )

@@ -1,13 +1,5 @@
-"""Sphinx acquisition — same-prefix breadth-first crawl.
-
-Sphinx exposes no machine index that works generically across themes (the
-readthedocs pattern takes an RTD project's PDF build first), so crawl:
-breadth-first same-host links under the start URL's directory prefix, extract
-the ``div[role=main]`` content root (fallbacks: ``div.body``, ``main``), strip
-headerlink anchors, absolutize refs, and stage pages in the toctree order themes
-render into each page. Capped; a capped crawl warns — a silently truncated crawl
-reads as a complete one.
-"""
+"""Sphinx: a capped breadth-first crawl under the start URL's directory, each page's
+``div[role=main]`` staged in the toctree order the theme renders; a capped crawl warns."""
 
 from __future__ import annotations
 
@@ -36,9 +28,8 @@ from pagespring.patterns._sphinx_order import Siblings, reading_order
 
 log = get_logger(__name__)
 
-# Sphinx's OWN assets, shipped by the `basic` theme every stock theme inherits.
-# A bare "_static/" is any site's asset directory and claims sites that are not
-# Sphinx at all — and _extract's ladder ends at <main>, so the mis-route succeeds.
+# Sphinx's own assets from the `basic` theme every stock theme inherits. A bare "_static/" is any
+# site's asset directory, and the mis-route would succeed: _extract falls back to <main>.
 _TELLS = ("_static/documentation_options.js", "_static/doctools.js", "_static/pygments.css")
 
 _MAX_PAGES = 1000
@@ -50,10 +41,8 @@ _TOC_ITEM = re.compile(r"^toctree-l\d+$")
 
 
 def is_sphinx(html: str) -> bool:
-    """Generator meta, or one of Sphinx's own ``_static/`` assets.
-
-    The docutils-plus-``_static/`` conjunction is the backstop for a theme that
-    ships none of the named assets."""
+    """Generator meta, or one of Sphinx's own ``_static/`` assets; docutils plus ``_static/`` backs
+    up a theme that ships none of them."""
     gen = generator_meta(html)
     if "sphinx" in gen:
         return True
@@ -107,9 +96,8 @@ def _entry_url(li: Tag, page_url: str) -> str | None:
 
 
 def _toc_siblings(soup: BeautifulSoup, page_url: str) -> list[Siblings]:
-    """The page's toctree sibling lists. A nested list's parent is its enclosing
-    entry, and a content-root toctree's is the page; a sidebar's top level is None
-    — themes root it at the site or at the current section."""
+    """The page's toctree sibling lists, each with its parent: the enclosing entry, the page for a
+    content-root toctree, or None for a sidebar's top level, which themes root variously."""
     root = _content_root(soup)
     lists: dict[int, tuple[str | None, list[str]]] = {}
     for li in soup.find_all("li", class_=_TOC_ITEM):
