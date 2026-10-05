@@ -12,14 +12,16 @@ HTML/markdown file with absolute asset URLs under `incoming/<slug>/`. That clean
 file is the deliverable; converting it into the finished RAG corpus is a separate
 step (pagespeak) that consumes `incoming/` on its own — pagespring never runs it.
 
-Lean by design: [`pf-core[cli]`](https://github.com/phierceweb/pf-core) ([PyPI](https://pypi.org/project/pf-core/)) + `beautifulsoup4`, `pyyaml`, and `pypdfium2` for PDF page counts. Stdlib fetch, no ML stack.
+Lean by design: [`pf-core[cli]`](https://github.com/phierceweb/pf-core) ([PyPI](https://pypi.org/project/pf-core/)) + `beautifulsoup4`, `pyyaml`, and `pypdfium2` for PDF page counts and for cutting PDFs printed as 2-up spreads into single pages. Stdlib fetch, no ML stack.
 
 ## Intended use
 
 pagespring is for **publicly available documentation** — vendor manuals, help
 centers, open textbooks, API specs. It fetches only what the source serves to
 any reader: there is no login/session handling, no paywall traversal, and no
-bot-detection evasion. It is a **polite client**: it identifies itself with a
+bot-detection evasion. Where a help site's pages load their articles
+with a form POST to the site's own API, it sends the same guest request a
+browser does. It is a **polite client**: it identifies itself with a
 `pagespring/<version>` User-Agent (`PAGESPRING_UA` overrides it), honors
 `429 Retry-After`, backs off on server errors, paces crawl requests, and caps
 crawl sizes.
@@ -28,7 +30,8 @@ It is a *user-invoked* archiver — closer to "Save Page As" than to an
 autonomous crawler. Every source is a URL you supply (one per `ingest`, or one
 per line of an `ingest --batch` file), and it never discovers sources on its
 own, so it does not consult `robots.txt` (which governs bots that find URLs
-themselves).
+themselves), except to warn when a Fluid Topics portal's robots.txt disallows
+the API an ingest reads.
 Before mirroring a site, check its terms of use. What you may do with the
 acquired copy (personal RAG corpus, internal search, redistribution) is
 governed by the source's license — the deliverable under `incoming/` stays on

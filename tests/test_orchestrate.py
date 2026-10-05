@@ -791,6 +791,31 @@ def test_renormalize_records_the_page_count_normalize_derives(tmp_path, monkeypa
     assert manifest.read_manifest(slug_dir)["pages"] == 2
 
 
+class _SpreadCountingPattern(_RawDrivenPattern):
+    def __init__(self, prefix: str = "v1", spreads: int = 2):
+        super().__init__(prefix)
+        self.spreads = spreads
+
+    def normalize(self, acq, workdir):
+        acq.spreads_split = self.spreads
+        return super().normalize(acq, workdir)
+
+
+@pytest.mark.parametrize("prefix", ["v1", "v2"], ids=["identical-replay", "changed-replay"])
+def test_renormalize_records_the_spreads_normalize_cuts(tmp_path, monkeypatch, prefix):
+    p = _SpreadCountingPattern()
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    assert manifest.read_manifest(slug_dir)["spreads_split"] == 2
+
+    p.prefix, p.spreads = prefix, 0
+    monkeypatch.setattr(renormalize, "pattern_by_name", lambda name: p)
+    renormalize.run_renormalize("fakeapp")
+
+    assert manifest.read_manifest(slug_dir)["spreads_split"] == 0
+
+
 def test_renormalize_without_manifest_raises(tmp_path):
     """A slug never ingested (no manifest) is a precondition failure."""
     (tmp_path / "incoming" / "bk").mkdir(parents=True)
@@ -806,6 +831,34 @@ def test_renormalize_without_kept_raw_raises(tmp_path, monkeypatch):
     with pytest.raises(PreconditionError, match="--keep-raw"):
         renormalize.run_renormalize("fakeapp")
     assert (tmp_path / "incoming" / "fakeapp" / "fakeapp.html").exists()
+
+
+def test_renormalize_refuses_a_raw_the_manifest_does_not_record_as_kept(tmp_path, monkeypatch):
+    """A kill during ingest's raw/ copy leaves a partial raw/ beside kept_raw: false."""
+    p = _RawDrivenPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    monkeypatch.setattr(renormalize, "pattern_by_name", lambda name: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    m = manifest.read_manifest(slug_dir)
+    m["kept_raw"] = False
+    manifest.write_manifest(slug_dir, m)
+
+    with pytest.raises(PreconditionError, match="--keep-raw"):
+        renormalize.run_renormalize("fakeapp")
+
+
+def test_renormalize_trusts_raw_under_a_manifest_older_than_kept_raw(tmp_path, monkeypatch):
+    p = _RawDrivenPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    monkeypatch.setattr(renormalize, "pattern_by_name", lambda name: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    m = manifest.read_manifest(slug_dir)
+    del m["kept_raw"]
+    manifest.write_manifest(slug_dir, m)
+
+    assert renormalize.run_renormalize("fakeapp")["changed"] is False
 
 
 def test_renormalize_empty_output_fails_and_preserves_previous(tmp_path, monkeypatch):
@@ -1202,6 +1255,42 @@ def test_keep_raw_is_ignored_for_pdf_deliverables(tmp_path, monkeypatch):
     assert not (slug_dir / "raw").exists()
     m = manifest.read_manifest(slug_dir)
     assert m is not None and m["kept_raw"] is False
+
+
+class _SpreadPdfPattern(_FakePattern):
+    """A PDF source whose normalize cut its 2-up spreads into single pages."""
+
+    def acquire(self, url, workdir):
+        raw = workdir / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        (raw / "fakeapp.pdf").write_bytes(b"%PDF-1.7 spreads")
+        return AcquireResult(raw_dir=raw, kind="pdf", slug="fakeapp", pages=3)
+
+    def normalize(self, acq, workdir):
+        single = workdir / "fakeapp.pdf"
+        single.write_bytes(b"%PDF-1.7 single pages")
+        acq.pages, acq.spreads_split = 5, 2
+        return single
+
+
+def test_the_manifest_records_the_spreads_normalize_cut(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _SpreadPdfPattern())
+    res = orchestrate.run_ingest("https://x/m.pdf")
+
+    m = manifest.read_manifest(tmp_path / "incoming" / "fakeapp")
+    assert (m["pages"], m["spreads_split"]) == (5, 2)
+    assert (res["pages"], res["spreads_split"]) == (5, 2)
+
+
+def test_keep_raw_keeps_the_spread_pdf_a_cut_replaced(tmp_path, monkeypatch):
+    """Cut into single pages, the deliverable no longer duplicates raw/, so renormalize can replay."""
+    monkeypatch.setattr(orchestrate, "classify", lambda url: _SpreadPdfPattern())
+    orchestrate.run_ingest("https://x/m.pdf", keep_raw=True)
+
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    assert (slug_dir / "raw" / "fakeapp.pdf").read_bytes() == b"%PDF-1.7 spreads"
+    assert (slug_dir / "fakeapp.pdf").read_bytes() == b"%PDF-1.7 single pages"
+    assert manifest.read_manifest(slug_dir)["kept_raw"] is True
 
 
 def test_localize_is_a_no_op_for_pdf_deliverables(tmp_path, monkeypatch):
@@ -1915,7 +2004,7 @@ def test_a_capped_recrawl_does_not_replace_a_complete_larger_manual(tmp_path, mo
     p.pages, p.body = 1000, "first 1000 pages"
     monkeypatch.setattr(p, "acquire", capped)
 
-    with pytest.raises(InvalidInputError, match="page cap with 1000 pages") as exc:
+    with pytest.raises(InvalidInputError, match="stopped short with 1000 pages") as exc:
         orchestrate.run_ingest("https://docs.example.com/")
 
     assert "--slug fakeapp --replace" in str(exc.value)

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-# The deliverable's format; a "pdf" is the downloaded file, passed through normalize as-is.
+# The deliverable's format; a "pdf" is the downloaded file, cut into single pages if printed 2-up.
 SourceKind = Literal["html", "markdown", "pdf"]
 
 # Files no URL serves (an archive's own figures) go here beside the normalized file, as
@@ -26,15 +26,17 @@ class AcquireResult:
     # None means "not determinable" (e.g. an unreadable PDF), never a guess.
     pages: int | None = None
     title: str | None = None  # human source title for the deliverable heading (falls back to slug)
-    # A page cap cut this crawl short. Travels to the manifest so audit can fail it:
-    # a truncated crawl looks healthy on every content check when the source grew.
+    # The crawl stopped short (page cap, stall, unreadable sitemap). Travels to the manifest so
+    # audit can fail it: a truncated crawl looks healthy on every content check.
     truncated: bool = False
     # The source IS one document, not a crawled index — tells audit that a
     # 1-page deliverable is correct. Suppresses a check, so set it deliberately.
     single_document: bool = False
-    # Pages discovered but never staged (fetch error, no content). A page cap is
-    # loud via `truncated`; losing pages one at a time to throttling is not.
+    # Pages discovered but never staged (fetch error, no content). A crawl that stops
+    # short is loud via `truncated`; losing pages one at a time is not.
     lost: int = 0
+    # 2-up spread pages normalize cut into their left and right pages (a PDF printed as spreads).
+    spreads_split: int = 0
     # Cache validators from single-fetch acquires — refresh probes with them.
     etag: str | None = None
     last_modified: str | None = None

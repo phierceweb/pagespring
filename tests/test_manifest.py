@@ -52,6 +52,7 @@ def test_build_manifest_carries_all_fields():
     assert m["sha256"] == "deadbeef"
     assert m["images"] == 0
     assert m["ingested_at"] == "2026-06-14T17:23:01Z"
+    assert m["spreads_split"] == 0
 
 
 def test_manifest_carries_no_conversion_instructions():

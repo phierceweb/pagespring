@@ -273,3 +273,36 @@ class TestFetchSizeCaps:
         monkeypatch.setenv("PAGESPRING_MAX_TEXT_BYTES", value)
         http.fetch_text(URL)
         assert seam.fetchers[0]._max_bytes == http._TEXT_MAX_BYTES_DEFAULT
+
+
+class TestPostForm:
+    FIELDS = {"message": '{"actions":[]}', "aura.token": "null"}
+
+    def test_sends_the_fields_urlencoded_as_a_post(self, seam):
+        seam.queue.append(_Resp(b'{"ok":true}'))
+        final_url, text = http.post_form(URL, self.FIELDS)
+        request = seam.calls[0][0]
+        assert request.get_method() == "POST"
+        assert request.data == b"message=%7B%22actions%22%3A%5B%5D%7D&aura.token=null"
+        assert seam.headers_sent()["content-type"].startswith("application/x-www-form-urlencoded")
+        assert (final_url, text) == (URL, '{"ok":true}')
+
+    def test_keeps_the_crawl_ua_and_the_text_cap(self, seam):
+        http.post_form(URL, self.FIELDS)
+        assert seam.headers_sent()["user-agent"].startswith("pagespring/")
+        assert seam.fetchers[0]._max_bytes == http._TEXT_MAX_BYTES_DEFAULT
+
+    def test_a_retry_resends_the_body(self, seam, monkeypatch):
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+        seam.queue.extend([_http_error(503), _Resp()])
+        http.post_form(URL, self.FIELDS)
+        assert [request.data for request, _t in seam.calls] == [seam.calls[0][0].data] * 2
+        assert seam.calls[1][0].get_method() == "POST"
+
+    def test_a_redirect_is_raised_not_followed(self, seam):
+        """Following would re-POST the form to wherever the Location points."""
+        seam.queue.append(_http_error(302, {"Location": "https://elsewhere.example/x"}))
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            http.post_form(URL, self.FIELDS)
+        assert exc.value.code == 302
+        assert len(seam.calls) == 1

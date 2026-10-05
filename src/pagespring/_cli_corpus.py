@@ -142,35 +142,46 @@ def status() -> None:
     if not slugs:
         typer.echo("(nothing in incoming/ — run `bin/run ingest <url>`)")
         return
-    for d in slugs:
-        typer.echo(_status_row(d))
+    rows = [_status_cells(d) for d in slugs]
+    widths = [max(len(row[i]) for row in rows) for i in range(len(_RIGHT_ALIGNED))]
+    for row in rows:
+        cells = (
+            cell.rjust(w) if right else cell.ljust(w)
+            for cell, w, right in zip(row, widths, _RIGHT_ALIGNED, strict=True)
+        )
+        typer.echo("  ".join(cells).rstrip())
 
 
 _ROW_FIELDS = ("deliverable", "pattern", "pages", "bytes", "source_url", "ingested_at")
+# slug, deliverable, pattern, pages, size, raw, date, host
+_RIGHT_ALIGNED = (False, False, False, True, True, False, False, False)
 
 
-def _status_row(slug_dir: Path) -> str:
-    """One status line from the slug's manifest, or, when it is missing or
+def _status_cells(slug_dir: Path) -> tuple[str, str, str, str, str, str, str, str]:
+    """One status row's cells from the slug's manifest, or, when it is missing or
     unreadable, from the first non-manifest file's own facts."""
     m = manifest.read_manifest(slug_dir)
     if isinstance(m, dict) and all(k in m for k in _ROW_FIELDS):
-        deliverable = slug_dir / m["deliverable"]
+        deliverable = slug_dir / str(m["deliverable"])
         size = deliverable.stat().st_size if deliverable.exists() else m["bytes"]
         pages = str(m["pages"]) if m["pages"] is not None else "-"
         host = urlsplit(m["source_url"]).netloc or "-"
         raw = "raw" if m.get("kept_raw") else ""  # replays offline via renormalize
         return (
-            f"{slug_dir.name:24} {m['deliverable']:32} {m['pattern']:14} "
-            f"{pages:>5} {human_size(size):>9} {raw:>4}  {m['ingested_at'][:10]}  {host}"
+            slug_dir.name,
+            str(m["deliverable"]),
+            str(m["pattern"]),
+            pages,
+            human_size(size),
+            raw,
+            str(m["ingested_at"])[:10],
+            host,
         )
     files = sorted(
         p for p in slug_dir.iterdir() if p.is_file() and p.name != manifest.MANIFEST_NAME
     )
     if not files:
-        return f"{slug_dir.name:24} {'(no clean file)':32} {'-':14} {'-':>5} {'-':>9}  -  -"
+        return (slug_dir.name, "(no clean file)", "-", "-", "-", "", "-", "-")
     f = files[0]
     when = date.fromtimestamp(f.stat().st_mtime).isoformat()
-    return (
-        f"{slug_dir.name:24} {f.name:32} {'-':14} "
-        f"{'-':>5} {human_size(f.stat().st_size):>9}  {when}  -"
-    )
+    return (slug_dir.name, f.name, "-", "-", human_size(f.stat().st_size), "", when, "-")

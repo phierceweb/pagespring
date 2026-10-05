@@ -4,6 +4,52 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.15.0] — 2026-10-05
+
+### Added
+
+- **`salesforce_knowledge` ingests Salesforce Experience Cloud help sites** — a
+  topic URL (`/s/topic/0TO…`) stages every article filed under it in title
+  order, an article URL (`/s/article/…`) that one article — read as a guest
+  through the Aura API the page shells load them with.
+- **`pagespring.http.post_form`**, for an endpoint that only answers a form POST;
+  it never follows a redirect.
+- **A PDF printed as 2-up spreads is staged one printed page per page.** Pages
+  about twice as wide as the PDF's first unrotated page (1.8–2.2×), and as tall,
+  are cut into their left and right halves by MediaBox/CropBox alone, so each page renders as it did
+  on the spread; the outline and document info carry over. The cut is
+  byte-reproducible, so `--if-changed` and `refresh` see an unchanged source as
+  unchanged; a PDF whose cut is not reproducible, such as an AES-encrypted one, is
+  staged as downloaded.
+  `ingest` prints the spreads cut.
+- **A Fluid Topics ingest warns when the portal's robots.txt disallows the API it
+  reads**, then proceeds.
+
+### Changed
+
+- **Manifest schema v8 adds `spreads_split`**, the spread pages normalize cut;
+  `pages` counts the deliverable after the cut.
+- **`--keep-raw` keeps a cut PDF's download in `raw/`**, so `renormalize` can
+  replay the cut. A PDF staged as downloaded still keeps no `raw/`.
+- **pf-core pin raised to `~=0.26.0`.**
+
+### Fixed
+
+- **A zip member whose path leaves the archive root is refused** (exit 2), as a tar
+  member already was, instead of being extracted under a rewritten name.
+- **A Docsify `alias` pattern that could backtrack without end is skipped** with a
+  warning (a quantified group, more than two quantifiers, more than two groups of
+  alternatives, or a Python inline flag), instead of hanging the ingest past Ctrl-C.
+- **`audit`'s `crawl_truncated` and the collapse refusal no longer blame the page
+  cap** for a crawl cut short by a stall or an unreadable sitemap.
+- **`status` sizes each column to its longest value**, so a long slug, file or
+  pattern name no longer shifts the rest of its row.
+- **`renormalize` refuses a `raw/` its manifest does not record as kept**, such as one an
+  interrupted `--keep-raw` copy left partial, instead of re-staging a truncated manual.
+- **`github_markdown` stages a repeated page once and resolves relative image refs**: a page
+  byte-identical to one already staged is skipped,
+  and a relative image ref points at the file's raw URL instead of resolving nowhere.
+
 ## [0.14.0] — 2026-10-04
 
 ### Added

@@ -130,7 +130,7 @@ def _refuse_collapse(
     holds_raw: bool = False,
 ) -> None:
     """Refuse a same-source re-crawl that found a fraction of the staged pages (a changed source
-    still normalizes to a shell); a capped crawl never replaces a larger complete manual."""
+    still normalizes to a shell); a crawl that stopped short never replaces a larger complete one."""
     held_pages = held.get("pages") if isinstance(held, dict) else None
     if not isinstance(held_pages, int) or pages is None:
         return
@@ -139,7 +139,7 @@ def _refuse_collapse(
     held_truncated = isinstance(held, dict) and bool(held.get("truncated"))
     if truncated and pages < held_pages and not held_truncated:
         raise InvalidInputError(
-            f"{slug}: the re-crawl stopped at its page cap with {pages} pages, but the "
+            f"{slug}: the re-crawl stopped short with {pages} pages, but the "
             f"staged manual holds all {held_pages}. {accept}"
         )
     if held_pages < cfg.COLLAPSE_MIN_PAGES or pages * 100 >= held_pages * cfg.COLLAPSE_KEEP_PCT:

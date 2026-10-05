@@ -98,19 +98,20 @@ def audit_slug(slug: str) -> list[Finding]:
     )
     findings = _sha_findings(incoming_dir, m, doc_text)
 
-    # A page cap cut the crawl short, and nothing in the content shows it: when the source grew, the
+    # The crawl stopped short, and nothing in the content shows it: when the source grew, the
     # truncated copy still outweighs the last one.
     if m.get("truncated"):
         findings.append(
             _f(
                 "crawl_truncated",
                 "error",
-                f"crawl hit its page cap at {m['pages']} pages — the deliverable is partial",
+                f"the crawl stopped short at {m['pages']} pages (a page cap, a stall, or an "
+                "unreadable sitemap) — the deliverable is partial",
             )
         )
 
-    # Pages discovered but never staged: `truncated` reports only a page cap, so a crawl bled dry by
-    # throttling passes every content check.
+    # Pages discovered but never staged: `truncated` marks a crawl that stopped short, so one bled
+    # dry by throttling passes every content check.
     lost = m.get("lost") or 0
     if lost:
         staged = m["pages"] or 0

@@ -64,6 +64,7 @@ class IngestResult(TypedDict):
     bytes: int
     images: int  # files in incoming/<slug>/images/
     images_downloaded: int  # fetched by this run's image pass
+    spreads_split: int  # 2-up PDF spreads normalize cut into single pages
     changed: bool  # False only when --if-changed found the deliverable already current
     duplicate_of: str | None  # another slug already holding byte-identical content
 
@@ -138,6 +139,7 @@ def run_ingest(
                 "bytes": prior.get("bytes", size_bytes),
                 "images": prior["images"],
                 "images_downloaded": 0,
+                "spreads_split": acq.spreads_split,
                 "changed": False,
                 "duplicate_of": duplicate_of,
             }
@@ -182,6 +184,7 @@ def run_ingest(
             single_document=acq.single_document,
             kept_raw=False,
             lost=acq.lost,
+            spreads_split=acq.spreads_split,
             localized_sha256=None,
         )
         # Otherwise before the copy, so a kill still leaves provenance — content with
@@ -196,9 +199,9 @@ def run_ingest(
         if not takeover:
             keep |= {"images", images_mod.SIDECAR_NAME}
         _clear_except(incoming_dir, keep=keep)
-        # A PDF's normalize is a passthrough, so a replay can only return the
-        # bytes already staged — raw/ would duplicate the deliverable.
-        if keep_raw and acq.kind == "pdf":
+        # A PDF with no spreads to cut passes through normalize, so a replay can only
+        # return the bytes already staged — raw/ would duplicate the deliverable.
+        if keep_raw and acq.kind == "pdf" and not acq.spreads_split:
             log.info("ingest.raw_skipped", slug=acq.slug, reason="pdf normalize is a passthrough")
         elif keep_raw:
             shutil.copytree(acq.raw_dir, incoming_dir / "raw")
@@ -233,6 +236,7 @@ def run_ingest(
             "bytes": size_bytes,
             "images": n_images,
             "images_downloaded": n_downloaded,
+            "spreads_split": acq.spreads_split,
             "changed": True,
             "duplicate_of": duplicate_of,
         }

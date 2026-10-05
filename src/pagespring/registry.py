@@ -16,6 +16,7 @@ from pagespring.patterns.microsoft_support import MicrosoftSupportPattern
 from pagespring.patterns.openstax import OpenStaxPattern
 from pagespring.patterns.pdf_url import PdfUrlPattern
 from pagespring.patterns.readthedocs import ReadTheDocsPattern
+from pagespring.patterns.salesforce_knowledge import SalesforceKnowledgePattern
 from pagespring.patterns.sitemap_crawl import SitemapCrawlPattern
 from pagespring.patterns.zendesk_help import ZendeskHelpPattern
 
@@ -25,6 +26,7 @@ PATTERNS: list[Pattern] = [
     ReadTheDocsPattern(),
     GitHubMarkdownPattern(),
     ZendeskHelpPattern(),
+    SalesforceKnowledgePattern(),
     MicrosoftSupportPattern(),
     AdobeHelpxPattern(),
     OpenStaxPattern(),

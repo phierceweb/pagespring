@@ -582,3 +582,40 @@ def test_a_link_to_a_section_keeps_its_anchor_and_a_node_without_a_reader_url_ge
 
     assert f'href="{_BASE}reader/MAP15/T-wiring#s1"' in staged[1]
     assert staged[2].startswith(f"<!-- source: {_BASE}reader/MAP15/T-wiring -->")
+
+
+_ROBOTS = "User-agent: *\nDisallow: /\nAllow: /r/*\n"
+
+
+def test_a_robots_disallow_on_the_api_is_logged_and_the_ingest_proceeds(tmp_path, monkeypatch):
+    _serve(monkeypatch, {**_pages(), f"{_BASE}robots.txt": _ROBOTS})
+
+    with capture_logs() as logs:
+        acq = _acquire(tmp_path)
+
+    assert acq.pages == 4
+    warned = [e for e in logs if e["event"] == "fluidtopics.robots_disallow"]
+    assert len(warned) == 1 and warned[0]["robots"] == f"{_BASE}robots.txt"
+
+
+@pytest.mark.parametrize("robots", [None, "User-agent: *\nAllow: /\n"], ids=["absent", "allows"])
+def test_no_warning_when_robots_allows_the_api_or_is_absent(tmp_path, monkeypatch, robots):
+    pages = _pages() if robots is None else {**_pages(), f"{_BASE}robots.txt": robots}
+    _serve(monkeypatch, pages)
+
+    with capture_logs() as logs:
+        _acquire(tmp_path)
+
+    assert not [e for e in logs if e["event"] == "fluidtopics.robots_disallow"]
+
+
+def test_robots_is_read_from_the_host_root_for_a_portal_under_a_path(tmp_path, monkeypatch):
+    base = "https://www.vendor.example/help/"
+    seed = f"{base}r/widget-pro/15.0/en"
+    shell = _SHELL.replace(f'content="{_BASE}"', f'content="{base}"')
+    pages = {k.replace(_BASE, base): v for k, v in _pages().items()}
+    seen = _serve(monkeypatch, {**pages, seed: shell})
+
+    _acquire(tmp_path, base=seed)
+
+    assert "https://www.vendor.example/robots.txt" in seen

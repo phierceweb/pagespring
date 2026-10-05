@@ -17,13 +17,14 @@ __all__ = [
     "fetch_text",
     "not_modified",
     "polite_sleep",
+    "post_form",
 ]
 
 _UA_DEFAULT = f"pagespring/{__version__} (+https://github.com/phierceweb/pagespring)"
 _UA_ENV_VAR = "PAGESPRING_UA"
 
 
-def _ua() -> str:
+def user_agent() -> str:
     """The identifying default UA, or PAGESPRING_UA for sources that need another."""
     return resolve_str(None, _UA_ENV_VAR, default=_UA_DEFAULT) or _UA_DEFAULT
 
@@ -51,7 +52,7 @@ def _download_max_bytes() -> int:
 def _fetcher(retries: int = 2, *, max_bytes: int | None = None) -> Fetcher:
     """A fetch core with pagespring's UA, built per call so ``PAGESPRING_UA`` can change; TLS is
     explicit (pf-core's switch is process-wide), and the cap bounds the inflated body."""
-    return Fetcher(user_agent=_ua(), retries=retries, verify_tls=True, max_bytes=max_bytes)
+    return Fetcher(user_agent=user_agent(), retries=retries, verify_tls=True, max_bytes=max_bytes)
 
 
 def fetch_text(
@@ -84,6 +85,15 @@ def not_modified(url: str, *, etag: str | None, last_modified: str | None) -> bo
     return _fetcher(max_bytes=_text_max_bytes()).not_modified(
         url, etag=etag, last_modified=last_modified
     )
+
+
+def post_form(
+    url: str, fields: dict[str, str], *, timeout: float = 30, retries: int = 2
+) -> tuple[str, str]:
+    """``fetch_text`` for an endpoint that only answers a form POST: same UA, cap, retries and SSRF
+    guard; the body is decoded by the Content-Type charset, else utf-8."""
+    body = _fetcher(retries, max_bytes=_text_max_bytes()).post_form(url, fields, timeout_s=timeout)
+    return body.final_url, body.text()
 
 
 def polite_sleep(seconds: float = 0.25) -> None:

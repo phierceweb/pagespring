@@ -611,6 +611,7 @@ def _corrupt_deflate_zip() -> bytes:
         pytest.param(_corrupt_deflate_zip(), "damaged", id="corrupt-deflate"),
         pytest.param(_tgz({"page.txt": b"x" * 5000})[:-40], "damaged", id="truncated-tgz"),
         pytest.param(_tgz({"../evil.txt": b"escape"}), "outside", id="tar-member-escapes"),
+        pytest.param(_deflated_zip({"../evil.txt": b"escape"}), "outside", id="zip-member-escapes"),
     ],
 )
 def test_an_unreadable_or_unsafe_archive_is_invalid_input(tmp_path, monkeypatch, data, why):
@@ -619,6 +620,16 @@ def test_an_unreadable_or_unsafe_archive_is_invalid_input(tmp_path, monkeypatch,
     _serve(monkeypatch, data)
     with pytest.raises(InvalidInputError, match=f"docs.zip: .*{why}"):
         ArchiveDownloadPattern().acquire("https://x.com/docs.zip", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["docs/../intro.md", "/docs/intro.md", "docs\\intro.md"],
+    ids=["dotdot-inside", "leading-slash", "backslash"],
+)
+def test_a_zip_member_that_stays_inside_the_root_extracts(tmp_path, monkeypatch, name):
+    _serve(monkeypatch, _deflated_zip({name: b"# Intro\n\nText.\n"}))
+    assert ArchiveDownloadPattern().acquire("https://x.com/docs.zip", tmp_path).pages == 1
 
 
 def test_a_corrupt_local_archive_names_the_file(tmp_path):

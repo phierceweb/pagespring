@@ -9,8 +9,11 @@ from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
+from pf_core.log import get_logger
 
 from pagespring.patterns._site import names_a_file
+
+log = get_logger(__name__)
 
 _BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
 # Not the // of a URL or of a protocol-relative string.
@@ -19,6 +22,12 @@ _ALIAS_RE = re.compile(r"(?<![\w$.])alias\s*:\s*\{(.*?)\}", re.S)
 _PAIR_RE = re.compile(r"(['\"`])(.+?)\1\s*:\s*(['\"`])(.*?)\3")
 _SCHEME_RE = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]*:|//)")
 _LINK_OPTION_RE = re.compile(r"(?:^|\s):([\w-]+):?=?([\w%-]+)?")
+# Python's re cannot be interrupted mid-match, so a site's alias pattern is run only
+# when its backtracking stays polynomial.
+_MAX_ALIAS_QUANTIFIERS = 2
+_MAX_ALIAS_CHOICES = 2
+# Python inline flags ((?x) drops the space in "(a+) +"); JS has none, so no real alias uses one.
+_INLINE_FLAG_RE = re.compile(r"\(\?[A-Za-z]")
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,43 @@ def link_options(title: str) -> dict[str, str | bool]:
     return {key: value or True for key, value in _LINK_OPTION_RE.findall(title)}
 
 
+def _bounded(key: str) -> bool:
+    """Whether the alias pattern ``key`` has no inline flag, no quantified group, at most two
+    quantifiers, and at most two groups (or the whole key) holding a ``|``."""
+    if _INLINE_FLAG_RE.search(key):
+        return False
+    quantifiers = choices = 0
+    bars = [False]  # per open group, the key itself first: holds a | yet
+    in_class = escaped = False
+    prev = ""
+    for c in key:
+        if escaped:
+            escaped, prev = False, "\\"
+            continue
+        if c == "\\":
+            escaped = True
+            continue
+        if in_class:
+            in_class, prev = c != "]", c
+            continue
+        if c == "[":
+            in_class = True
+        elif c == "(":
+            bars.append(False)
+        elif c == ")" and len(bars) > 1:
+            choices += bars.pop()
+        elif c == "|":
+            bars[-1] = True
+        elif c in "*+?{":
+            if prev == ")":
+                return False
+            if not (c == "?" and prev in ("(", "*", "+", "?", "}")):
+                quantifiers += 1
+        prev = c
+    choices += bars[0]
+    return quantifiers <= _MAX_ALIAS_QUANTIFIERS and choices <= _MAX_ALIAS_CHOICES
+
+
 def _root(page_url: str, base_path: str, *, history: bool) -> str:
     """Where routes resolve: ``basePath`` against the page's directory (hash
     routing) or the origin (history routing)."""
@@ -76,6 +122,13 @@ def read_site(page_url: str, js: str) -> Site:
     homepage = option(js, "homepage")
     ext = option(js, "ext")
     aliases = _ALIAS_RE.search(js)
+    pairs = [
+        (key, value)
+        for _q, key, _q2, value in _PAIR_RE.findall(aliases.group(1) if aliases else "")
+    ]
+    for key, _value in pairs:
+        if not _bounded(key):
+            log.warning("docsify.alias_skipped", pattern=key)
     return Site(
         root=_root(
             page_url,
@@ -83,10 +136,7 @@ def read_site(page_url: str, js: str) -> Site:
             history=option(js, "routerMode") == "history",
         ),
         homepage=homepage if isinstance(homepage, str) and homepage else "README.md",
-        alias=tuple(
-            (key, value)
-            for _q, key, _q2, value in _PAIR_RE.findall(aliases.group(1) if aliases else "")
-        ),
+        alias=tuple(pair for pair in pairs if _bounded(pair[0])),
         relative_links=option(js, "relativePath") is True,
         ext=ext if isinstance(ext, str) else ".md",
     )

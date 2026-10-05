@@ -136,6 +136,25 @@ def test_acquire_downloads_pdf_build(tmp_path, monkeypatch):
     assert out.read_bytes() == _PDF
 
 
+def test_a_pdf_build_gets_the_pdf_normalize(tmp_path, monkeypatch):
+    """A Read the Docs build printed as spreads is cut like any other PDF deliverable."""
+    from pagespring.patterns import _pdf_spreads
+
+    def fake_single_pages(src, out):
+        out.write_bytes(_PDF)
+        return out, 2
+
+    monkeypatch.setattr(http, "fetch_bytes", lambda url, **kw: (url, _PDF))
+    monkeypatch.setattr(_pdf_spreads, "single_pages", fake_single_pages)
+    p = ReadTheDocsPattern()
+    acq = p.acquire("https://requests.readthedocs.io/en/stable/", tmp_path)
+
+    out = p.normalize(acq, tmp_path)
+
+    assert out.parent == tmp_path
+    assert acq.spreads_split == 2
+
+
 def test_acquire_missing_build_falls_back_to_sphinx_crawl(tmp_path, monkeypatch):
     def fake_fetch_bytes(url, **kwargs):
         raise urllib.error.HTTPError(url, 404, "Not Found", None, None)  # type: ignore[arg-type]

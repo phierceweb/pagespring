@@ -14,7 +14,7 @@ from pagespring import __version__
 
 MANIFEST_NAME = "manifest.json"
 # Post-v1 keys are NotRequired — read them with .get, older files lack them.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class Manifest(TypedDict):
@@ -29,13 +29,15 @@ class Manifest(TypedDict):
     title: NotRequired[str | None]  # acquire-time source title; read via .get (v1 files lack it)
     etag: NotRequired[str | None]  # response validators from single-fetch acquires
     last_modified: NotRequired[str | None]
-    truncated: NotRequired[bool]  # a page cap cut the crawl short — the deliverable is partial
+    truncated: NotRequired[bool]  # the crawl stopped short — the deliverable is partial
     # the source is one document, not a crawled index — a 1-page deliverable is correct
     single_document: NotRequired[bool]
     # raw/ was staged beside the deliverable, so renormalize can replay offline
     kept_raw: NotRequired[bool]
     # pages discovered but never staged — silent partial acquisition
     lost: NotRequired[int]
+    # 2-up spread pages cut into single pages; `pages` counts the deliverable after the cut
+    spreads_split: NotRequired[int]
     # the deliverable's hash AFTER localize re-pointed its refs; None when no
     # image pass ran, in which case `sha256` still describes the file on disk
     localized_sha256: NotRequired[str | None]
@@ -74,6 +76,7 @@ def build_manifest(
     single_document: bool = False,
     kept_raw: bool = False,
     lost: int = 0,
+    spreads_split: int = 0,
     localized_sha256: str | None = None,
 ) -> Manifest:
     """Assemble a manifest from one ingest's facts (stamps schema + version)."""
@@ -91,6 +94,7 @@ def build_manifest(
         "single_document": single_document,
         "kept_raw": kept_raw,
         "lost": lost,
+        "spreads_split": spreads_split,
         "localized_sha256": localized_sha256,
         "deliverable": deliverable,
         "pages": pages,

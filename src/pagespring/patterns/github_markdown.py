@@ -6,14 +6,16 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 from pf_core.log import get_logger
+from pf_core.utils.hashing import content_hash
 from pf_core.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.patterns._gitbook import lead_with_front_matter_title
+from pagespring.patterns._md_code import outside_code
 from pagespring.patterns._mdx import mdx_to_markdown
 from pagespring.patterns._ordering import natural_key as _natural_key
 from pagespring.patterns._site import raw_stem
@@ -29,6 +31,10 @@ _META = {"documentation", "license", "contributing", "changelog"}
 # A directory's own index page, read before its siblings.
 _INDEX = {"readme", "index"}
 _LINK_RE = re.compile(r"\]\(([^)]+)\)")
+_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+_MD_IMAGE_RE = re.compile(r"(!\[[^\]]*\]\()([^)\s]+)")
+_INLINE_IMG_RE = re.compile(r"""(<img\b[^>]*?\bsrc=["'])([^"']+)""", re.IGNORECASE)
+_SOURCE_RE = re.compile(r"<!-- source: (\S+) -->")
 
 
 def _parse_repo(url: str) -> tuple[str, str, str | None, str]:
@@ -110,9 +116,35 @@ def _ordered_content(md: dict[str, str]) -> list[str]:
     return ordered + rest
 
 
+def _copy_of(path: str, body: str, staged: dict[str, str]) -> str | None:
+    """The staged page ``body`` is byte-identical to, else None after recording it as staged."""
+    digest = content_hash(body)
+    if digest in staged:
+        return staged[digest]
+    staged[digest] = path
+    return None
+
+
+def _resolve_images(md: str, source_url: str) -> str:
+    """Relative image refs resolved against the page's raw URL, outside code; a ref with a
+    scheme, an anchor or a leading ``/`` is left alone."""
+
+    def absolute(m: re.Match[str]) -> str:
+        lead, target = m.group(1, 2)
+        if _SCHEME_RE.match(target) or target.startswith(("/", "#")):
+            return f"{lead}{target}"
+        return f"{lead}{urljoin(source_url, target)}"
+
+    return outside_code(
+        md, lambda text: _INLINE_IMG_RE.sub(absolute, _MD_IMAGE_RE.sub(absolute, text))
+    )
+
+
 def _page_markdown(page: Path) -> str:
     text = page.read_text(encoding="utf-8")
-    return lead_with_front_matter_title(mdx_to_markdown(text) if page.suffix == ".mdx" else text)
+    md = lead_with_front_matter_title(mdx_to_markdown(text) if page.suffix == ".mdx" else text)
+    source = _SOURCE_RE.search(text)
+    return _resolve_images(md, source.group(1)) if source else md
 
 
 class GitHubMarkdownPattern:
@@ -145,6 +177,7 @@ class GitHubMarkdownPattern:
         raw_dir.mkdir(parents=True, exist_ok=True)
         saved = 0
         lost = 0
+        staged: dict[str, str] = {}
         for i, path in enumerate(order):
             try:
                 _f, body = http.fetch_text(md[path])
@@ -152,12 +185,15 @@ class GitHubMarkdownPattern:
                 lost += 1
                 log.warning("github_markdown.fetch_error", file=path, error=str(exc))
             else:
-                # Any case of the extension is listed; normalize matches a lowercase one.
-                base, _dot, ext = path.rpartition(".")
-                (raw_dir / f"{i:04d}-{raw_stem(base)}.{ext.lower()}").write_text(
-                    f"<!-- source: {md[path]} -->\n\n{body}\n", encoding="utf-8"
-                )
-                saved += 1
+                if (original := _copy_of(path, body, staged)) is not None:
+                    log.info("github_markdown.duplicate_page", file=path, of=original)
+                else:
+                    # Any case of the extension is listed; normalize matches a lowercase one.
+                    base, _dot, ext = path.rpartition(".")
+                    (raw_dir / f"{i:04d}-{raw_stem(base)}.{ext.lower()}").write_text(
+                        f"<!-- source: {md[path]} -->\n\n{body}\n", encoding="utf-8"
+                    )
+                    saved += 1
             http.polite_sleep()
 
         # A last segment alone collides: "docs" for every repo that keeps its manual

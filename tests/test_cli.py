@@ -63,6 +63,25 @@ def test_ingest_formats_output(monkeypatch, tmp_path):
     assert "1.1 MB" in r.output
 
 
+def test_ingest_reports_spreads_cut_into_single_pages(monkeypatch, tmp_path):
+    def fake_run_ingest(url, **kwargs):
+        return {
+            "pattern": "pdf_url",
+            "slug": "camera",
+            "kind": "pdf",
+            "clean": str(tmp_path / "camera.pdf"),
+            "images": 0,
+            "pages": 148,
+            "spreads_split": 73,
+            "bytes": 3_700_000,
+        }
+
+    monkeypatch.setattr(_cli_ingest, "run_ingest", fake_run_ingest)
+    r = runner.invoke(app, ["ingest", "https://vendor.example/camera.pdf"])
+    assert r.exit_code == 0
+    assert "spreads  : 73" in r.output
+
+
 def test_ingest_no_pattern_exits_2(monkeypatch):
     def fake_run_ingest(url, **kwargs):
         raise NoPatternError(url)
@@ -519,6 +538,32 @@ def test_status_flags_slugs_that_kept_raw(monkeypatch, tmp_path):
     without = next(line for line in r.output.splitlines() if line.startswith("noraw"))
     assert "raw" in with_raw
     assert "raw" not in without.replace("noraw", "")
+
+
+def test_status_columns_line_up_whatever_the_value_lengths(monkeypatch, tmp_path):
+    """A long slug, file or pattern name widens its own column instead of pushing the
+    rest of its row out of line — manifest rows and file-fact rows alike."""
+    monkeypatch.setattr(cfg, "INCOMING_DIR", str(tmp_path / "incoming"))
+    for slug, pattern, url in (
+        ("a", "apple_help", "https://a.example/x"),
+        ("a-very-long-slug-for-one-manual", "archive_download", "https://b.example/y"),
+    ):
+        d = tmp_path / "incoming" / slug
+        _write_manifest(d, pattern=pattern, deliverable=f"{slug}.html", source_url=url)
+        (d / f"{slug}.html").write_text("<h1>x</h1>", encoding="utf-8")
+    bare = tmp_path / "incoming" / "zz-no-manifest"
+    bare.mkdir()
+    (bare / "zz-no-manifest.html").write_text("<h1>x</h1>", encoding="utf-8")
+
+    r = runner.invoke(app, ["status"])
+
+    assert r.exit_code == 0
+    a, long, bare_row = r.output.splitlines()
+    assert a.index("2026-06-14") == long.index("2026-06-14")
+    assert a.index("a.example") == long.index("b.example")
+    assert bare_row.index("zz-no-manifest.html") == long.index(
+        "a-very-long-slug-for-one-manual.html"
+    )
 
 
 def test_audit_all_on_an_empty_corpus_is_not_success(monkeypatch):

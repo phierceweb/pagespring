@@ -506,3 +506,136 @@ def test_front_matter_gives_way_to_its_title_as_the_page_heading(tmp_path, suffi
     assert "title:" not in out and "description:" not in out
     assert "<!-- source: https://x/intro -->\n\n# Getting Started\n\nWelcome to the docs." in out
     assert "# Installing\n\nRun the installer." in out and "# Setup" not in out
+
+
+def _bodies_fetch(bodies):
+    tree = json.dumps({"tree": [{"path": p, "type": "blob"} for p in bodies]})
+
+    def fake(url, **kwargs):
+        if url.endswith("/repos/o/r"):
+            return url, '{"default_branch": "main"}'
+        if "/git/trees/" in url:
+            return url, tree
+        return url, bodies[url.rsplit("/main/", 1)[-1]]
+
+    return fake
+
+
+def _staged_text(tmp_path, monkeypatch, bodies):
+    monkeypatch.setattr(http, "fetch_text", _bodies_fetch(bodies))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    p = GitHubMarkdownPattern()
+    acq = p.acquire("https://github.com/o/r", tmp_path)
+    return acq, p.normalize(acq, tmp_path).read_text(encoding="utf-8")
+
+
+_STEPS = "\n".join(f"Setup step {i}: press the button." for i in range(40))
+
+
+def test_a_repeated_page_is_staged_once(tmp_path, monkeypatch):
+    """Byte-identical anywhere in scope; a near-copy is a page of its own and stays."""
+    draft = _STEPS.replace("step 7:", "step 7 (draft):")
+    acq, text = _staged_text(
+        tmp_path,
+        monkeypatch,
+        {
+            "docs/a/README.md": "# Creator\n\nbody",
+            "docs/b/README.md": "# Creator\n\nbody",
+            "docs/setup/README.md": "# Setup\n\n" + _STEPS,
+            "docs/setup/README_draft.md": "# Setup\n\n" + draft,
+            "docs/other/README.md": "# Other\n\n" + draft,
+        },
+    )
+
+    assert (acq.pages, acq.lost) == (4, 0)
+    assert text.count("# Creator") == 1
+    assert text.count("(draft)") == 2
+
+
+def test_pages_sharing_a_template_in_one_directory_are_all_staged(tmp_path, monkeypatch):
+    shared = "\n".join(f"Shared line {i}" for i in range(8))
+    acq, _text = _staged_text(
+        tmp_path,
+        monkeypatch,
+        {
+            "docs/x/one.md": shared + "\n" + "\n".join(f"one {i}" for i in range(3)),
+            "docs/x/two.md": shared + "\n" + "\n".join(f"two {i}" for i in range(3)),
+        },
+    )
+
+    assert acq.pages == 2
+
+
+def test_relative_image_refs_resolve_against_the_page_raw_url(tmp_path, monkeypatch):
+    _acq, text = _staged_text(
+        tmp_path,
+        monkeypatch,
+        {
+            "docs/ltc/README.md": (
+                "# LTC\n\n![input](tcinput.jpg)\n![badge](../badge.png)\n"
+                '<img src="wiring.png" width="300">\n'
+                "![abs](https://example.test/x.png) ![root](/r.png)\n\n"
+                "```md\n![example](in-code.png)\n```\n\n`![inline](span.png)`\n"
+            ),
+        },
+    )
+    raw = "https://raw.githubusercontent.com/o/r/main/docs"
+
+    assert f"![input]({raw}/ltc/tcinput.jpg)" in text
+    assert f"![badge]({raw}/badge.png)" in text
+    assert f'<img src="{raw}/ltc/wiring.png" width="300">' in text
+    assert "![abs](https://example.test/x.png)" in text and "![root](/r.png)" in text
+    assert "![example](in-code.png)" in text and "`![inline](span.png)`" in text
+
+
+def test_template_pages_with_their_own_titles_are_all_staged(tmp_path, monkeypatch):
+    """Per-model pages share a table and differ in their title and a row."""
+    table = "\n".join(f"| Feature {i} | yes |" for i in range(40))
+    acq, text = _staged_text(
+        tmp_path,
+        monkeypatch,
+        {
+            "docs/models/model11.md": "# Model 11\n\n" + table,
+            "docs/models/model12.md": "# Model 12\n\n"
+            + table.replace("Feature 3 | yes", "Feature 3 | no"),
+        },
+    )
+
+    assert acq.pages == 2
+    assert "# Model 12" in text
+
+
+def test_sibling_pages_under_one_title_are_all_staged(tmp_path, monkeypatch):
+    """Per-platform pages sharing a title and all but a line are pages of their own."""
+    steps = "\n".join(f"Step {i}: run the installer." for i in range(40))
+    acq, _text = _staged_text(
+        tmp_path,
+        monkeypatch,
+        {
+            "docs/setup/install-linux.md": "# Installation\n\n" + steps,
+            "docs/setup/install-mac.md": "# Installation\n\n"
+            + steps.replace("Step 3:", "Step 3 (brew):"),
+        },
+    )
+
+    assert acq.pages == 2
+
+
+def test_numbered_and_platform_pages_are_all_staged(tmp_path, monkeypatch):
+    """A name that extends another's (model1 → model10, install → install_windows) is no sign of a
+    copy."""
+    table = "\n".join(f"| Feature {i} | yes |" for i in range(40))
+    bodies = {
+        f"docs/models/model{n}.md": f"# Model {n}\n\n"
+        + table.replace("Feature 3 | yes", f"Feature 3 | {n}")
+        for n in (1, 2, 10, 11, 12)
+    }
+    steps = "\n".join(f"Step {i}: run the installer." for i in range(40))
+    bodies["docs/setup/install.md"] = "# Install\n\n" + steps
+    bodies["docs/setup/install_windows.md"] = "# Install\n\n" + steps.replace(
+        "Step 3:", "Step 3 (msi):"
+    )
+
+    acq, _text = _staged_text(tmp_path, monkeypatch, bodies)
+
+    assert acq.pages == 7

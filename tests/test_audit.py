@@ -179,7 +179,9 @@ def test_truncated_crawl_is_an_error(tmp_path):
     m["truncated"] = True
     manifest.write_manifest(d, m)
 
-    assert ("crawl_truncated", "error") in _checks(audit.audit_slug("fakeapp"))
+    finding = next(f for f in audit.audit_slug("fakeapp") if f["check"] == "crawl_truncated")
+    assert finding["level"] == "error"
+    assert finding["detail"].startswith("the crawl stopped short at 1500 pages")
 
 
 def test_untruncated_crawl_is_fine(tmp_path):

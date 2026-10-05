@@ -15,15 +15,13 @@ from pf_core.utils.slugify import slugify
 from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.patterns import _pdf, _sphinx
-from pagespring.patterns.archive_download import ArchiveDownloadPattern
+from pagespring.patterns._file_url import owned_by_file_pattern
 from pagespring.patterns.docs_probe import DocsProbePattern
 from pagespring.patterns.pdf_url import PdfUrlPattern
 
 log = get_logger(__name__)
 
 _LANG_RE = re.compile(r"^[a-z]{2}(?:-[a-z]{2,4})?$")
-# Suffixes only: api_spec's name tokens would also claim a docs page like openapi.html.
-_SPEC_SUFFIXES = (".json", ".yaml", ".yml")
 
 
 def _lang_version(path: str) -> tuple[str, str]:
@@ -47,21 +45,12 @@ def _subproject(path: str) -> tuple[str, str, str] | None:
     return rest[0], "en", "latest"
 
 
-def _names_a_file(url: str) -> bool:
-    path = urlparse(url).path.lower()
-    return (
-        path.endswith(_SPEC_SUFFIXES)
-        or ArchiveDownloadPattern().match(url)
-        or PdfUrlPattern().match(url)
-    )
-
-
 class ReadTheDocsPattern:
     name = "readthedocs"
 
     def match(self, url: str) -> bool:
         p = urlparse(url)
-        if "/_/downloads/" in p.path.lower() or _names_a_file(url):
+        if "/_/downloads/" in p.path.lower() or owned_by_file_pattern(url):
             return False
         return p.netloc.lower().endswith(".readthedocs.io")
 
@@ -100,6 +89,6 @@ class ReadTheDocsPattern:
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         if acq.kind == "pdf":
-            return next(acq.raw_dir.glob("*.pdf"))
+            return PdfUrlPattern().normalize(acq, workdir)
         # Sphinx-crawl fallback: same merge shape as docs_probe's html branch.
         return DocsProbePattern().normalize(acq, workdir)

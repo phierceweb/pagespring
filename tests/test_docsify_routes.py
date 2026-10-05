@@ -4,6 +4,7 @@ import pytest
 
 from pagespring.patterns._docsify_routes import (
     Site,
+    _bounded,
     asset_url,
     file_url,
     link_url,
@@ -86,3 +87,40 @@ def test_a_version_dot_is_not_a_file_extension():
 def test_read_site_takes_the_ext_option():
     assert read_site("https://ex.test/", "ext: '.markdown'").ext == ".markdown"
     assert read_site("https://ex.test/", "loadSidebar: true").ext == ".md"
+
+
+@pytest.mark.parametrize(
+    ("key", "bounded"),
+    [
+        ("/zh-cn/changelog", True),
+        ("/.*/_sidebar.md", True),
+        ("/(.*)/_sidebar.md", True),
+        (r"/v\d+/(.*)", True),
+        ("/(?:en|de)/(.*)", True),
+        ("/(en|de|fr|es)/(.*)", True),
+        ("a|b|c|d", True),
+        (r"\(a+\)+", True),
+        ("[)]+", True),
+        ("(a+)+$", False),
+        ("(a|aa)*", False),
+        ("(?:ab){2,}", False),
+        (".*.*.*", False),
+        ("(a|b)(c|d)(e|f)", False),
+        ("(?x)(a+) +", False),
+        ("(?x:(a|aa) *)", False),
+        ("(?i)/zh-cn/(.*)", False),
+    ],
+)
+def test_an_alias_key_is_bounded_unless_it_can_backtrack_without_end(key, bounded):
+    assert _bounded(key) is bounded
+
+
+def test_read_site_drops_an_alias_that_could_hang_the_ingest():
+    js = """window.$docsify = { alias: {
+      '(a+)+$': '/never',
+      '/(.*)/_sidebar.md': '/$1/_sidebar.md',
+    } }"""
+
+    site = read_site("https://ex.test/docs/", js)
+
+    assert site.alias == (("/(.*)/_sidebar.md", "/$1/_sidebar.md"),)

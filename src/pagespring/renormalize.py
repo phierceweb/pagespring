@@ -39,9 +39,10 @@ def run_renormalize(slug: str) -> RenormalizeResult:
     incoming_dir = slug_dir(slug)
     m = read_usable(incoming_dir)
     raw_src = incoming_dir / "raw"
-    if not raw_src.is_dir():
+    if not raw_src.is_dir() or not m.get("kept_raw", True):
         raise PreconditionError(
-            f"no raw/ kept for {incoming_dir}/ — re-ingest with --keep-raw to enable renormalize"
+            f"no complete raw/ kept for {incoming_dir}/ — re-ingest with --keep-raw "
+            "to enable renormalize"
         )
     pattern = pattern_by_name(m["pattern"])
     if pattern is None:
@@ -73,8 +74,9 @@ def run_renormalize(slug: str) -> RenormalizeResult:
         # untouched — the refactor-was-safe signal.
         if sha256 == m["sha256"] and deliverable_intact(incoming_dir, m):
             log.info("renormalize.unchanged", pattern=pattern.name, slug=slug, sha256=sha256)
-            if acq.pages != m["pages"] or acq.lost != (m.get("lost") or 0):
-                m["pages"], m["lost"] = acq.pages, acq.lost
+            derived = (acq.pages, acq.lost, acq.spreads_split)
+            if derived != (m["pages"], m.get("lost") or 0, m.get("spreads_split") or 0):
+                m["pages"], m["lost"], m["spreads_split"] = derived
                 manifest.write_manifest(incoming_dir, m)
             return {
                 "pattern": pattern.name,
@@ -102,7 +104,7 @@ def run_renormalize(slug: str) -> RenormalizeResult:
         m["images"] = 0  # refs are absolute again; re-run localize to re-point them
         m["localized_sha256"] = None  # sha256 above describes the file on disk again
         m.pop("image_pass_open", None)
-        m["pages"], m["lost"] = acq.pages, acq.lost
+        m["pages"], m["lost"], m["spreads_split"] = acq.pages, acq.lost, acq.spreads_split
         bundled = stage_bundled_images(clean, staged, incoming_dir)
         if bundled is not None:
             m["images"], m["localized_sha256"] = bundled, sha256

@@ -14,7 +14,7 @@ from pf_core.utils.url_parse import domain_of
 
 from pagespring import http
 from pagespring.base import AcquireResult
-from pagespring.patterns import _pdf
+from pagespring.patterns import _pdf, _pdf_spreads
 
 log = get_logger(__name__)
 
@@ -76,4 +76,8 @@ class PdfUrlPattern:
         )
 
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
-        return next(acq.raw_dir.glob("*.pdf"))
+        pdf = next(acq.raw_dir.glob("*.pdf"))
+        clean, acq.spreads_split = _pdf_spreads.single_pages(pdf, workdir / pdf.name)
+        if acq.pages is not None:  # a replay seeds pages from the manifest; count what ships
+            acq.pages = _pdf.page_count(clean)
+        return clean

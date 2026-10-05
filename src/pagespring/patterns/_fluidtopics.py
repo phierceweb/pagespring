@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urljoin, urlparse
+from urllib.robotparser import RobotFileParser
 
 from bs4 import BeautifulSoup
 from pf_core.exceptions import InvalidInputError
@@ -141,6 +142,20 @@ def _reader_url(base: str, pretty: str) -> str:
     return urljoin(base, pretty)
 
 
+def _robots_disallow(tenant: str, api_url: str) -> str | None:
+    """The host's robots.txt URL when it disallows ``api_url`` for pagespring's UA; None when it
+    allows it or cannot be read."""
+    robots_url = urljoin(tenant, "/robots.txt")
+    try:
+        text = http.fetch_text(robots_url)[1]
+    except Exception as exc:
+        log.debug("fluidtopics.robots_unreadable", robots=robots_url, error=str(exc))
+        return None
+    robots = RobotFileParser()
+    robots.parse(text.splitlines())
+    return None if robots.can_fetch(http.user_agent(), api_url) else robots_url
+
+
 def _topics(base: str, pub: _Publication) -> list[_Topic]:
     url = f"{base}api/khub/maps/{pub.map_id}/toc"
     tree = _json(url, "the publication's TOC")
@@ -201,6 +216,10 @@ def _identity(slug: str, pub: _Publication) -> tuple[str, str | None]:
 def acquire(base: str, workdir: Path, *, slug: str, title: str | None) -> AcquireResult:
     seed_url, seed = http.fetch_text(base)
     tenant = tenant_base(seed_url, seed)
+    http.polite_sleep()
+    maps_url = f"{tenant}api/khub/maps"
+    if (robots_url := _robots_disallow(tenant, maps_url)) is not None:
+        log.warning("fluidtopics.robots_disallow", robots=robots_url, path=urlparse(maps_url).path)
     http.polite_sleep()
     pub = _publication(tenant, seed_url)
     http.polite_sleep()

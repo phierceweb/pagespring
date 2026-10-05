@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import io
 import lzma
+import posixpath
 import tarfile
 import zipfile
 import zlib
@@ -58,6 +59,17 @@ def _check_budget(sizes: Iterator[int], archive_bytes: int, src: str) -> None:
             )
 
 
+def _check_names(names: list[str], src: str) -> None:
+    """Refuse a member whose path leaves the root, as tar's ``data`` filter does;
+    zipfile would extract it under a rewritten name instead."""
+    for name in names:
+        path = posixpath.normpath(name.replace("\\", "/").lstrip("/"))
+        if path == ".." or path.startswith("../"):
+            raise InvalidInputError(
+                f"{src}: damaged or unsafe archive: member {name!r} would land outside the root"
+            )
+
+
 def _open_tar(data: bytes, src: str) -> tarfile.TarFile:
     try:
         return tarfile.open(fileobj=io.BytesIO(data), mode="r:*")
@@ -72,6 +84,7 @@ def extract(data: bytes, dest: Path, src: str) -> None:
         if zipfile.is_zipfile(io.BytesIO(data)):
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 _check_budget((i.file_size for i in z.infolist()), len(data), src)
+                _check_names(z.namelist(), src)
                 z.extractall(dest)
             return
         with _open_tar(data, src) as tar:

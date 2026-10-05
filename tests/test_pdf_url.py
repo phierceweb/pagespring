@@ -1,6 +1,8 @@
 """pdf_url — match + mocked download (no network)."""
 
 from pagespring import http
+from pagespring.base import AcquireResult
+from pagespring.patterns import _pdf
 from pagespring.patterns.pdf_url import PdfUrlPattern
 
 
@@ -99,6 +101,7 @@ def test_acquire_downloads_and_slugs(tmp_path, monkeypatch):
     clean = p.normalize(acq, tmp_path)
     assert clean.suffix == ".pdf"
     assert clean.read_bytes().startswith(b"%PDF")
+    assert (acq.pages, acq.spreads_split) == (None, 0)
 
 
 def test_acquire_rejects_a_response_that_is_not_a_pdf(tmp_path, monkeypatch):
@@ -130,7 +133,7 @@ def test_acquire_accepts_a_pdf_with_leading_whitespace(tmp_path, monkeypatch):
     assert acq.kind == "pdf"
 
 
-def _pdf_bytes(pages: int) -> bytes:
+def _pdf_bytes(pages: int, *, widths: list[int] | None = None) -> bytes:
     """A minimal valid multi-page PDF, hand-built so the fixture does not depend
     on the same library the code under test uses."""
     objs = [
@@ -139,7 +142,7 @@ def _pdf_bytes(pages: int) -> bytes:
             " ".join(f"{3 + i} 0 R" for i in range(pages)), pages
         ),
     ]
-    objs += ["<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>"] * pages
+    objs += [f"<</Type/Page/Parent 2 0 R/MediaBox[0 0 {w} 792]>>" for w in widths or [612] * pages]
     out = bytearray(b"%PDF-1.4\n")
     offsets = []
     for i, obj in enumerate(objs, 1):
@@ -175,6 +178,48 @@ def test_unreadable_pdf_records_no_page_count(tmp_path, monkeypatch):
     )
     acq = PdfUrlPattern().acquire("https://vendor.example/manual.pdf", tmp_path)
     assert acq.pages is None
+
+
+def _acquire(tmp_path, monkeypatch, body: bytes) -> tuple[PdfUrlPattern, AcquireResult]:
+    monkeypatch.setattr(
+        http,
+        "fetch_bytes_meta",
+        lambda url, **kw: (url, body, {"etag": None, "last_modified": None}),
+    )
+    p = PdfUrlPattern()
+    return p, p.acquire("https://vendor.example/manual.pdf", tmp_path)
+
+
+def test_normalize_delivers_a_spread_pdf_one_printed_page_per_page(tmp_path, monkeypatch):
+    p, acq = _acquire(tmp_path, monkeypatch, _pdf_bytes(4, widths=[612, 1224, 1224, 612]))
+
+    clean = p.normalize(acq, tmp_path)
+
+    assert clean.parent != acq.raw_dir
+    assert _pdf.page_count(clean) == 6
+    assert (acq.pages, acq.spreads_split) == (6, 2)
+    assert _pdf.page_count(next(acq.raw_dir.glob("*.pdf"))) == 4, "the downloaded file is kept"
+
+
+def test_normalize_passes_a_pdf_without_spreads_through(tmp_path, monkeypatch):
+    p, acq = _acquire(tmp_path, monkeypatch, _pdf_bytes(3))
+
+    clean = p.normalize(acq, tmp_path)
+
+    assert clean == next(acq.raw_dir.glob("*.pdf"))
+    assert (acq.pages, acq.spreads_split) == (3, 0)
+
+
+def test_normalize_counts_the_pages_of_the_file_it_returns(tmp_path):
+    """A renormalize replay seeds pages and spreads from the manifest; the file returned decides."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "manual.pdf").write_bytes(_pdf_bytes(3))
+    acq = AcquireResult(raw_dir=raw, kind="pdf", slug="manual", pages=6, spreads_split=2)
+
+    PdfUrlPattern().normalize(acq, tmp_path)
+
+    assert (acq.pages, acq.spreads_split) == (3, 0)
 
 
 def test_slug_from_a_download_path_uses_the_host():

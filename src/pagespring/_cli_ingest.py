@@ -120,6 +120,8 @@ def ingest(
         return
     if result.get("pages") is not None:
         typer.echo(f"pages    : {result['pages']}")
+    if result.get("spreads_split"):
+        typer.echo(f"spreads  : {result['spreads_split']} cut into single pages")
     typer.echo(f"size     : {human_size(result['bytes'])}")
     if result.get("images"):
         downloaded = result.get("images_downloaded", 0)
