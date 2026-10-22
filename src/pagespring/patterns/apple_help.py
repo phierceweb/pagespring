@@ -10,9 +10,9 @@ from collections import deque
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-from pf_core.exceptions import InvalidInputError
-from pf_core.log import get_logger
-from pf_core.utils.io import atomic_write_json
+from pw_foundation.exceptions import InvalidInputError
+from pw_foundation.log import get_logger
+from pw_foundation.utils.io import atomic_write_json
 
 from pagespring import http
 from pagespring.base import AcquireResult

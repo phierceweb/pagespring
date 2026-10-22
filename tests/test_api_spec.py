@@ -57,7 +57,7 @@ def test_load_raw_local_file(tmp_path):
 
 
 def test_load_raw_missing_file_is_clean_error():
-    from pf_core.exceptions import InvalidInputError
+    from pw_foundation.exceptions import InvalidInputError
 
     with pytest.raises(InvalidInputError):
         mod._load_raw("./does-not-exist.json")
@@ -200,7 +200,7 @@ def test_postman_render():
     assert _postman_render.count_requests(POSTMAN) == 1
 
 
-from pf_core.exceptions import InvalidInputError  # noqa: E402
+from pw_foundation.exceptions import InvalidInputError  # noqa: E402
 
 
 def _fake_fetch(payload: dict):

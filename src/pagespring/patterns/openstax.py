@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
-from pf_core.log import get_logger
+from pw_foundation.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult

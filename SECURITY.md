@@ -25,11 +25,11 @@ needs no credentials — there are no API keys or secrets to handle. The most
 security-relevant surfaces are:
 
 - **`pagespring.http`** — the fetch layer (stdlib `urllib`, plain GETs) over
-  `pf_core.fetch`. URLs are SSRF-guarded on the initial request and every
+  `pw_core.fetch`. URLs are SSRF-guarded on the initial request and every
   redirect hop: private, loopback, link-local, and unresolvable hosts are
   refused before a request goes out (`URL_FETCH_ALLOW_PRIVATE=1` opts out).
   TLS certificates are verified on every fetch, unconditionally: pagespring
-  passes the setting explicitly, so pf-core's process-wide `PF_VERIFY_TLS`
+  passes the setting explicitly, so pw-core's process-wide `PW_VERIFY_TLS`
   (legacy `URL_CHECK_VERIFY_TLS`) cannot turn verification off here. Every fetch
   also carries a size cap bounding the decoded body as well as the wire read, so
   an oversized or compressed response fails the acquire instead of exhausting

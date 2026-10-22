@@ -1,4 +1,4 @@
-"""http: only what the shim adds over ``pf_core.fetch``, whose own tests pin retries, redirects and
+"""http: only what the shim adds over ``pw_core.fetch``, whose own tests pin retries, redirects and
 charsets; requests are intercepted at ``Fetcher._open`` (no network)."""
 
 from __future__ import annotations
@@ -10,16 +10,16 @@ import urllib.request
 from email.message import Message
 
 import pytest
-from pf_core.exceptions import InvalidInputError
-from pf_core.fetch import Fetcher
-from pf_core.utils.http_tls import verify_tls
+from pw_core.fetch import Fetcher
+from pw_core.utils.http_tls import verify_tls
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
 
 URL = "https://docs.example.com/manual"
 _ETAG = '"abc123"'
 _LAST_MODIFIED = "Sat, 18 Jul 2026 10:00:00 GMT"
-_TLS_OFF_ENV_VARS = ["PF_VERIFY_TLS", "URL_CHECK_VERIFY_TLS"]
+_TLS_OFF_ENV_VARS = ["PW_VERIFY_TLS", "PF_VERIFY_TLS", "URL_CHECK_VERIFY_TLS"]
 
 
 @pytest.fixture(autouse=True)
@@ -29,6 +29,7 @@ def _hermetic_env(monkeypatch):
     monkeypatch.setenv("URL_FETCH_ALLOW_PRIVATE", "1")
     for var in (
         "PAGESPRING_UA",
+        "PW_FETCH_UA",
         "PF_FETCH_UA",
         "PAGESPRING_MAX_TEXT_BYTES",
         "PAGESPRING_MAX_DOWNLOAD_BYTES",
@@ -117,7 +118,7 @@ class TestUserAgent:
     def test_framework_ua_env_does_not_win(self, seam, monkeypatch):
         """PAGESPRING_UA is the only knob: the shim passes its UA explicitly, which
         outranks the fetch core's own env var."""
-        monkeypatch.setenv("PF_FETCH_UA", "pf-core-agent/9.9")
+        monkeypatch.setenv("PW_FETCH_UA", "pw-core-agent/9.9")
         http.fetch_text(URL)
         assert seam.headers_sent()["user-agent"].startswith("pagespring/")
 
@@ -178,6 +179,26 @@ class TestDelegation:
     def test_not_modified_false_without_validators_and_no_request(self, seam):
         assert http.not_modified(URL, etag=None, last_modified=None) is False
         assert seam.calls == []  # nothing to probe with — no network
+
+
+@pytest.mark.real_fetch_body
+class TestFetchBody:
+    def test_keeps_bytes_charset_and_validators(self, seam):
+        raw = "caf\u00e9".encode("latin-1")
+        seam.queue.append(
+            _Resp(raw, {"Content-Type": "text/html; charset=ISO-8859-1", "ETag": '"e"'})
+        )
+        body = http.fetch_body(URL)
+        assert (body.data, body.charset) == (raw, "iso-8859-1")
+        assert body.validators == {"etag": '"e"', "last_modified": None}
+        assert body.text() == "caf\u00e9"
+
+    def test_decodes_as_fetch_text_with_its_budget_and_timeout(self, seam):
+        raw = b"\xe2\x9c\x93 ok \xff"
+        seam.queue.extend([_Resp(raw), _Resp(raw)])
+        assert http.fetch_body(URL).text() == http.fetch_text(URL)[1]
+        assert seam.timeouts() == [30, 30]
+        assert [f._max_bytes for f in seam.fetchers] == [http._text_max_bytes()] * 2
 
 
 class TestSsrfGuard:
@@ -241,7 +262,7 @@ class TestPoliteSleep:
 
 
 class TestFetchSizeCaps:
-    """Every helper caps the fetcher it builds (pf-core's default is unlimited); asserted through
+    """Every helper caps the fetcher it builds (pw-core's default is unlimited); asserted through
     the public helpers, since a cap one never passes is the bug."""
 
     def test_every_helper_caps_the_fetcher_it_builds(self, seam):

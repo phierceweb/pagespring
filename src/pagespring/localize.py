@@ -6,8 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import NamedTuple, TypedDict
 
-from pf_core.exceptions import PreconditionError
-from pf_core.log import get_logger
+from pw_foundation.exceptions import PreconditionError
+from pw_foundation.log import get_logger
 
 from pagespring import manifest
 from pagespring._integrity import open_for_image_pass, read_usable

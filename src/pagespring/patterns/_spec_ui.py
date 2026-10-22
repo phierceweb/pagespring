@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.patterns.api_spec import is_openapi

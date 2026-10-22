@@ -8,7 +8,7 @@ import sys
 import time
 
 import pytest
-from pf_core.exceptions import PreconditionError
+from pw_foundation.exceptions import PreconditionError
 
 from pagespring import (
     _image_cache,

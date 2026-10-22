@@ -11,9 +11,9 @@ from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
 from bs4 import BeautifulSoup, Tag
-from pf_core.exceptions import InvalidInputError
-from pf_core.log import get_logger
-from pf_core.utils.slugify import slugify
+from pw_foundation.exceptions import InvalidInputError
+from pw_foundation.log import get_logger
+from pw_foundation.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult, SourceKind

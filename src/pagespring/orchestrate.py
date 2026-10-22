@@ -12,9 +12,9 @@ from tempfile import mkdtemp
 from typing import TypedDict
 from urllib.parse import urlsplit
 
-from pf_core.exceptions import ClientError, InvalidInputError
-from pf_core.log import get_logger
-from pf_core.utils.dates import now_iso
+from pw_foundation.exceptions import ClientError, InvalidInputError
+from pw_foundation.log import get_logger
+from pw_foundation.utils.dates import now_iso
 
 from pagespring import images as images_mod
 from pagespring import manifest

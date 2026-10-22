@@ -4,7 +4,7 @@ topped up from the component's own sitemap (mocked fetch)."""
 from urllib.error import HTTPError
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.patterns import _antora

@@ -2,7 +2,7 @@
 (mocked run_ingest and patterns; no network)."""
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import batch, http, orchestrate
 from pagespring.base import AcquireResult

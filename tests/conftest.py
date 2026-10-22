@@ -6,10 +6,11 @@ import os
 import shutil
 from pathlib import Path
 
-import pf_core.fetch.images as core_images
+import pw_core.fetch.images as core_images
 import pytest
+from pw_core.fetch import Body
 
-from pagespring import _image_cache, _staging, images, manifest, orchestrate
+from pagespring import _image_cache, _staging, http, images, manifest, orchestrate
 from pagespring.config import cfg
 from pagespring.patterns import apple_help
 
@@ -41,6 +42,20 @@ def _guarded(fn, verb, pos, kw=None):
         return fn(*args, **kwargs)
 
     return wrapper
+
+
+@pytest.fixture(autouse=True)
+def _entry_fetch_through_fetch_text(request, monkeypatch):
+    """Detection reads its entry page with ``http.fetch_body``; answer it from whatever
+    ``http.fetch_text`` is at call time, so a test's fake of that serves both."""
+    if request.node.get_closest_marker("real_fetch_body"):
+        return
+
+    def fetch_body(url, **kwargs):
+        final, text = http.fetch_text(url, **kwargs)
+        return Body(final, text.encode("utf-8"), "utf-8", {"etag": None, "last_modified": None})
+
+    monkeypatch.setattr(http, "fetch_body", fetch_body)
 
 
 @pytest.fixture(autouse=True, scope="session")

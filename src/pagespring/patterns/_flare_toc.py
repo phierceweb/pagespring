@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 _IDENT_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")

@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 import conftest
-import pf_core.fetch.images as core_images
+import pw_core.fetch.images as core_images
 import pytest
 
 import pagespring
@@ -63,7 +63,7 @@ def test_overwriting_inside_the_corpus_is_refused(stand_in_corpus, tmp_path):
 
 
 def test_atomic_writes_inside_the_corpus_are_refused(stand_in_corpus):
-    """pf-core's atomic writers go through ``os.replace``, which the Path and shutil guards miss."""
+    """pw-core's atomic writers go through ``os.replace``, which the Path and shutil guards miss."""
     slug = stand_in_corpus / "precious"
 
     with pytest.raises(AssertionError, match="real corpus"):

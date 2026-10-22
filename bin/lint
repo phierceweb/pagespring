@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Lint gate (same as CI): ruff check + ruff format check over src, tests and the
 # extension-less python in bin/ (which pre-commit types by shebang, so a file left
-# out here fails at commit time), mypy strict over src/, pf-core's structural build
+# out here fails at commit time), mypy strict over src/, pw-foundation's structural build
 # gate (file-size), and the framework-first gate.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,5 +10,5 @@ cd "$ROOT"
 .venv/bin/python -m ruff check src tests bin/check-framework bin/check-release
 .venv/bin/python -m ruff format --check src tests bin/check-framework bin/check-release
 .venv/bin/python -m mypy src
-.venv/bin/python -m pf_core.guards --root src/pagespring
+.venv/bin/python -m pw_foundation.guards --root src/pagespring
 .venv/bin/python bin/check-framework

@@ -107,7 +107,7 @@ def test_acquire_downloads_and_slugs(tmp_path, monkeypatch):
 def test_acquire_rejects_a_response_that_is_not_a_pdf(tmp_path, monkeypatch):
     """A PDF link can redirect to an HTML page answering 200, and audit never checks PDF content."""
     import pytest
-    from pf_core.exceptions import InvalidInputError
+    from pw_foundation.exceptions import InvalidInputError
 
     monkeypatch.setattr(
         http,

@@ -7,8 +7,8 @@ from pathlib import Path
 from tempfile import mkdtemp
 from typing import TypedDict, cast
 
-from pf_core.exceptions import PreconditionError
-from pf_core.log import get_logger
+from pw_foundation.exceptions import PreconditionError
+from pw_foundation.log import get_logger
 
 from pagespring import manifest
 from pagespring._integrity import deliverable_intact, read_usable

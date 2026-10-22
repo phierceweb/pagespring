@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from urllib.error import HTTPError
 from urllib.parse import urlparse
 
-from pf_core.log import get_logger
+from pw_foundation.log import get_logger
 
 from pagespring import http
 from pagespring.patterns._docsify_routes import (

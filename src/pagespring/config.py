@@ -1,13 +1,13 @@
-"""pagespring configuration — a pf_core.config.AppConfig subclass.
+"""pagespring configuration — a pw_core.config.AppConfig subclass.
 
 All settings are overridable via environment variables / .env.
 """
 
 from pathlib import Path
 
-from pf_core.config import AppConfig
-from pf_core.log import get_logger
-from pf_core.utils.env import resolve_str
+from pw_core.config import AppConfig
+from pw_foundation.log import get_logger
+from pw_foundation.utils.env import resolve_str
 
 # src/pagespring/config.py → parents[2] is the project root (editable install).
 _project_root = Path(__file__).resolve().parents[2]

@@ -7,10 +7,11 @@ import re
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from pf_core.exceptions import InvalidInputError
-from pf_core.log import get_logger
-from pf_core.utils.slugify import slugify
-from pf_core.utils.url_parse import domain_of
+from pw_core.fetch import Body
+from pw_core.utils.url_parse import domain_of
+from pw_foundation.exceptions import InvalidInputError
+from pw_foundation.log import get_logger
+from pw_foundation.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult
@@ -50,11 +51,16 @@ class PdfUrlPattern:
         path = urlparse(url).path.lower().rstrip("/")
         return path.endswith(".pdf") or _RTD_DOWNLOAD_RE.search(path) is not None
 
-    def acquire(self, url: str, workdir: Path) -> AcquireResult:
+    def acquire(self, url: str, workdir: Path, *, body: Body | None = None) -> AcquireResult:
+        """``body``, when given, is ``url``'s response already fetched (``docs_probe``'s probe)."""
         raw_dir = workdir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
         slug = _slug_from_url(url)
-        _final, data, meta = http.fetch_bytes_meta(url)
+        if body is None:
+            _final, data, meta = http.fetch_bytes_meta(url)
+        else:
+            http.check_download_budget(url, body.data)
+            data, meta = body.data, body.validators
         # A "PDF" URL that redirects to an HTML page still answers 200, and audit never
         # content-checks a kind:pdf deliverable, so check the magic bytes here.
         if _PDF_MAGIC not in data[:_MAGIC_WINDOW]:

@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from pf_core.exceptions import ClientError
+from pw_foundation.exceptions import ClientError
 from test_aura import shell
 
 from pagespring import http

@@ -1,12 +1,12 @@
-"""pagespring CLI via pf_core.cli; registering the commands here fixes their ``--help`` order."""
+"""pagespring CLI via pw_core.cli; registering the commands here fixes their ``--help`` order."""
 
 import signal
 import urllib.error
 from types import FrameType
 
 import typer
-from pf_core.cli import create_cli, run_cli
-from pf_core.exceptions import ClientError, InvalidInputError
+from pw_core.cli import create_cli, run_cli
+from pw_foundation.exceptions import ClientError, InvalidInputError
 
 from pagespring._cli_corpus import audit_cmd, refresh, status
 from pagespring._cli_ingest import ingest, localize, renormalize

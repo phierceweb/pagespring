@@ -106,7 +106,7 @@ def test_read_manifest_invalid_utf8_returns_none(tmp_path):
 
 def test_a_failed_write_leaves_the_previous_manifest_intact(tmp_path, monkeypatch):
     """A bare ``write_text`` truncates first; one interrupted run would leave the slug unrecorded."""
-    import pf_core.utils.io as io_mod
+    import pw_foundation.utils.io as io_mod
 
     original = _sample()
     manifest.write_manifest(tmp_path, original)

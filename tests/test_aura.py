@@ -6,7 +6,7 @@ import json
 from urllib.parse import quote
 
 import pytest
-from pf_core.exceptions import ClientError, InvalidInputError
+from pw_foundation.exceptions import ClientError, InvalidInputError
 
 from pagespring import http
 from pagespring.patterns import _aura

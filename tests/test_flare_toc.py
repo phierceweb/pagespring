@@ -1,7 +1,7 @@
 """_flare_toc: Flare's TOC and chunk files read as data, and the tree walked in reading order."""
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring.patterns import _flare_toc
 

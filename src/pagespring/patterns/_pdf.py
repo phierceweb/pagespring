@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pypdfium2 as pdfium
-from pf_core.log import get_logger
+from pw_foundation.log import get_logger
 
 log = get_logger(__name__)
 

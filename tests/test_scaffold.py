@@ -1,4 +1,4 @@
-"""Smoke tests: pf-core wiring imports, the CLI app and AppConfig subclass construct, and the
+"""Smoke tests: pw-core wiring imports, the CLI app and AppConfig subclass construct, and the
 release strings agree."""
 
 import tomllib

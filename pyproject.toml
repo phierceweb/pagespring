@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pagespring"
-version = "0.15.0"
+version = "0.16.0"
 description = "Acquire and normalize online documentation into clean, convertible source files — the acquisition front-end to pagespeak."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -22,7 +22,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # Lean by design: BeautifulSoup parses, pf-core[cli] gives the Typer
+    # Lean by design: BeautifulSoup parses, pw-core[cli] gives the Typer
     # scaffolding + AppConfig + structured logging + the stdlib-urllib fetch
     # core. No ML stack.
     "beautifulsoup4>=4.12",
@@ -31,7 +31,8 @@ dependencies = [
     # Page counts for PDF deliverables. pdfium decrypts internally, so encrypted
     # manuals count without a separate crypto dependency.
     "pypdfium2>=4.30",
-    "pf-core[cli]~=0.26.0",
+    "pw-foundation~=1.0",
+    "pw-core[cli]~=0.27.0",
 ]
 
 [project.optional-dependencies]
@@ -78,3 +79,6 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "real_fetch_body: the test exercises or fakes http.fetch_body itself; no conftest adapter",
+]

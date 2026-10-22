@@ -1,7 +1,7 @@
 """_flare: MadCap Flare HTML5 help, read from its TOC data and topic pages (mocked fetch)."""
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.config import cfg

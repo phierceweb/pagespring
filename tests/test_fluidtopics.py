@@ -4,7 +4,7 @@ import base64
 import json
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 from structlog.testing import capture_logs
 
 from pagespring import http

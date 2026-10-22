@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
-from pf_core.log import get_logger
-from pf_core.pipeline.run_record import file_sha256
+from pw_core.pipeline.run_record import file_sha256
+from pw_foundation.log import get_logger
 
 log = get_logger(__name__)
 

@@ -1,7 +1,7 @@
 """_clickhelp: told by its asset paths, with ``toc_nav.js`` in place of a crawl (mocked fetch)."""
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.patterns import _clickhelp

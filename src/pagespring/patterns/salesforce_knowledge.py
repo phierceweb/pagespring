@@ -11,9 +11,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
-from pf_core.log import get_logger
-from pf_core.utils.slugify import slugify
-from pf_core.utils.url_parse import domain_of
+from pw_core.utils.url_parse import domain_of
+from pw_foundation.log import get_logger
+from pw_foundation.utils.slugify import slugify
 
 from pagespring import http
 from pagespring.base import AcquireResult

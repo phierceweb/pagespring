@@ -1,17 +1,21 @@
-"""pagespring's policy over ``pf_core.fetch``: User-Agent, ``timeout=``, crawl delay, size caps. Raw
+"""pagespring's policy over ``pw_core.fetch``: User-Agent, ``timeout=``, crawl delay, size caps. Raw
 urllib errors propagate, TLS is always verified, and private addresses are refused."""
 
 from __future__ import annotations
 
 import time
 
-from pf_core.fetch import Fetcher, Validators
-from pf_core.utils.env import resolve_int, resolve_str
+from pw_core.fetch import Body, Fetcher, Validators
+from pw_foundation.exceptions import ClientError
+from pw_foundation.utils.env import resolve_int, resolve_str
 
 from pagespring import __version__
 
 __all__ = [
+    "Body",
     "Validators",
+    "check_download_budget",
+    "fetch_body",
     "fetch_bytes",
     "fetch_bytes_meta",
     "fetch_text",
@@ -29,7 +33,7 @@ def user_agent() -> str:
     return resolve_str(None, _UA_ENV_VAR, default=_UA_DEFAULT) or _UA_DEFAULT
 
 
-# pf-core's fetch default is unlimited. Two budgets because an HTML page and a
+# pw-core's fetch default is unlimited. Two budgets because an HTML page and a
 # vendor PDF differ by an order of magnitude; one cap is useless or too tight.
 _TEXT_MAX_BYTES_DEFAULT = 25 * 1024 * 1024
 _DOWNLOAD_MAX_BYTES_DEFAULT = 250 * 1024 * 1024
@@ -51,7 +55,7 @@ def _download_max_bytes() -> int:
 
 def _fetcher(retries: int = 2, *, max_bytes: int | None = None) -> Fetcher:
     """A fetch core with pagespring's UA, built per call so ``PAGESPRING_UA`` can change; TLS is
-    explicit (pf-core's switch is process-wide), and the cap bounds the inflated body."""
+    explicit (pw-core's switch is process-wide), and the cap bounds the inflated body."""
     return Fetcher(user_agent=user_agent(), retries=retries, verify_tls=True, max_bytes=max_bytes)
 
 
@@ -63,6 +67,20 @@ def fetch_text(
     return _fetcher(retries, max_bytes=_text_max_bytes()).get_text(
         url, timeout_s=timeout, encoding=encoding
     )
+
+
+def fetch_body(url: str, *, timeout: float = 30, retries: int = 2) -> Body:
+    """``fetch_text``'s request, keeping the bytes, their charset and the validators;
+    ``Body.text()`` decodes exactly as ``fetch_text`` does."""
+    return _fetcher(retries, max_bytes=_text_max_bytes()).get_body(url, timeout_s=timeout)
+
+
+def check_download_budget(url: str, data: bytes) -> None:
+    """Refuse a download read under the text budget that the download budget would have refused,
+    with the fetch core's own error."""
+    cap = _download_max_bytes()
+    if len(data) > cap:
+        raise ClientError("response exceeded max_bytes", context={"url": url, "max_bytes": cap})
 
 
 def fetch_bytes(url: str, *, timeout: float = 180, retries: int = 2) -> tuple[str, bytes]:

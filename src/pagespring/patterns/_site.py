@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from pf_core.utils.slugify import slugify
+from pw_foundation.utils.slugify import slugify
 
 _GENERIC_LABELS = {"www", "docs", "manual", "manuals", "help", "support", "wiki"}
 # A file extension, not merely any dot — "v2.1" and "example.test" are not files.

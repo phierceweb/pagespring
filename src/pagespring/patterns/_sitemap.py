@@ -12,9 +12,9 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from pf_core.exceptions import InvalidInputError
-from pf_core.log import get_logger
-from pf_core.utils.hashing import content_hash
+from pw_foundation.exceptions import InvalidInputError
+from pw_foundation.log import get_logger
+from pw_foundation.utils.hashing import content_hash
 
 from pagespring import http
 from pagespring.config import cfg

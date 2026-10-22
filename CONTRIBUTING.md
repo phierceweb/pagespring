@@ -56,7 +56,7 @@ The full set lives in [`.ai/rules/`](.ai/rules/). The essentials:
 
 - Modern Python 3.12+ syntax — `X | None`, lowercase `dict`/`list`/`tuple`.
 - Type hints on every public signature; Google-style docstrings on public APIs.
-- Structured logging via `pf_core.log.get_logger(__name__)` — never bare
+- Structured logging via `pw_foundation.log.get_logger(__name__)` — never bare
   `print` outside CLI entry points.
 - Polite fetching: identifying UA, `polite_sleep()` between crawl requests,
   crawl caps with a `log.warning` when they truncate.

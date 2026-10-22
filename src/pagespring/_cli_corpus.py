@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import typer
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import manifest
 from pagespring._cli_ingest import human_size

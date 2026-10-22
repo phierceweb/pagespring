@@ -9,8 +9,8 @@ from pathlib import Path
 from types import ModuleType
 from urllib.parse import urlparse
 
-from pf_core.exceptions import InvalidInputError
-from pf_core.log import get_logger
+from pw_foundation.exceptions import InvalidInputError
+from pw_foundation.log import get_logger
 
 from pagespring import http
 from pagespring.base import IMAGES_DIR, AcquireResult
@@ -90,11 +90,14 @@ class DocsProbePattern:
             acq.single_document = True
             return acq
 
-        # Every hand-off below fetches first, straight after the probe's last request.
-        http.polite_sleep()
+        # Every hand-off below fetches first, straight after the probe's last request, except a
+        # sniffed PDF, whose body the probe already holds.
+        body = found.body if found.route == "pdf" and found.via == "magic_bytes" else None
+        if body is None:
+            http.polite_sleep()
         if found.route == "pdf":
             try:
-                acq = PdfUrlPattern().acquire(found.base, workdir)
+                acq = PdfUrlPattern().acquire(found.base, workdir, body=body)
             except InvalidInputError:
                 if found.oversize is None:
                     raise

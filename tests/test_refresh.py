@@ -4,7 +4,7 @@ sources first probed with their validators (mocked patterns)."""
 import json
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import manifest, orchestrate, refresh
 from pagespring.base import AcquireResult

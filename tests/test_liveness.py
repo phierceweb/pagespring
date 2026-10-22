@@ -1,7 +1,7 @@
 """liveness: a crawl can fetch successfully while saving nothing, which only progress can show."""
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring.liveness import ProgressWatchdog
 

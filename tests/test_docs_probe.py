@@ -1,7 +1,8 @@
 """docs_probe — generator sniffing + strategy dispatch, all http mocked."""
 
 import pytest
-from pf_core.exceptions import ClientError, InvalidInputError
+from pw_core.fetch import Body
+from pw_foundation.exceptions import ClientError, InvalidInputError
 
 from pagespring import http
 from pagespring.base import AcquireResult
@@ -162,11 +163,6 @@ def test_normalize_html_escapes_title(tmp_path):
 def test_a_url_that_serves_a_pdf_is_handed_to_pdf_url(tmp_path, monkeypatch):
     """pdf_url.match declines an extensionless PDF, so this catch-all must route it by content."""
     monkeypatch.setattr(http, "fetch_text", lambda u, **k: (u, "%PDF-1.7 body"))
-    monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda u, **k: (u, b"%PDF-1.7 body", {"etag": None, "last_modified": None}),
-    )
 
     probe = DocsProbePattern()
     acq = probe.acquire("https://helpcenter.vendor.example/v5/pdf/widgetStudio5/en", tmp_path)
@@ -179,6 +175,45 @@ def test_a_url_that_serves_a_pdf_is_handed_to_pdf_url(tmp_path, monkeypatch):
     out = probe.normalize(acq, tmp_path)
     assert out.suffix == ".pdf"
     assert out.read_bytes().startswith(b"%PDF-")
+
+
+@pytest.mark.real_fetch_body
+def test_a_pdf_entry_is_fetched_once(tmp_path, monkeypatch):
+    """Detection already holds the PDF; pdf_url must not download it again."""
+    url = "https://helpcenter.vendor.example/v5/pdf/widgetStudio5/en"
+    pdf = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\nbody"  # binary marker line: a text round-trip changes it
+    calls = []
+
+    def fetch_body(u, **kwargs):
+        calls.append(u)
+        return Body(u, pdf, None, {"etag": '"v1"', "last_modified": None})
+
+    monkeypatch.setattr(http, "fetch_body", fetch_body)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: pytest.fail("nothing left to fetch"))
+    monkeypatch.setattr(
+        http, "fetch_bytes_meta", lambda *a, **k: pytest.fail("the PDF was downloaded twice")
+    )
+
+    acq = DocsProbePattern().acquire(url, tmp_path)
+
+    assert calls == [url]
+    assert next(acq.raw_dir.glob("*.pdf")).read_bytes() == pdf
+    assert (acq.etag, acq.last_modified) == ('"v1"', None)
+
+
+@pytest.mark.real_fetch_body
+def test_a_sniffed_pdf_over_the_download_budget_is_refused(tmp_path, monkeypatch):
+    """The probe read it under the text budget; the download budget still applies to a PDF."""
+    url = "https://helpcenter.vendor.example/v5/pdf/widgetStudio5/en"
+    pdf = b"%PDF-1.7\n" + b"0" * 5000
+    monkeypatch.setenv("PAGESPRING_MAX_DOWNLOAD_BYTES", "1000")
+    monkeypatch.setattr(
+        http, "fetch_body", lambda u, **k: Body(u, pdf, None, {"etag": None, "last_modified": None})
+    )
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    with pytest.raises(ClientError, match="exceeded max_bytes"):
+        DocsProbePattern().acquire(url, tmp_path)
 
 
 def test_soft_404_search_index_is_not_mistaken_for_mkdocs(tmp_path, monkeypatch):
@@ -740,7 +775,6 @@ _OVERSIZE = ClientError("response exceeded max_bytes", context={"max_bytes": 1})
     ("home", "tell", "target"),
     [
         (_OVERSIZE, None, (docs_probe.PdfUrlPattern, "acquire")),
-        ("%PDF-1.7 binary", None, (docs_probe.PdfUrlPattern, "acquire")),
         (_PLAIN_HOME, "_clickhelp.is_clickhelp", ("_clickhelp", "acquire")),
         (_PLAIN_HOME, "_paligo.is_paligo", ("_paligo", "acquire")),
         (_PLAIN_HOME, "_st4.is_st4", ("_st4", "acquire")),
@@ -1042,6 +1076,7 @@ def test_a_reference_ui_behind_a_meta_refresh_resolves_its_spec_against_the_ui_p
     ],
     ids=["refresh-shell", "served-at-the-seed"],
 )
+@pytest.mark.real_fetch_body
 def test_a_pdf_keeps_its_validators_only_when_the_seed_serves_it(
     tmp_path, monkeypatch, seed, validators
 ):
@@ -1049,19 +1084,16 @@ def test_a_pdf_keeps_its_validators_only_when_the_seed_serves_it(
     shell = (
         '<html><head><meta http-equiv="refresh" content="0; url=/files/manual.pdf"></head></html>'
     )
+    served = {"etag": '"v3"', "last_modified": "Wed, 01 Jan 2025"}
 
-    def fetch(url, **kwargs):
-        return url, shell if url == "https://vendor.example/manual" else "%PDF-1.7 body"
+    def fetch_body(url, **kwargs):
+        if url == "https://vendor.example/manual":
+            return Body(url, shell.encode(), "utf-8", {"etag": None, "last_modified": None})
+        return Body(url, b"%PDF-1.7 body", None, served)
 
-    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "fetch_body", fetch_body)
     monkeypatch.setattr(
-        http,
-        "fetch_bytes_meta",
-        lambda u, **k: (
-            u,
-            b"%PDF-1.7 body",
-            {"etag": '"v3"', "last_modified": "Wed, 01 Jan 2025"},
-        ),
+        http, "fetch_bytes_meta", lambda *a, **k: pytest.fail("the PDF was downloaded twice")
     )
 
     acq = DocsProbePattern().acquire(seed, tmp_path)

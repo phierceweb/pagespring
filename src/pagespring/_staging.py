@@ -7,9 +7,9 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
-from pf_core.exceptions import InvalidInputError
-from pf_core.utils.io import atomic_write_bytes
-from pf_core.utils.url_parse import canonical_url
+from pw_core.utils.url_parse import canonical_url
+from pw_foundation.exceptions import InvalidInputError
+from pw_foundation.utils.io import atomic_write_bytes
 
 from pagespring import _image_cache, images, manifest
 from pagespring._integrity import deliverable_intact, usable

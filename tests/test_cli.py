@@ -226,7 +226,7 @@ def test_renormalize_unchanged_reported(monkeypatch, tmp_path):
 
 
 def test_renormalize_precondition_exits_2(monkeypatch):
-    from pf_core.exceptions import PreconditionError
+    from pw_foundation.exceptions import PreconditionError
 
     def fake_run_renormalize(slug):
         raise PreconditionError(f"no raw/ kept for incoming/{slug}/ — re-ingest with --keep-raw")
@@ -418,7 +418,7 @@ def test_localize_all_reports_an_unreadable_manifest_and_sweeps_on(monkeypatch, 
 
 
 def test_localize_of_one_slug_it_refuses_exits_2(monkeypatch, tmp_path):
-    from pf_core.exceptions import PreconditionError
+    from pw_foundation.exceptions import PreconditionError
 
     def refuse(slug):
         raise PreconditionError("fakeapp.html no longer matches its manifest — re-ingest")
@@ -476,7 +476,7 @@ def _write_manifest(slug_dir, **over):
 
 
 def test_ingest_unrecognized_spec_exits_2(monkeypatch):
-    from pf_core.exceptions import InvalidInputError
+    from pw_foundation.exceptions import InvalidInputError
 
     def fake_run_ingest(url, **kwargs):
         raise InvalidInputError("…not a recognizable OpenAPI/Swagger spec or Postman collection")
@@ -778,7 +778,7 @@ def test_classify_probe_leaves_a_url_routed_pattern_unprobed(monkeypatch):
 def test_classify_probe_exit_codes(monkeypatch):
     import urllib.error
 
-    from pf_core.exceptions import InvalidInputError
+    from pw_foundation.exceptions import InvalidInputError
 
     def unrecognized(url):
         raise InvalidInputError("unrecognized docs site: x")
@@ -809,7 +809,7 @@ def test_refresh_a_failed_source_outranks_a_skipped_slug(monkeypatch):
 
 
 def test_classify_probe_marks_an_oversize_page_as_unverified(monkeypatch):
-    from pf_core.exceptions import ClientError
+    from pw_foundation.exceptions import ClientError
 
     from pagespring.patterns._detect import Detection
 

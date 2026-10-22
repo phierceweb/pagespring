@@ -1,7 +1,7 @@
 """_st4 — SCHEMA ST4 detection, treedata parsing, leaf-only fetch (mocked fetch)."""
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.patterns import _st4

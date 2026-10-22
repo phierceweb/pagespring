@@ -40,4 +40,7 @@ CLAUDE.md
 
 # Playwright MCP artifacts
 .playwright-mcp/
-docs/pf-core
+docs/pw-core
+
+# pw-setup: links into this machine's venv
+docs/pw-foundation

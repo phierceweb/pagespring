@@ -6,9 +6,9 @@ import re
 from pathlib import Path
 from typing import Literal, TypeGuard
 
-from pf_core.exceptions import PreconditionError
-from pf_core.log import get_logger
-from pf_core.utils.hashing import content_hash
+from pw_foundation.exceptions import PreconditionError
+from pw_foundation.log import get_logger
+from pw_foundation.utils.hashing import content_hash
 
 from pagespring import manifest
 
@@ -18,7 +18,7 @@ Integrity = Literal["intact", "interrupted", "damaged", "unverifiable"]
 
 LOCAL_IMG_RE = re.compile(r'(?:src=["\']|<image\b[^>]*?\bhref=["\']|\]\()(images/[^"\')\s]+)')
 
-# What an image pass writes: a ref's target (pf-core's retarget) and the case of an
+# What an image pass writes: a ref's target (pw-core's retarget) and the case of an
 # images/ name (normalize_case).
 _REF_TARGET_RE = re.compile(
     r"(\]\()(?:https?://|images/)[^)]*"

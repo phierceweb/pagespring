@@ -510,7 +510,7 @@ def test_reuse_unchanged_is_a_noop_without_a_sidecar(tmp_path):
 
 
 def test_remote_image_urls_agrees_with_count_remote_images(tmp_path):
-    """remote_image_urls uses a private pf-core matcher; pin it to the counter, not copied regexes."""
+    """remote_image_urls uses a private pw-core matcher; pin it to the counter, not copied regexes."""
     doc = tmp_path / "d.md"
     doc.write_text(
         "![a](https://x/1.png)\n"
@@ -661,6 +661,41 @@ def test_local_names_are_case_stable():
     assert images.local_name("https://x/Panel.PNG") == "panel.png"
 
 
+def test_query_only_different_urls_get_distinct_stable_names():
+    a = images.local_name("https://cdn.example/servlet/image?id=101")
+    b = images.local_name("https://cdn.example/servlet/image?id=102")
+    assert a != b
+    assert a == images.local_name("https://cdn.example/servlet/image?id=101")
+    assert a.startswith("image-") and b.startswith("image-")
+
+
+def test_a_query_less_name_is_unchanged():
+    assert images.local_name("https://x.com/img/Photo.JPEG") == "photo.jpg"
+
+
+def test_an_escaped_ampersand_names_the_image_as_its_decoded_url_does():
+    """_PacedFetcher records the decoded URL, and the provenance tie-break re-derives the name."""
+    assert images.local_name("https://x.com/p.png?a=1&amp;b=2") == images.local_name(
+        "https://x.com/p.png?a=1&b=2"
+    )
+
+
+def test_same_byte_images_differing_only_in_query_are_both_recorded(tmp_path, monkeypatch):
+    """Their proposed names differ, so the tie-break attributes each file."""
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"e"')))
+    doc = tmp_path / "d.md"
+    doc.write_text(
+        "![a](https://x.com/p.png?v=1)\n![b](https://x.com/p.png?v=2)\n", encoding="utf-8"
+    )
+
+    images.download_images(doc, tmp_path / "images")
+
+    recorded = {r["source_url"]: r["local"] for r in images.read_sidecar(tmp_path)}
+    assert set(recorded) == {"https://x.com/p.png?v=1", "https://x.com/p.png?v=2"}
+    assert len(set(recorded.values())) == 2
+
+
 def test_existing_mixed_case_files_are_normalised_before_localize(tmp_path):
     """A mixed-case cached file is renamed lowercase along with its refs and
     record, before a download can land on it (see ``normalize_case``)."""
@@ -742,13 +777,40 @@ def test_provenance_guard_survives_a_corrupt_sidecar(tmp_path, monkeypatch):
     assert (imgs / "zebra.png").is_file()
 
 
+def test_same_byte_extensionless_query_images_are_recorded_and_reused(tmp_path, monkeypatch):
+    """The localizer sniffs their extension onto the proposed name, so the tie-break must match the
+    stem; unrecorded, every refresh re-downloads them onto ``-2`` names."""
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"e"')))
+    monkeypatch.setattr(http, "not_modified", lambda *a, **k: True)
+    src = "![a](https://cdn.example/servlet/img?id=1)\n![b](https://cdn.example/servlet/img?id=2)\n"
+    doc = tmp_path / "d.md"
+    doc.write_text(src, encoding="utf-8")
+
+    images.download_images(doc, tmp_path / "images")
+
+    recorded = {r["source_url"]: r["local"] for r in images.read_sidecar(tmp_path)}
+    assert recorded == {
+        "https://cdn.example/servlet/img?id=1": images.local_name(
+            "https://cdn.example/servlet/img?id=1"
+        )
+        + ".png",
+        "https://cdn.example/servlet/img?id=2": images.local_name(
+            "https://cdn.example/servlet/img?id=2"
+        )
+        + ".png",
+    }
+    doc.write_text(src, encoding="utf-8")
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 2
+
+
 def test_provenance_leaves_an_ambiguous_hash_match_unrecorded(tmp_path, monkeypatch):
-    """Two extensionless same-byte downloads leave nothing to break the tie; wrong provenance is
-    worse than none."""
+    """Two same-byte downloads proposing the same name leave nothing to break the tie; wrong
+    provenance is worse than none."""
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
     imgs = tmp_path / "images"
     doc = tmp_path / "d.md"
-    doc.write_text("![a](https://x.com/img/one)\n![b](https://x.com/img/two)\n", encoding="utf-8")
+    doc.write_text("![a](https://x.com/one/img)\n![b](https://x.com/two/img)\n", encoding="utf-8")
     monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"e"')))
 
     images.download_images(doc, imgs)
@@ -761,7 +823,7 @@ def test_provenance_leaves_an_ambiguous_hash_match_unrecorded(tmp_path, monkeypa
 
 def test_a_killed_reuse_pass_leaves_the_deliverable_intact(tmp_path, monkeypatch):
     """A bare ``write_text`` truncates first, so a kill mid-rewrite would leave a partial manual."""
-    import pf_core.utils.io as io_mod
+    import pw_foundation.utils.io as io_mod
 
     imgs = tmp_path / "images"
     imgs.mkdir()

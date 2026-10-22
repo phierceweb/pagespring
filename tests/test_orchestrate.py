@@ -5,7 +5,7 @@ import re
 import urllib.error
 
 import pytest
-from pf_core.exceptions import ClientError, InvalidInputError, PreconditionError
+from pw_foundation.exceptions import ClientError, InvalidInputError, PreconditionError
 
 from pagespring import _staging, http, localize, manifest, orchestrate, renormalize
 from pagespring.base import AcquireResult
@@ -990,7 +990,7 @@ def test_ingest_stages_deliverable_under_final_slug_name(tmp_path, monkeypatch):
 
 
 def test_ingest_slug_override_that_folds_to_nothing_rejected(monkeypatch):
-    from pf_core.exceptions import InvalidInputError
+    from pw_foundation.exceptions import InvalidInputError
 
     monkeypatch.setattr(orchestrate, "classify", lambda url: _FakePattern())
     with pytest.raises(InvalidInputError):

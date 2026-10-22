@@ -211,7 +211,7 @@ A URL a specific pattern claims prints only that pattern, since its URL already 
 - `3` — normalize produced an empty file (the source likely changed shape; nothing staged, a prior deliverable survives).
 - `4` — a network fetch died during acquire (nothing staged; `ingest` only — `renormalize` never touches the network).
 
-These rely on pf-core's `run_cli` propagating `typer.Exit` codes; without it a failed `ingest` would exit `0`.
+These rely on pw-core's `run_cli` propagating `typer.Exit` codes; without it a failed `ingest` would exit `0`.
 
 A run stopped by SIGTERM or SIGHUP exits `128` plus the signal number (`143`, `129`) after its cleanup runs: an image pass records its outcome, and staging never leaves a half-written deliverable. A signal the caller ignores (`nohup`) stays ignored.
 

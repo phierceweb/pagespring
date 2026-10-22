@@ -6,7 +6,7 @@ Registered on the app in ``cli.py``.
 from pathlib import Path
 
 import typer
-from pf_core.exceptions import InvalidInputError, PreconditionError
+from pw_foundation.exceptions import InvalidInputError, PreconditionError
 
 from pagespring.batch import BatchOutcome, ingest_batch, read_batch
 from pagespring.config import cfg

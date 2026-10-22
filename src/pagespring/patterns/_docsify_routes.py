@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
-from pf_core.log import get_logger
+from pw_foundation.log import get_logger
 
 from pagespring.patterns._site import names_a_file
 

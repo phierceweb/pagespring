@@ -7,7 +7,7 @@ import contextlib
 from pathlib import Path
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import audit, localize, paths, refresh, renormalize
 from pagespring import manifest as manifest_mod

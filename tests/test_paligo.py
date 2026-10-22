@@ -2,7 +2,7 @@
 holds one entry per anchor, deduped to the pages (mocked fetch)."""
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.patterns import _paligo

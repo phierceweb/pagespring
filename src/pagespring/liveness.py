@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 
 class ProgressWatchdog:

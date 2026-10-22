@@ -1,7 +1,7 @@
 """adobe_helpx: guides identified by host and the ``ul.tocList`` index (mocked fetch)."""
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.patterns.adobe_helpx import AdobeHelpxPattern

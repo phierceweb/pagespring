@@ -7,8 +7,8 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict
 
-from pf_core.exceptions import InvalidInputError
-from pf_core.log import get_logger, log_exception
+from pw_foundation.exceptions import InvalidInputError
+from pw_foundation.log import get_logger, log_exception
 
 from pagespring import http
 from pagespring._staging import source_key

@@ -4,6 +4,23 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.16.0] — 2026-10-21
+
+### Changed
+- Depends on `pw-foundation~=1.0` and `pw-core[cli]~=0.27.0` instead of `pf-core` (the framework's
+  rename and split): imports are `pw_foundation.*` / `pw_core.*`, the pytest fixtures `pw_*`, the
+  framework's env vars `PW_*`, the gate config `.pw-guards.toml`; `pw-setup` wires docs and rules.
+
+### Fixed
+
+- **A docs URL that serves a PDF is downloaded once**: `docs_probe` hands the bytes its probe
+  fetched to `pdf_url` instead of downloading them again. A PDF past the text budget still
+  downloads under the download budget, and one past the download budget is refused either way.
+- **Remote images whose URLs differ only in the query get distinct, stable local names**
+  (pw-core's query digest) instead of `-2`, `-3` in download order. Same-byte images among them
+  each keep their provenance record, including ones whose extension is sniffed, so a refresh
+  reuses them instead of re-downloading. Images already localized keep their names.
+
 ## [0.15.0] — 2026-10-05
 
 ### Added

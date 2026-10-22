@@ -7,8 +7,8 @@ from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Literal, TypedDict
 
-from pf_core.exceptions import InvalidInputError
-from pf_core.log import get_logger, log_exception
+from pw_foundation.exceptions import InvalidInputError
+from pw_foundation.log import get_logger, log_exception
 
 from pagespring import http, manifest
 from pagespring._integrity import deliverable_intact

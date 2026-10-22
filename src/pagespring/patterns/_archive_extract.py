@@ -12,8 +12,8 @@ import zlib
 from collections.abc import Iterator
 from pathlib import Path
 
-from pf_core.exceptions import InvalidInputError
-from pf_core.utils.env import resolve_int
+from pw_foundation.exceptions import InvalidInputError
+from pw_foundation.utils.env import resolve_int
 
 # Extraction budget, checked against declared member sizes before anything is written.
 _MAX_EXTRACT_BYTES_DEFAULT = 2 * 1024 * 1024 * 1024

@@ -3,7 +3,7 @@
 #
 #   bin/run ingest <url>
 #   bin/run patterns
-#   bin/run pf-doctor     # pf-core console script, from the venv
+#   bin/run pw-doctor     # framework console script (pw-foundation), from the venv
 #   bin/run test          # delegates to bin/test
 #   bin/run lint          # delegates to bin/lint
 set -euo pipefail
@@ -16,8 +16,8 @@ if [[ "$#" -gt 0 && "$1" != "run" && -x "$ROOT/bin/$1" ]]; then
   exec "$ROOT/bin/$CMD" "$@"
 fi
 
-# pf-core's console scripts live in the venv; the pf- prefix can't collide with an app command.
-if [[ "$#" -gt 0 && "$1" == pf-* && -x "$ROOT/.venv/bin/$1" ]]; then
+# The framework's console scripts live in the venv; the pw- prefix can't collide with an app command.
+if [[ "$#" -gt 0 && "$1" == pw-* && -x "$ROOT/.venv/bin/$1" ]]; then
   CMD="$1"; shift
   exec "$ROOT/.venv/bin/$CMD" "$@"
 fi

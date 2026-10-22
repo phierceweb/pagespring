@@ -6,10 +6,10 @@ from __future__ import annotations
 from html import unescape
 from pathlib import Path
 
-from pf_core.fetch import images as _core
-from pf_core.log import get_logger
-from pf_core.utils.hashing import content_hash
-from pf_core.utils.io import atomic_write_bytes, atomic_write_text
+from pw_core.fetch import images as _core
+from pw_foundation.log import get_logger
+from pw_foundation.utils.hashing import content_hash
+from pw_foundation.utils.io import atomic_write_bytes, atomic_write_text
 
 from pagespring import http
 from pagespring.images import (

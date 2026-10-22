@@ -2,7 +2,7 @@
 shared by the sitemap-driven crawls (mocked fetch, no network)."""
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.patterns import _readable, _sitemap

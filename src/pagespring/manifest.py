@@ -7,8 +7,8 @@ import json
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
-from pf_core.pipeline.run_record import file_sha256
-from pf_core.utils.io import atomic_write_text
+from pw_core.pipeline.run_record import file_sha256
+from pw_foundation.utils.io import atomic_write_text
 
 from pagespring import __version__
 

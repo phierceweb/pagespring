@@ -1,4 +1,4 @@
-"""Image localizer: ``pf_core.fetch.images`` downloads remote images into ``images/`` and re-points
+"""Image localizer: ``pw_core.fetch.images`` downloads remote images into ``images/`` and re-points
 refs; this module adds pagespring's naming, fetch policy and provenance sidecar."""
 
 from __future__ import annotations
@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import TypedDict
 from urllib.parse import urlparse
 
-from pf_core.fetch import images as _core
-from pf_core.log import get_logger
-from pf_core.pipeline.run_record import file_sha256
-from pf_core.utils.hashing import content_hash
-from pf_core.utils.io import atomic_write_text
+from pw_core.fetch import images as _core
+from pw_core.pipeline.run_record import file_sha256
+from pw_foundation.log import get_logger
+from pw_foundation.utils.hashing import content_hash
+from pw_foundation.utils.io import atomic_write_text
 
 from pagespring import http
 
@@ -113,14 +113,24 @@ def _merge(old: list[ImageRecord], new: list[ImageRecord]) -> list[ImageRecord]:
 
 
 def local_name(url: str) -> str:
-    """Local name for a remote image: the sanitized, lowercased basename stem, plus the URL's image
-    extension when it has one (else the localizer sniffs one)."""
+    """Local name for a remote image: the sanitized, lowercased basename stem, the URL's image
+    extension when it has one (else the localizer sniffs one), and a digest of any query."""
     path = urlparse(url).path
     stem = re.sub(r"\.[A-Za-z0-9]+$", "", Path(path).name)
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-").lower() or "image"
     suffix = Path(path).suffix.lower()
     ext = ".jpg" if suffix == ".jpeg" else (suffix if suffix in _IMAGE_EXTS else "")
-    return f"{stem}{ext}"
+    # Unescaped as _PacedFetcher records source_url, so the provenance tie-break agrees.
+    return _core.with_query_digest(f"{stem}{ext}", unescape(url))
+
+
+def _became(url: str, path: Path) -> bool:
+    """Whether the localizer saved ``url``'s proposed name as ``path``: as proposed, or with a
+    sniffed extension when it proposed none."""
+    proposed = local_name(url)
+    if Path(proposed).suffix in _IMAGE_EXTS:
+        return path.name == proposed
+    return path.stem == proposed
 
 
 def count_remote_images(doc_path: Path) -> int:
@@ -173,15 +183,12 @@ def _record_provenance(
         if len(candidates) == 1:
             pick = candidates[0]
         else:
-            # The hash cannot separate same-byte downloads, so the proposed name
-            # breaks the tie; a sniffed extension matches none — leave it unrecorded.
-            named = next(
-                (i for i in candidates if local_name(unclaimed[i][1]["source_url"]) == path.name),
-                None,
-            )
-            if named is None:
+            # The hash cannot separate same-byte downloads, so the proposed name breaks the
+            # tie; unless exactly one proposes this file's name, leave it unrecorded.
+            named = [i for i in candidates if _became(unclaimed[i][1]["source_url"], path)]
+            if len(named) != 1:
                 continue
-            pick = named
+            pick = named[0]
         _digest, fields = unclaimed.pop(pick)
         records.append(
             {

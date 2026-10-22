@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap pagespring: venv (Python 3.12+), editable install, .env, rule symlinks.
-# Self-contained — works whether pf-core is pip-installed or a sibling checkout.
+# Bootstrap pagespring: venv (Python 3.12+), editable install, .env, framework wiring (pw-setup).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -39,21 +38,16 @@ if [[ -f .env.example && ! -f .env ]]; then
   ok "copied .env.example -> .env"
 fi
 
-# Wire AI-assistant rule dirs to .ai/ (Claude Code / Cursor read these).
-for tool in .claude .cursor; do
-  mkdir -p "$tool"
-  for d in rules skills; do
-    [[ -e "$ROOT/.ai/$d" ]] || continue
-    rm -rf "${tool:?}/$d"
-    ln -s "../.ai/$d" "$tool/$d"
-    ok "$tool/$d -> ../.ai/$d"
-  done
-done
-
 # Local pre-commit gate hooks if configured (CI is the backstop).
 if [[ -f .pre-commit-config.yaml ]]; then
   .venv/bin/pre-commit install >/dev/null 2>&1 && ok "pre-commit hooks installed" || true
 fi
+
+# pw-setup (pw-foundation) links the framework docs under docs/, installs the starter
+# rules into .ai/rules/ and points .claude/ and .cursor/ at .ai/. Last: it refuses (exit 1)
+# when a real directory sits where a link goes, and says what to move.
+.venv/bin/pw-setup
+ok "pw-setup ran"
 
 echo
 echo "Setup complete. Try: bin/run --help"

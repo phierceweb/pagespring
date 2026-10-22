@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from pf_core.exceptions import FlowException
-from pf_core.log import get_logger
+from pw_foundation.exceptions import FlowException
+from pw_foundation.log import get_logger
 
 from pagespring import http
 from pagespring.config import cfg

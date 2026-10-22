@@ -6,8 +6,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 
-from pf_core.exceptions import ClientError, InvalidInputError
-from pf_core.log import get_logger
+from pw_core.fetch import Body
+from pw_foundation.exceptions import ClientError, InvalidInputError
+from pw_foundation.log import get_logger
 
 from pagespring import http
 from pagespring.patterns import (
@@ -91,13 +92,14 @@ class Detection:
     oversize: ClientError | None = None  # the entry page outgrew the text budget
     page_url: str = ""  # what relative refs in ``home`` resolve against
     refreshed: bool = False  # the seed was a meta-refresh shell; ``final`` is its target
+    body: Body | None = None  # the response ``home`` was decoded from
 
 
-def _fetch_page(url: str) -> tuple[str, str] | ClientError:
-    """``url``'s (final URL, text), or the error when the body outgrew the text budget; only a
-    document download does, and pdf_url fetches that under the download budget."""
+def _fetch_page(url: str) -> Body | ClientError:
+    """``url``'s response, or the error when the body outgrew the text budget; only a document
+    download does, and pdf_url fetches that under the download budget."""
     try:
-        return http.fetch_text(url)
+        return http.fetch_body(url)
     except ClientError as exc:
         if "max_bytes" not in exc.context:
             raise
@@ -115,7 +117,8 @@ def detect(url: str) -> Detection:
     fetched = _fetch_page(base)
     if isinstance(fetched, ClientError):
         return Detection("pdf", "oversize_body", base, oversize=fetched)
-    final, home = fetched
+    body = fetched
+    final, home = body.final_url, body.text()
     # The seed as typed when no redirect restored the slash its fetch dropped.
     page_url = url if final == base and url.endswith("/") else final
     # A same-site meta refresh is a shell (Writerside's entry page); the target is the page.
@@ -125,7 +128,8 @@ def detect(url: str) -> Detection:
         fetched = _fetch_page(target)
         if isinstance(fetched, ClientError):
             return Detection("pdf", "oversize_body", target, oversize=fetched, refreshed=True)
-        final, home = fetched
+        body = fetched
+        final, home = body.final_url, body.text()
         base, page_url = final.rstrip("/"), final
     gen = generator_meta(home)
 
@@ -142,6 +146,7 @@ def detect(url: str) -> Detection:
             index=index,
             page_url=page_url,
             refreshed=target is not None,
+            body=body,
         )
 
     # Content beats generator sniffing: a vendor may serve the manual itself

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from pf_core.exceptions import ClientError, InvalidInputError
+from pw_foundation.exceptions import ClientError, InvalidInputError
 
 from pagespring import http
 

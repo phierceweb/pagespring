@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Refuse code that hand-rolls what pf-core provides; each failure names the replacement. Usage:
-``bin/check-framework [file ...]``, the whole package by default."""
+"""Refuse hand-rolls of what pw-foundation / pw-core provide; each failure names the replacement.
+Usage: ``bin/check-framework [file ...]``, the whole package by default."""
 
 from __future__ import annotations
 
@@ -14,20 +14,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src" / "pagespring"
 
-# Modules pf-core (or pagespring's own shim) replaces outright.
+# Modules the framework (or pagespring's own shim) replaces outright.
 BANNED_IMPORTS = {
     "logging": (
-        "pf_core.log.get_logger(__name__)",
+        "pw_foundation.log.get_logger(__name__)",
         "structured events, and the project's log level and file wiring",
     ),
     "dotenv": (
-        "pf_core.config.AppConfig",
+        "pw_core.config.AppConfig",
         "entry points already load .env; a second loader fights the first",
     ),
     "requests": ("pagespring.http", "the crawl User-Agent, size caps, retries and the SSRF guard"),
     "httpx": ("pagespring.http", "the crawl User-Agent, size caps, retries and the SSRF guard"),
     "hashlib": (
-        "pf_core.utils.hashing.content_hash, or pf_core.pipeline.run_record.file_sha256 for a file",
+        "pw_foundation.utils.hashing.content_hash, or pw_core.pipeline.run_record.file_sha256 for a file",
         "one spelling of a digest, and the file variant streams instead of slurping",
     ),
     "aiohttp": ("pagespring.http", "fetching is stdlib urllib through one shim"),
@@ -36,9 +36,12 @@ BANNED_IMPORTS = {
 
 # Builtins that must not be raised from library code.
 BANNED_RAISES = {
-    "Exception": ("a pf_core.exceptions class", "an unsearchable log key and no context"),
-    "RuntimeError": ("pf_core.exceptions.PreconditionError", "'required state not met'"),
-    "ValueError": ("pf_core.exceptions.InvalidInputError", "'the caller passed something bad'"),
+    "Exception": ("a pw_foundation.exceptions class", "an unsearchable log key and no context"),
+    "RuntimeError": ("pw_foundation.exceptions.PreconditionError", "'required state not met'"),
+    "ValueError": (
+        "pw_foundation.exceptions.InvalidInputError",
+        "'the caller passed something bad'",
+    ),
 }
 
 # (name, pattern, what to use, why). `name` is what an exemption refers to.
@@ -46,19 +49,19 @@ BANNED_CALLS = [
     (
         "env-read",
         re.compile(r"\bos\.(environ|getenv)\b"),
-        "pf_core.utils.env.resolve_int/resolve_str/resolve_bool",
+        "pw_foundation.utils.env.resolve_int/resolve_str/resolve_bool",
         "malformed values warn and fall back instead of crashing — .ai/rules/config-driven.md",
     ),
     (
         "print",
         re.compile(r"(?<![\w.])print\s*\("),
-        "pf_core.log.get_logger(__name__), or typer.echo at the CLI boundary",
+        "pw_foundation.log.get_logger(__name__), or typer.echo at the CLI boundary",
         "print() in a library is output nobody can level, filter or redirect",
     ),
     (
         "atomic-write",
         re.compile(r"\bos\.replace\s*\("),
-        "pf_core.utils.io.atomic_write_text / _json / _bytes",
+        "pw_foundation.utils.io.atomic_write_text / _json / _bytes",
         "the temp-file-then-rename dance is already written and tested",
     ),
 ]
@@ -135,7 +138,7 @@ def check(path: Path) -> list[str]:
         if _writes_json_unsafely(node):
             found.append(
                 f"{rel}:{node.lineno}: writes JSON with write_text — use "
-                "pf_core.utils.io.atomic_write_text / _json "
+                "pw_foundation.utils.io.atomic_write_text / _json "
                 "(a torn write leaves a file that parses as neither record)"
             )
 
@@ -154,11 +157,11 @@ def main(argv: list[str]) -> int:
     paths = [p for p in given if p.suffix == ".py"] or sorted(SRC.rglob("*.py"))
     bad = [problem for p in paths if p.is_file() for problem in check(p)]
     if bad:
-        print("Framework rules — pf-core already provides these:\n")
+        print("Framework rules — pw-foundation / pw-core already provide these:\n")
         for line in bad:
             print(f"  {line}")
         print(f"\n{len(bad)} to fix.")
-        print("If pf-core genuinely does not cover a case, add an EXEMPT entry here with")
+        print("If the framework genuinely does not cover a case, add an EXEMPT entry here with")
         print("the reason — never a blanket skip.")
         return 1
     return 0

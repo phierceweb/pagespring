@@ -1,7 +1,7 @@
 """_asciidoctor — generator detection, same-dir crawl, container extraction."""
 
 import pytest
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.patterns import _asciidoctor

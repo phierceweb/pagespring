@@ -186,7 +186,7 @@ def test_acquire_paginates_and_merges(tmp_path, monkeypatch):
 )
 def test_an_api_answer_that_is_not_an_articles_object_is_invalid_input(tmp_path, monkeypatch, body):
     """A /hc/ path on a site that is not Zendesk answers the API URL with its own page."""
-    from pf_core.exceptions import InvalidInputError
+    from pw_foundation.exceptions import InvalidInputError
 
     monkeypatch.setattr(http, "fetch_text", lambda url, **kw: (url, body))
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)

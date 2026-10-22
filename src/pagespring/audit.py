@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Literal, TypedDict
 
-from pf_core.log import get_logger
+from pw_foundation.log import get_logger
 
 from pagespring import manifest
 from pagespring._integrity import LOCAL_IMG_RE, image_pass_ran, integrity, usable

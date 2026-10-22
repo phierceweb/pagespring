@@ -22,14 +22,14 @@ repos:
         types: [python]
         pass_filenames: false
         args: ["src"]
-      - id: pf-guards
+      - id: pw-guards
         name: structural gate
-        entry: .venv/bin/python -m pf_core.guards
+        entry: .venv/bin/python -m pw_foundation.guards
         language: system
         pass_filenames: false
         always_run: true
       - id: framework-first
-        name: framework-first (pf-core)
+        name: framework-first (pw-foundation / pw-core)
         entry: .venv/bin/python bin/check-framework
         language: system
         pass_filenames: false

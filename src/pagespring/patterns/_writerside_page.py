@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from pf_core.log import get_logger
+from pw_foundation.log import get_logger
 
 from pagespring import http
 from pagespring.patterns._mathjax import rebuild_math

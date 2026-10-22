@@ -2,7 +2,7 @@
 
 import pytest
 from bs4 import BeautifulSoup
-from pf_core.exceptions import InvalidInputError
+from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
 from pagespring.base import Pattern
