@@ -8,6 +8,7 @@ semantic versioning.
 
 ### Changed
 
+- **CI tests on Python 3.12, 3.13 and 3.14**, and the package lists all three as supported.
 - **`bin/check-framework` refuses a bare `BeautifulSoup(...)` call in the package**; patterns
   parse HTML through `pagespring.patterns._soup.parse_html`.
 
