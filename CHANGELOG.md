@@ -4,6 +4,38 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.17.0] — 2026-10-23
+
+### Added
+
+- **`pagespring.images.decode_ref`** decodes an image ref's numeric references (`&#38;`, `&#x26;`,
+  with or without the `;`) and the named references HTML defines when they end in `;` (`&amp;`);
+  any other `&`, such as a bare `&reg=` or an unknown `&copy2;`, stays as written. Every image
+  fetch, local name and sidecar lookup uses it.
+
+### Fixed
+
+- **`audit` ignores escaped `<img>` markup in any deliverable, and markdown image syntax in an HTML
+  one, when it looks for a broken image ref**: a local `src` counts only inside a real `<img>` tag
+  and a local `href` only inside an SVG `<image>`, with tag and attribute names matched in any
+  letter case, so `<IMG SRC=…>` is now checked and `<video src>`, `<source src>`, `data-src` or
+  `data-href` is not. A markdown deliverable's code sample that holds a literal `<img>` tag or
+  `![](images/…)` still counts. `localize`, `refresh`, `renormalize` and a re-ingest over a
+  localized slug no longer take such text for a ref an image pass wrote, so a file whose hash
+  differs and that holds only that text is damaged rather than unverifiable; a `](images/…)`
+  target still counts in any kind.
+- **An image ref in a markdown deliverable whose query has a parameter beginning with a legacy HTML
+  entity name (`&reg=`, `&section=`, `&param=`, `&timestamp=`) is fetched as written** instead of
+  decoding to `®=`, `§ion=`, `¶m=`, `×tamp=` and failing the image pass with a
+  `UnicodeEncodeError`. One whose name decoded to ASCII (`&quote=` → `"e=`) was fetched from the
+  wrong URL; it downloads once more under a new name. An HTML source is not fixed: on Python 3.12
+  its parser decodes `&reg=` to `®=` before the image pass, which still fails on it.
+- **Same-byte images each keep a provenance record naming the file their own ref points to**,
+  including ones the localizer saved under a `-2`, `-3` name and ones whose refs hold an escaped
+  `&amp;reg=` or `&amp;amp;` and differ in the rest of the query, so a re-localize reuses them and
+  leaves the deliverable unchanged. A manual staged earlier records them the next time an image
+  pass downloads them.
+
 ## [0.16.0] — 2026-10-21
 
 ### Changed

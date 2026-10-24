@@ -3,7 +3,6 @@ server still serves unchanged, prune what the deliverable no longer references."
 
 from __future__ import annotations
 
-from html import unescape
 from pathlib import Path
 
 from pw_core.fetch import images as _core
@@ -15,6 +14,7 @@ from pagespring import http
 from pagespring.images import (
     ImageRecord,
     count_remote_images,
+    decode_ref,
     local_name,
     read_sidecar,
     remote_image_urls,
@@ -63,7 +63,7 @@ def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
     for url in remote_image_urls(doc_path):
         # Probe the decoded URL the sidecar keys on (an `&amp;` ref never matches its validators);
         # the rewrite below must still match the escaped form the document holds.
-        decoded = unescape(url)
+        decoded = decode_ref(url)
         rec = records.get(decoded)
         if rec is None or not (images_dir / rec["local"]).is_file():
             continue

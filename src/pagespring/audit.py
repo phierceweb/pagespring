@@ -10,7 +10,7 @@ from typing import Literal, TypedDict
 from pw_foundation.log import get_logger
 
 from pagespring import manifest
-from pagespring._integrity import LOCAL_IMG_RE, image_pass_ran, integrity, usable
+from pagespring._integrity import image_pass_ran, integrity, local_image_refs, usable
 from pagespring._staging import source_key
 from pagespring.config import cfg
 from pagespring.paths import slug_dir
@@ -165,7 +165,9 @@ def audit_slug(slug: str) -> list[Finding]:
                 )
         # A local ref whose file is gone renders broken; the remote-ref check above can't see it.
         dangling = sorted(
-            ref for ref in set(LOCAL_IMG_RE.findall(doc_text)) if not (incoming_dir / ref).exists()
+            ref
+            for ref in local_image_refs(doc_text, kind=m["kind"])
+            if not (incoming_dir / ref).exists()
         )
         if dangling:
             findings.append(

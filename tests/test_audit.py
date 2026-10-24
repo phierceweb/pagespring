@@ -291,6 +291,102 @@ def test_resolved_local_image_refs_are_fine(tmp_path):
     assert ("broken_image_ref", "error") not in _checks(audit.audit_slug("fakeapp"))
 
 
+_SAMPLE = '<pre><code>&lt;img src="images/x.svg"&gt;</code></pre>'
+
+
+@pytest.mark.parametrize("kind", ["html", "markdown"])
+def test_an_escaped_img_sample_is_not_a_broken_ref(tmp_path, kind):
+    """An escaped `<img>` in a code sample is text, not a ref."""
+    d = _stage(tmp_path, kind=kind, body=f"# T\n\n<h1>T</h1>{_SAMPLE}\n", images=1)
+    (d / "images").mkdir()
+    assert ("broken_image_ref", "error") not in _checks(audit.audit_slug("fakeapp"))
+
+
+@pytest.mark.parametrize("kind", ["html", "markdown"])
+def test_an_escaped_img_sample_hides_no_real_broken_ref(tmp_path, kind):
+    body = f'# T\n\n<h1>T</h1>{_SAMPLE}<img src="images/gone.png">\n'
+    d = _stage(tmp_path, kind=kind, body=body, images=1)
+    (d / "images").mkdir()
+    finding = next(f for f in audit.audit_slug("fakeapp") if f["check"] == "broken_image_ref")
+    assert (
+        finding["detail"].startswith("1 local image ref(s)")
+        and "images/gone.png" in finding["detail"]
+    )
+
+
+def test_a_markdown_image_sample_in_an_html_deliverable_is_not_a_broken_ref(tmp_path):
+    """An html file has no `](` syntax: markdown image syntax in a code sample is text."""
+    sample = '<pre><code class="language-markdown">![Logo](images/logo.svg)</code></pre>'
+    d = _stage(tmp_path, kind="html", body=f"<h1>T</h1>{sample}", images=1)
+    (d / "images").mkdir()
+    assert ("broken_image_ref", "error") not in _checks(audit.audit_slug("fakeapp"))
+
+
+@pytest.mark.parametrize(
+    "between", ["", " see ", '<pre><code class="x">'], ids=["adjacent", "text", "tag"]
+)
+def test_a_real_tag_before_a_sample_does_not_reach_into_it(tmp_path, between):
+    """A tag's match ends at its own `>`, so a later sample on the same line stays text."""
+    body = f'<h1>T</h1><img src="https://img.example/a.png" alt="logo">{between}{_SAMPLE}'
+    d = _stage(tmp_path, kind="html", body=body, images=1)
+    (d / "images").mkdir()
+    assert ("broken_image_ref", "error") not in _checks(audit.audit_slug("fakeapp"))
+
+
+def test_a_real_tag_before_bare_escaped_text_does_not_reach_into_it(tmp_path):
+    body = '<h1>T</h1><img src="https://img.example/a.png"> see &lt;img src="images/x.svg"&gt;'
+    d = _stage(tmp_path, kind="html", body=body, images=1)
+    (d / "images").mkdir()
+    assert ("broken_image_ref", "error") not in _checks(audit.audit_slug("fakeapp"))
+
+
+@pytest.mark.parametrize("kind", ["html", "markdown"])
+@pytest.mark.parametrize(
+    "tag",
+    [
+        '<IMG ALT="a" SRC="images/gone.png">',
+        '<img alt="a" width="3" src=\'images/gone.png\'>',
+        '<img alt="a > b" src="images/gone.png">',
+        '<img alt="a < b" src="images/gone.png">',
+        "<img alt='a' src=\"images/gone.png\">",
+        "<img alt='a > b' src=\"images/gone.png\">",
+        "<img alt='a<b' src=\"images/gone.png\">",
+    ],
+)
+def test_a_real_img_tag_is_checked_however_it_is_written(tmp_path, tag, kind):
+    d = _stage(tmp_path, kind=kind, body=f"# T\n\n<h1>T</h1>{tag}\n", images=1)
+    (d / "images").mkdir()
+    assert ("broken_image_ref", "error") in _checks(audit.audit_slug("fakeapp"))
+
+
+@pytest.mark.parametrize("kind", ["html", "markdown"])
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<video src="images/gone.mp4"></video>',
+        '<source src="images/gone.webm">',
+        '<img lowsrc="images/gone.png" src="https://img.example/a.png">',
+        '<img data-src="images/gone.png" src="https://img.example/a.png">',
+        '<imgx src="images/gone.png">',
+        '<svg><image data-href="images/gone.svg" href="https://img.example/a.svg"/></svg>',
+        '<imagex href="images/gone.svg">',
+        '<svg><image xhref="images/gone.svg" href="https://img.example/a.svg"/></svg>',
+    ],
+)
+def test_a_src_that_is_not_an_img_tags_own_is_not_a_ref(tmp_path, markup, kind):
+    d = _stage(tmp_path, kind=kind, body=f"# T\n\n<h1>T</h1>{markup}\n", images=1)
+    (d / "images").mkdir()
+    assert ("broken_image_ref", "error") not in _checks(audit.audit_slug("fakeapp"))
+
+
+@pytest.mark.parametrize("kind", ["html", "markdown"])
+def test_only_a_lowercase_images_dir_is_a_local_ref(tmp_path, kind):
+    """pagespring writes images/ in lowercase; another case is not its ref."""
+    d = _stage(tmp_path, kind=kind, body='# T\n\n<img src="Images/Fig.png">\n', images=1)
+    (d / "images").mkdir()
+    assert ("broken_image_ref", "error") not in _checks(audit.audit_slug("fakeapp"))
+
+
 def test_pages_lost_is_an_error(tmp_path):
     """60% missing yet healthy-looking: no page cap was hit, so ``truncated`` stays False."""
     d = _stage(tmp_path, pattern="apple_help", pages=40)

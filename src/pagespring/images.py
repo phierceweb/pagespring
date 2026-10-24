@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from html import unescape
+from html.entities import html5
 from pathlib import Path
 from typing import TypedDict
 from urllib.parse import urlparse
@@ -21,6 +23,10 @@ from pagespring import http
 log = get_logger(__name__)
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+# A numeric reference too long for any code point stays as written rather than decoding a prefix.
+_CHAR_REF = re.compile(
+    r"&(?:#\d{1,10}(?!\d);?|#[xX][0-9A-Fa-f]{1,8}(?![0-9A-Fa-f]);?|[A-Za-z][A-Za-z0-9]*;)"
+)
 
 SIDECAR_NAME = "images.json"
 _SIDECAR_SCHEMA = 1
@@ -50,29 +56,39 @@ class _PacedFetcher:
     """The localizer's transport: pagespring's fetch plus the inter-image delay, and the one place
     that sees an image's URL and bytes together, so provenance is captured here."""
 
-    def __init__(self) -> None:
-        # Keyed by nothing: two URLs can yield identical bytes, and collapsing
-        # them on hash would leave the second file untracked.
-        self.fetched: list[tuple[str, _Provenance]] = []  # (sha256, fields)
+    def __init__(self, taken: Iterable[str] = ()) -> None:
+        # (sha256, fields, file): two URLs can yield identical bytes, so each fetch keeps its own.
+        self.fetched: list[tuple[str, _Provenance, str | None]] = []
+        self._taken = set(taken)
 
     def get_bytes(self, url: str, *, timeout_s: float | None = None) -> tuple[str, bytes]:
-        """Fetch on ``fetch_bytes``' long budget, unescaping the HTML-escaped ref: a CDN reads
+        """Fetch on ``fetch_bytes``' long budget, decoding the HTML-escaped ref: a CDN reads
         ``amp;wid`` as an unknown parameter and serves its default rendition."""
-        url = unescape(url)
-        final_url, data, meta = http.fetch_bytes_meta(url)
-        self.fetched.append(
-            (
-                content_hash(data),
-                {
-                    "source_url": url,
-                    "etag": meta["etag"],
-                    "last_modified": meta["last_modified"],
-                    "bytes": len(data),
-                },
-            )
-        )
+        decoded = decode_ref(url)
+        final_url, data, meta = http.fetch_bytes_meta(decoded)
+        fields: _Provenance = {
+            "source_url": decoded,
+            "etag": meta["etag"],
+            "last_modified": meta["last_modified"],
+            "bytes": len(data),
+        }
+        self.fetched.append((content_hash(data), fields, self._claim(url, data)))
         http.polite_sleep()
         return final_url, data
+
+    def _claim(self, url: str, data: bytes) -> str | None:
+        """The file the localizer saves these bytes as, claimed as it claims it: the proposed name
+        (sniffed extension added when it has none), else the first free ``stem-N``."""
+        sniffed = _core.sniff_image_ext(data)
+        if sniffed is None:
+            return None  # the localizer refuses a body that is not an image
+        base = local_name(url)
+        name = base if Path(base).suffix.lower() in _core._IMAGE_EXTENSIONS else base + sniffed
+        stem, ext, n = Path(name).stem, Path(name).suffix, 2
+        while name in self._taken:
+            name, n = f"{stem}-{n}{ext}", n + 1
+        self._taken.add(name)
+        return name
 
 
 def remote_image_urls(doc_path: Path) -> list[str]:
@@ -112,25 +128,28 @@ def _merge(old: list[ImageRecord], new: list[ImageRecord]) -> list[ImageRecord]:
     return sorted(merged.values(), key=lambda r: r["source_url"])
 
 
+def _decode_match(match: re.Match[str]) -> str:
+    ref = match.group()
+    # html.unescape prefix-matches an unknown name (``&copy2;`` -> ``©2;``); an attribute does not.
+    return unescape(ref) if ref[1] == "#" or ref[1:] in html5 else ref
+
+
+def decode_ref(url: str) -> str:
+    """Decode an image ref's numeric references and its named ones that end in ``;``; any other
+    ``&``, such as a bare ``&reg=`` or an unknown ``&copy2;``, stays as written."""
+    return _CHAR_REF.sub(_decode_match, url)
+
+
 def local_name(url: str) -> str:
-    """Local name for a remote image: the sanitized, lowercased basename stem, the URL's image
-    extension when it has one (else the localizer sniffs one), and a digest of any query."""
-    path = urlparse(url).path
+    """Local name for a remote image ref: its decoded URL's sanitized, lowercased basename stem, its
+    image extension when it has one (else the localizer sniffs one), and a digest of any query."""
+    decoded = decode_ref(url)
+    path = urlparse(decoded).path
     stem = re.sub(r"\.[A-Za-z0-9]+$", "", Path(path).name)
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-").lower() or "image"
     suffix = Path(path).suffix.lower()
     ext = ".jpg" if suffix == ".jpeg" else (suffix if suffix in _IMAGE_EXTS else "")
-    # Unescaped as _PacedFetcher records source_url, so the provenance tie-break agrees.
-    return _core.with_query_digest(f"{stem}{ext}", unescape(url))
-
-
-def _became(url: str, path: Path) -> bool:
-    """Whether the localizer saved ``url``'s proposed name as ``path``: as proposed, or with a
-    sniffed extension when it proposed none."""
-    proposed = local_name(url)
-    if Path(proposed).suffix in _IMAGE_EXTS:
-        return path.name == proposed
-    return path.stem == proposed
+    return _core.with_query_digest(f"{stem}{ext}", decoded)
 
 
 def count_remote_images(doc_path: Path) -> int:
@@ -142,12 +161,12 @@ def count_remote_images(doc_path: Path) -> int:
 def download_images(doc_path: Path, images_dir: Path, *, checkpoint_every: int = 50) -> int:
     """Download remote images into ``images_dir``, re-pointing each ref as it lands so a killed run
     keeps its work; returns this run's count. Re-run until none remain."""
-    fetcher = _PacedFetcher()
-    # A file already here is not one of this run's downloads, whatever it hashes
-    # to. Read from the directory, which cannot be unreadable as a sidecar can.
+    # A file already here is not one of this run's downloads, whatever it hashes to, and the
+    # localizer claims new names around it. Read from the directory, not the sidecar.
     preexisting = (
         {p.name for p in images_dir.glob("*") if p.is_file()} if images_dir.is_dir() else set()
     )
+    fetcher = _PacedFetcher(taken=preexisting)
     try:
         return _core.localize_file(
             doc_path,
@@ -160,39 +179,25 @@ def download_images(doc_path: Path, images_dir: Path, *, checkpoint_every: int =
     finally:
         # An interrupted run keeps its checkpointed local refs, so it keeps their records too.
         if fetcher.fetched:
-            _record_provenance(images_dir, fetcher.fetched, preexisting=preexisting)
+            _record_provenance(images_dir, fetcher.fetched)
 
 
 def _record_provenance(
-    images_dir: Path, fetched: list[tuple[str, _Provenance]], *, preexisting: set[str]
+    images_dir: Path, fetched: list[tuple[str, _Provenance, str | None]]
 ) -> None:
-    """Join this run's downloads to the files they became by content hash (the localizer picks the
-    final name); when URLs share a hash, each URL's proposed name breaks the tie."""
+    """Record each download with the file it was saved as, when that file holds its bytes: a refetch
+    writes into the recorded file, so a guessed pairing would overwrite another ref's figure."""
     slug_dir = images_dir.parent
-    prior = read_sidecar(slug_dir)
-
-    unclaimed = list(fetched)
     records: list[ImageRecord] = []
-    for path in sorted(images_dir.glob("*")):
-        if not path.is_file() or path.name in preexisting:
+    for digest, fields, local in fetched:
+        if local is None:
             continue
-        digest = file_sha256(path)
-        candidates = [i for i, (h, _f) in enumerate(unclaimed) if h == digest]
-        if not candidates:
-            continue  # from an earlier run, not one of this run's downloads
-        if len(candidates) == 1:
-            pick = candidates[0]
-        else:
-            # The hash cannot separate same-byte downloads, so the proposed name breaks the
-            # tie; unless exactly one proposes this file's name, leave it unrecorded.
-            named = [i for i in candidates if _became(unclaimed[i][1]["source_url"], path)]
-            if len(named) != 1:
-                continue
-            pick = named[0]
-        _digest, fields = unclaimed.pop(pick)
+        path = images_dir / local
+        if not path.is_file() or file_sha256(path) != digest:
+            continue
         records.append(
             {
-                "local": path.name,
+                "local": local,
                 "source_url": fields["source_url"],
                 "etag": fields["etag"],
                 "last_modified": fields["last_modified"],
@@ -200,4 +205,4 @@ def _record_provenance(
                 "bytes": fields["bytes"],
             }
         )
-    write_sidecar(slug_dir, _merge(prior, records))
+    write_sidecar(slug_dir, _merge(read_sidecar(slug_dir), records))

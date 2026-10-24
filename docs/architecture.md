@@ -34,7 +34,7 @@ Three traps drove that design. Publishers park a transparent `data:` spacer in `
 
 Call it before `absolutize_refs`: a promoted `data-src` is usually page-relative. An `<img>` with no usable reference is dropped rather than staged empty, and an already-localized `images/…` ref is never swapped back to a remote rendition.
 
-**Image refs are decoded before fetching.** The localizer matches refs by regex over the raw markup, so `&` arrives as `&amp;`. Fetched escaped, a CDN reads `amp;wid=1199` as an unknown parameter and serves its small default — the Adobe manuals localized at 400px for exactly this reason. `images.py` unescapes at the fetch boundary and keys the sidecar on the decoded URL.
+**Image refs are decoded before fetching.** The localizer matches refs by regex over the raw markup, so `&` arrives as `&amp;`, and a CDN that receives `amp;wid=1199` reads an unknown parameter and serves its small default rendition. `images.decode_ref` decodes numeric references such as `&#38;` (with or without the `;`) and the named ones HTML defines, such as `&amp;`, when they end in `;`, and leaves any other `&` as written. `html.unescape` would also decode a parameter that merely begins with a legacy entity name (`&reg=`, `&section=`), turning it into `®=` or `§ion=`, a URL the image pass cannot send. This covers markdown deliverables and HTML refs written `&amp;…`; on Python 3.12 BeautifulSoup's `html.parser` already decodes a bare name in an HTML source at normalize, so that deliverable holds the decoded text and its image pass still fails on the non-ASCII URL. The sidecar is keyed on the decoded URL, and each record names the file the localizer saved that URL's bytes as, claimed the way the localizer claims it. Decode a ref with `decode_ref`, never `html.unescape`, so the fetch, the local name and the re-localize probe agree.
 
 **Image localization is a decoupled step.** Because normalize leaves asset URLs **absolute**, a no-image deliverable is already complete (pagespeak can fetch those URLs at convert time). Images can be pulled either inline (`ingest --download-images`) or after the fact (`pagespring localize <slug>` → `localize.localize_images`), both downloading into `incoming/<slug>/images/` and re-pointing refs. `localize` is **resumable** — it re-points each image as it lands and checkpoints the file — so a book whose image set exceeds one run's budget is finished by re-running until none remain. `images.py` is a shim over `pw_core.fetch.images`, keeping pagespring's on-disk naming (sanitized basename, plus pw-core's digest of the query when the URL has one, and `-2`/`-3` on collision) and routing downloads through `pagespring.http` so they carry the crawl UA and delay.
 
@@ -49,7 +49,7 @@ Every staged deliverable gets a sibling `incoming/<slug>/manifest.json` (`manife
 ```json
 {
   "schema_version": 8,
-  "pagespring_version": "0.16.0",
+  "pagespring_version": "0.17.0",
   "source_url": "https://docs.tableplus.com/",
   "pattern": "docs_probe",
   "slug": "tableplus",

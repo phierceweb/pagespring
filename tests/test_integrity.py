@@ -67,6 +67,98 @@ def _localized_slug(tmp_path, body=_BODY):
     return slug_dir, doc
 
 
+_MD_SAMPLE = '<h1>Bk</h1><pre><code class="language-markdown">![Logo](images/logo.svg)</code></pre>'
+
+
+def test_an_html_deliverable_has_only_its_tags_as_local_refs():
+    tags = '<img alt="a" src="images/a.png"><svg><image href="images/b.svg"/></svg>'
+
+    assert _integrity.local_image_refs(_MD_SAMPLE, kind="html") == set()
+    assert _integrity.local_image_refs(_MD_SAMPLE, kind="markdown") == {"images/logo.svg"}
+    assert _integrity.local_image_refs(tags, kind="html") == {"images/a.png", "images/b.svg"}
+    assert _integrity.local_image_refs(tags, kind="markdown") == {"images/a.png", "images/b.svg"}
+
+
+@pytest.mark.parametrize("kind", ["html", "markdown"])
+def test_an_image_pass_may_have_rewritten_a_markdown_sample_in_any_kind(tmp_path, kind):
+    """pw-core's localizer rewrites `](…)` wherever it appears, an html code sample included."""
+    slug_dir, _doc = _localized_slug(tmp_path)
+    m = manifest.read_manifest(slug_dir)
+    m["images"], m["kind"] = 0, kind
+
+    assert _integrity.image_pass_ran(slug_dir, m, _MD_SAMPLE) is True
+
+
+def test_an_html_file_whose_only_local_ref_is_a_rewritten_sample_is_unverifiable(tmp_path):
+    slug_dir, _doc = _localized_slug(tmp_path, body=_MD_SAMPLE)
+    m = manifest.read_manifest(slug_dir)
+    m["localized_sha256"], m["images"] = None, 0
+    manifest.write_manifest(slug_dir, m)
+
+    assert _state(slug_dir) == "unverifiable"
+
+
+def test_a_tag_match_ends_at_its_own_closing_bracket():
+    real_then_sample = (
+        '<img src="https://img.example/a.png" alt="x"><code>&lt;img src="images/x.svg"&gt;'
+    )
+    text_then_sample = '<img src="https://img.example/a.png"> see &lt;img src="images/x.svg"&gt;'
+    quoted_gt = '<img alt="a > b" src="images/a.png">'
+    quoted_lt = '<img alt="a<b" src="images/a.png">'
+
+    assert _integrity.local_image_refs(real_then_sample, kind="html") == set()
+    assert _integrity.local_image_refs(text_then_sample, kind="html") == set()
+    assert _integrity.local_image_refs(quoted_gt, kind="html") == {"images/a.png"}
+    assert _integrity.local_image_refs(quoted_lt, kind="html") == {"images/a.png"}
+    assert _integrity.local_image_refs('<img src="Images/A.png">', kind="html") == set()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '<h1>Bk</h1><code>&lt;img src="images/a.png"&gt;</code>',
+        '<video src="images/a.mp4"></video>',
+    ],
+    ids=["escaped-sample", "video"],
+)
+def test_a_file_whose_only_images_text_no_pass_writes_is_damaged(tmp_path, text):
+    """Only a ref an image pass could have written explains a mismatch with no recorded hash."""
+    slug_dir, _doc = _localized_slug(tmp_path, body=text)
+    m = manifest.read_manifest(slug_dir)
+    m["localized_sha256"], m["images"] = None, 0
+    manifest.write_manifest(slug_dir, m)
+
+    assert _state(slug_dir) == "damaged"
+    assert _integrity.image_pass_ran(slug_dir, m, text) is False
+    checks = {f["check"] for f in audit.audit_slug("bk")}
+    assert "sha_mismatch" in checks and "sha_unverified" not in checks
+
+
+def test_an_image_pass_ref_is_a_real_tags_or_a_markdown_target():
+    assert _integrity._has_pass_ref('<IMG ALT="a" SRC="images/a.png">')
+    assert _integrity._has_pass_ref("![a](images/a.png)")
+    assert not _integrity._has_pass_ref('<code>&lt;img src="images/a.png"&gt;</code>')
+    assert not _integrity._has_pass_ref('<video src="images/a.mp4"></video>')
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "<img " * 5000,
+        '<img a="' * 5000,
+        "<image " * 5000,
+        '<img a="x<' * 5000,
+        "<img a='" * 5000,
+        "<img " + "'" * 60 + ">",
+        "<img " + '"' * 60 + ">",
+    ],
+)
+def test_a_run_of_unclosed_tags_is_scanned_in_linear_time(hostile):
+    started = time.monotonic()
+    _integrity.local_image_refs(hostile, kind="markdown")
+    assert time.monotonic() - started < 0.2
+
+
 def _open_pass(slug_dir):
     _integrity.open_for_image_pass(slug_dir, manifest.read_manifest(slug_dir))
 

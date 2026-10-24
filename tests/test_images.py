@@ -1,6 +1,7 @@
 """Optional image localizer — download + re-point refs (mocked fetch)."""
 
 import hashlib
+import re
 import urllib.error
 from email.message import Message
 
@@ -176,6 +177,16 @@ def test_count_remote_images_ignores_localized(tmp_path):
 
 def _meta(etag=None, last_modified=None):
     return {"etag": etag, "last_modified": last_modified}
+
+
+def _refs_by_url(src: str, localized: str) -> dict[str, str]:
+    """Each image line's decoded remote URL in ``src`` → the ref its line holds in ``localized``."""
+    target = re.compile(r"\]\((\S+?)\)")
+    return {
+        images.decode_ref(target.search(a)[1]): target.search(b)[1]
+        for a, b in zip(src.splitlines(), localized.splitlines(), strict=True)
+        if target.search(a)
+    }
 
 
 def test_localize_writes_a_sidecar_with_per_image_provenance(tmp_path, monkeypatch):
@@ -399,6 +410,42 @@ def test_reuse_unchanged_probes_the_decoded_url(tmp_path, monkeypatch):
     assert _image_cache.reuse_unchanged(doc, tmp_path) == 1
     assert probed == ["https://cdn/i.png?a=1&wid=9"]
     assert 'src="images/i.png"' in doc.read_text(encoding="utf-8")
+    assert images.count_remote_images(doc) == 0
+
+
+def test_reuse_matches_a_record_for_a_ref_with_a_bare_legacy_name(tmp_path, monkeypatch):
+    """The sidecar keys on the URL as fetched, and a bare ``&reg=`` was fetched as written."""
+    url = "https://cdn.example/i.png?v=1&reg=us"
+    imgs = tmp_path / "images"
+    imgs.mkdir()
+    (imgs / "i.png").write_bytes(_PNG)
+    images.write_sidecar(
+        tmp_path,
+        [
+            {
+                "local": "i.png",
+                "source_url": url,
+                "etag": '"i1"',
+                "last_modified": None,
+                "sha256": hashlib.sha256(_PNG).hexdigest(),
+                "bytes": len(_PNG),
+            }
+        ],
+    )
+    doc = tmp_path / "d.md"
+    doc.write_text(f"![a]({url})\n", encoding="utf-8")
+
+    probed = []
+
+    def not_modified(u, *, etag, last_modified):
+        probed.append(u)
+        return True
+
+    monkeypatch.setattr(http, "not_modified", not_modified)
+
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 1
+    assert probed == [url]
+    assert "](images/i.png)" in doc.read_text(encoding="utf-8")
     assert images.count_remote_images(doc) == 0
 
 
@@ -652,6 +699,93 @@ def test_entity_escaped_url_is_decoded_before_fetching(monkeypatch):
     assert "&amp;" not in fetcher.fetched[0][1]["source_url"]
 
 
+@pytest.mark.parametrize(
+    ("ref", "decoded"),
+    [
+        ("https://cdn.example/i.png?v=1&reg=us", "https://cdn.example/i.png?v=1&reg=us"),
+        (
+            "https://cdn.example/i.png?a=1&para=2&copy=3&not=4",
+            "https://cdn.example/i.png?a=1&para=2&copy=3&not=4",
+        ),
+        ("https://cdn.example/i.png?a=1&amp;b=2", "https://cdn.example/i.png?a=1&b=2"),
+        (
+            "https://cdn.example/i.png?a=1&#38;b=2&#x26;c=3",
+            "https://cdn.example/i.png?a=1&b=2&c=3",
+        ),
+        ("https://cdn.example/i.png?a=1&b=2", "https://cdn.example/i.png?a=1&b=2"),
+        ("https://cdn.example/i.png?id=1&amp;reg=us", "https://cdn.example/i.png?id=1&reg=us"),
+        ("https://cdn.example/i.png?a=1&copy2;b", "https://cdn.example/i.png?a=1&copy2;b"),
+        ("https://cdn.example/i.png?a=1&notit;b", "https://cdn.example/i.png?a=1&notit;b"),
+        ("https://cdn.example/i.png?a=1&amp;amp;b=2", "https://cdn.example/i.png?a=1&amp;b=2"),
+        (
+            "https://cdn.example/i.png?a=1&section=2&timestamp=3",
+            "https://cdn.example/i.png?a=1&section=2&timestamp=3",
+        ),
+        ("https://cdn.example/i.png?a=1&quote=2", "https://cdn.example/i.png?a=1&quote=2"),
+        ("https://cdn.example/i.png?a=1&#38b=2", "https://cdn.example/i.png?a=1&b=2"),
+        ("https://cdn.example/i.png?a=1&#X26;b=2", "https://cdn.example/i.png?a=1&b=2"),
+        ("https://cdn.example/i.png?a=1&#x26_x=2", "https://cdn.example/i.png?a=1&_x=2"),
+        ("https://cdn.example/i.png?a=1&AMP;b=2", "https://cdn.example/i.png?a=1&b=2"),
+        ("https://cdn.example/i.png?a=&#x2026;&b=&#X2F;", "https://cdn.example/i.png?a=…&b=/"),
+        ("https://cdn.example/i.png?a=1&#0000000038;b=2", "https://cdn.example/i.png?a=1&b=2"),
+        ("https://cdn.example/i.png?t=&frac12;&u=&hellip;", "https://cdn.example/i.png?t=½&u=…"),
+    ],
+)
+def test_decode_ref_decodes_only_terminated_references(ref, decoded):
+    assert images.decode_ref(ref) == decoded
+
+
+@pytest.mark.parametrize(
+    "ref",
+    ["?x=&#" + "9" * 5000 + ";", "?a=1&#00000000038;b=2", "?a=1&#x0000000026;b=2"],
+    ids=["5000-digits", "11-digit-decimal", "10-digit-hex"],
+)
+def test_a_numeric_reference_too_long_to_decode_stays_as_written(ref):
+    assert images.decode_ref(f"https://cdn.example/i.png{ref}") == f"https://cdn.example/i.png{ref}"
+
+
+def test_a_record_keyed_on_an_ascii_decoded_name_is_not_reused(tmp_path, monkeypatch):
+    """A record keyed on ``"e=`` does not match the ref ``&quote=``, so that ref is fetched."""
+    imgs = tmp_path / "images"
+    imgs.mkdir()
+    (imgs / "p.png").write_bytes(_PNG)
+    old = {"local": "p.png", "source_url": 'https://cdn.example/p.png?a=1"e=2', "etag": '"e"'}
+    old |= {"last_modified": None, "sha256": hashlib.sha256(_PNG).hexdigest(), "bytes": len(_PNG)}
+    images.write_sidecar(tmp_path, [old])
+    doc = tmp_path / "d.md"
+    doc.write_text("![a](https://cdn.example/p.png?a=1&quote=2)\n", encoding="utf-8")
+    monkeypatch.setattr(http, "not_modified", lambda *a, **k: True)
+
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 0
+
+
+def test_local_name_decodes_as_the_fetch_does():
+    bare = images.local_name("https://cdn.example/p.png?v=1&reg=us")
+    assert bare == images.local_name("https://cdn.example/p.png?v=1&amp;reg=us")
+    assert images.local_name("https://cdn.example/p.png?a=1&quote=2") != images.local_name(
+        'https://cdn.example/p.png?a=1"e=2'
+    )
+
+
+def test_a_bare_legacy_entity_name_is_fetched_as_written(monkeypatch):
+    """A bare ``&reg=`` is a query parameter in an HTML attribute; ``html.unescape`` reads ``®=``."""
+    url = "https://cdn.example/i.png?v=1&reg=us"
+    seen: list[str] = []
+
+    def fake(u, **kwargs):
+        seen.append(u)
+        return u, b"\x89PNG\r\n\x1a\n", {"etag": None, "last_modified": None}
+
+    monkeypatch.setattr(http, "fetch_bytes_meta", fake)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    fetcher = images._PacedFetcher()
+    fetcher.get_bytes(url)
+
+    assert seen == [url]
+    assert fetcher.fetched[0][1]["source_url"] == url
+
+
 def test_local_names_are_case_stable():
     """On a case-insensitive disk two names differing in case are one file, and a suffixed copy
     strands the other's ref."""
@@ -694,6 +828,60 @@ def test_same_byte_images_differing_only_in_query_are_both_recorded(tmp_path, mo
     recorded = {r["source_url"]: r["local"] for r in images.read_sidecar(tmp_path)}
     assert set(recorded) == {"https://x.com/p.png?v=1", "https://x.com/p.png?v=2"}
     assert len(set(recorded.values())) == 2
+
+
+@pytest.mark.parametrize(
+    ("escaped", "decoded"),
+    [
+        ("&amp;reg=us", "&reg=us"),
+        ("&amp;amp;x=1", "&amp;x=1"),
+        ("&amp;lt;x=1", "&lt;x=1"),
+        ("&reg=us", "&reg=us"),
+    ],
+)
+def test_same_byte_escaped_refs_are_both_recorded(tmp_path, monkeypatch, escaped, decoded):
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"e"')))
+    monkeypatch.setattr(http, "not_modified", lambda *a, **k: True)
+    src = (
+        f"![a](https://cdn.example/p.png?id=1{escaped})\n"
+        f"![b](https://cdn.example/p.png?id=2{escaped})\n"
+    )
+    doc = tmp_path / "d.md"
+    doc.write_text(src, encoding="utf-8")
+
+    images.download_images(doc, tmp_path / "images")
+    localized = doc.read_text(encoding="utf-8")
+
+    recorded = {r["source_url"]: r["local"] for r in images.read_sidecar(tmp_path)}
+    assert set(recorded) == {
+        f"https://cdn.example/p.png?id=1{decoded}",
+        f"https://cdn.example/p.png?id=2{decoded}",
+    }
+    assert _refs_by_url(src, localized) == {u: f"images/{n}" for u, n in recorded.items()}
+    doc.write_text(src, encoding="utf-8")
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 2
+    assert doc.read_text(encoding="utf-8") == localized
+
+
+def test_a_markdown_ref_with_a_bare_legacy_name_is_localized_as_written(tmp_path, monkeypatch):
+    seen: list[str] = []
+
+    def fake(url, **kwargs):
+        seen.append(url)
+        return url, _PNG, _meta(etag='"e"')
+
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    monkeypatch.setattr(http, "fetch_bytes_meta", fake)
+    url = "https://cdn.example/p.png?v=1&section=2&reg=us"
+    doc = tmp_path / "d.md"
+    doc.write_text(f"![a]({url})\n", encoding="utf-8")
+
+    images.download_images(doc, tmp_path / "images")
+
+    assert seen == [url]
+    assert [r["source_url"] for r in images.read_sidecar(tmp_path)] == [url]
+    assert "images/" in doc.read_text(encoding="utf-8")
 
 
 def test_existing_mixed_case_files_are_normalised_before_localize(tmp_path):
@@ -804,21 +992,82 @@ def test_same_byte_extensionless_query_images_are_recorded_and_reused(tmp_path, 
     assert _image_cache.reuse_unchanged(doc, tmp_path) == 2
 
 
-def test_provenance_leaves_an_ambiguous_hash_match_unrecorded(tmp_path, monkeypatch):
-    """Two same-byte downloads proposing the same name leave nothing to break the tie; wrong
-    provenance is worse than none."""
+@pytest.mark.parametrize(
+    "urls",
+    [
+        ("https://x.example/one/img", "https://x.example/two/img"),
+        (
+            "https://a.example/logo.png",
+            "https://b.example/logo.png",
+            "https://c.example/l/logo.png",
+        ),
+    ],
+    ids=["extensionless", "same-basename"],
+)
+@pytest.mark.parametrize("order", [1, -1], ids=["fetch-order", "reversed"])
+def test_same_byte_images_saved_under_suffixed_names_are_recorded_and_reused(
+    tmp_path, monkeypatch, urls, order
+):
+    """Each URL is recorded with the file its own ref points to, so a re-localize changes nothing."""
+    urls = urls[::order]
+    fetched: list[str] = []
+
+    def fake(u, **kwargs):
+        fetched.append(u)
+        return u, _PNG, _meta(etag='"e"')
+
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
-    imgs = tmp_path / "images"
+    monkeypatch.setattr(http, "fetch_bytes_meta", fake)
+    monkeypatch.setattr(http, "not_modified", lambda *a, **k: True)
+    src = "".join(f"![x]({u})\n" for u in urls)
     doc = tmp_path / "d.md"
-    doc.write_text("![a](https://x.com/one/img)\n![b](https://x.com/two/img)\n", encoding="utf-8")
-    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta(etag='"e"')))
+    doc.write_text(src, encoding="utf-8")
 
-    images.download_images(doc, imgs)
+    images.download_images(doc, tmp_path / "images")
+    localized = doc.read_text(encoding="utf-8")
+    names = sorted(p.name for p in (tmp_path / "images").iterdir())
+    recorded = {r["source_url"]: f"images/{r['local']}" for r in images.read_sidecar(tmp_path)}
+    assert recorded == _refs_by_url(src, localized)
 
-    staged = sorted(p.name for p in imgs.glob("*"))
-    assert len(staged) == 2, f"both downloads must land: {staged}"
-    recorded = {r["source_url"] for r in images.read_sidecar(tmp_path)}
-    assert recorded == set(), f"an ambiguous match was attributed anyway: {recorded}"
+    doc.write_text(src, encoding="utf-8")
+    fetched.clear()
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == len(urls)
+    images.download_images(doc, tmp_path / "images")
+    assert fetched == []
+    assert doc.read_text(encoding="utf-8") == localized
+    assert sorted(p.name for p in (tmp_path / "images").iterdir()) == names
+
+
+def test_an_interrupted_pass_never_records_one_url_with_anothers_file(tmp_path, monkeypatch):
+    """A refetch writes into the recorded file, so a cross-paired record would overwrite the figure
+    another ref shows."""
+    a, b = "https://a.example/x.png", "https://b.example/x.png"
+    served = {"https://z.example/z.png": b"\x89PNG\r\n\x1a\nz", a: _PNG, b: _PNG}
+
+    def fake(u, **kwargs):
+        if u == "https://c.example/c.png":
+            raise KeyboardInterrupt
+        return u, served[u], _meta(etag=f'"{len(served[u])}"')
+
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    monkeypatch.setattr(http, "fetch_bytes_meta", fake)
+    src = f"![z](https://z.example/z.png)\n![a]({a})\n![b]({b})\n![c](https://c.example/c.png)\n"
+    doc = tmp_path / "d.md"
+    doc.write_text(src, encoding="utf-8")
+    with pytest.raises(KeyboardInterrupt):
+        images.download_images(doc, tmp_path / "images", checkpoint_every=2)
+
+    served[b] = b"\x89PNG\r\n\x1a\nB changed upstream"
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: u != b)
+    _image_cache.reuse_unchanged(doc, tmp_path)
+    served["https://c.example/c.png"] = b"\x89PNG\r\n\x1a\nc"
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, served[u], _meta()))
+    images.download_images(doc, tmp_path / "images")
+    _image_cache.prune_orphans(doc, tmp_path)
+
+    shown = _refs_by_url(src, doc.read_text(encoding="utf-8"))
+    assert (tmp_path / shown[a]).read_bytes() == _PNG
+    assert (tmp_path / shown[b]).read_bytes() == served[b]
 
 
 def test_a_killed_reuse_pass_leaves_the_deliverable_intact(tmp_path, monkeypatch):

@@ -16,7 +16,26 @@ log = get_logger(__name__)
 
 Integrity = Literal["intact", "interrupted", "damaged", "unverifiable"]
 
-LOCAL_IMG_RE = re.compile(r'(?:src=["\']|<image\b[^>]*?\bhref=["\']|\]\()(images/[^"\')\s]+)')
+# A tag's attributes up to its own `>` (a quoted value may hold `>` or `<`). Stopping at the next
+# unquoted `<` keeps a run of unclosed tags linear.
+_ATTRS = r"""(?:[^<>"']|"[^"]*"|'[^']*')*?"""
+_TAG_REF = rf"""(?i:<img\b{_ATTRS}(?<![\w-])src=|<image\b{_ATTRS}(?<![\w-])href=)["']"""
+_LOCAL_PATH = r'(images/[^"\')\s]+)'
+_HTML_IMG_RE = re.compile(rf"{_TAG_REF}{_LOCAL_PATH}")
+_ANY_IMG_RE = re.compile(rf"(?:{_TAG_REF}|\]\(){_LOCAL_PATH}")
+
+
+def local_image_refs(doc_text: str, *, kind: str) -> set[str]:
+    """The ``images/…`` paths a deliverable renders: real tags in html (where ``](`` is only ever a
+    code sample's text), tags and ``](`` in any other kind."""
+    pattern = _HTML_IMG_RE if kind == "html" else _ANY_IMG_RE
+    return set(pattern.findall(doc_text))
+
+
+def _has_pass_ref(doc_text: str) -> bool:
+    # pw-core's localizer rewrites `](…)` in any kind, an html code sample included.
+    return bool(_ANY_IMG_RE.search(doc_text))
+
 
 # What an image pass writes: a ref's target (pw-core's retarget) and the case of an
 # images/ name (normalize_case).
@@ -39,9 +58,7 @@ def usable(m: object) -> TypeGuard[manifest.Manifest]:
 def image_pass_ran(slug_dir: Path, m: manifest.Manifest, doc_text: str) -> bool:
     """Whether an image pass may have re-pointed refs: images>0 (0 after a kill mid-pass), or
     images/ exists and the file still carries a local ref (a re-ingest keeps the dir)."""
-    return m.get("images", 0) > 0 or (
-        (slug_dir / "images").is_dir() and bool(LOCAL_IMG_RE.search(doc_text))
-    )
+    return m.get("images", 0) > 0 or ((slug_dir / "images").is_dir() and _has_pass_ref(doc_text))
 
 
 def _pass_digest(path: Path) -> str:
@@ -71,7 +88,7 @@ def integrity(slug_dir: Path, m: manifest.Manifest) -> Integrity:
     # Only re-pointed refs can explain the mismatch; a file without any is not the one
     # an image pass left.
     doc_text = path.read_text(encoding="utf-8", errors="replace")
-    return "unverifiable" if LOCAL_IMG_RE.search(doc_text) else "damaged"
+    return "unverifiable" if _has_pass_ref(doc_text) else "damaged"
 
 
 def deliverable_intact(slug_dir: Path, m: manifest.Manifest) -> bool:
