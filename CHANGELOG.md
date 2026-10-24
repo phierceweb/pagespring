@@ -4,6 +4,22 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [Unreleased]
+
+### Changed
+
+- **`bin/check-framework` refuses a bare `BeautifulSoup(...)` call in the package**; patterns
+  parse HTML through `pagespring.patterns._soup.parse_html`.
+
+### Fixed
+
+- **An HTML source's attribute values read as written on Python 3.12**: a URL whose query has a
+  parameter beginning with a legacy HTML entity name (`&reg=`, `&section=`, `&copy2;`) is no longer
+  decoded to `®=`, `§ion=`, `©2;` when a pattern parses the page, so its image pass fetches the
+  URL the source wrote instead of failing with a `UnicodeEncodeError`, and a link keeps its target.
+  Every Python now reads an attribute as 3.13+ and the HTML spec do. A manual staged on 3.12 picks
+  this up when it is re-ingested, or renormalized from a kept `raw/`.
+
 ## [0.17.0] — 2026-10-23
 
 ### Added

@@ -24,6 +24,7 @@ from pagespring.patterns._site import (
     generator_meta,
     strip_scripts,
 )
+from pagespring.patterns._soup import parse_html
 from pagespring.patterns._sphinx_order import Siblings, reading_order
 
 log = get_logger(__name__)
@@ -79,7 +80,7 @@ def _content_root(soup: BeautifulSoup) -> Tag | None:
 
 
 def _extract(html: str, page_url: str) -> str | None:
-    root = _content_root(BeautifulSoup(html, "html.parser"))
+    root = _content_root(parse_html(html))
     if root is None:
         return None
     for el in root.select("a.headerlink"):
@@ -167,7 +168,7 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
         else:
             lost += 1
             log.warning("sphinx.no_content_root", url=url)
-        soup = BeautifulSoup(body, "html.parser")
+        soup = parse_html(body)
         for sib in _toc_siblings(soup, final):
             if tocs.get(sib) is None:
                 tocs[sib] = None if url in sib[1] or final in sib[1] else final

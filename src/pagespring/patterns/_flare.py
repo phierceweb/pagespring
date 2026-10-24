@@ -8,7 +8,6 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -20,6 +19,7 @@ from pagespring.base import AcquireResult
 from pagespring.patterns._flare_page import extract
 from pagespring.patterns._flare_toc import TocEntry, read_chunk, read_toc, toc_entries
 from pagespring.patterns._site import names_a_file, raw_stem, seat_headings
+from pagespring.patterns._soup import parse_html
 from pagespring.patterns._toc_stage import Section, TopicLost, stage_toc
 
 log = get_logger(__name__)
@@ -41,7 +41,7 @@ _GENERIC_NAMES = {
 
 
 def _html_tag(page: str) -> Tag | None:
-    found = BeautifulSoup(page, "html.parser").find("html")
+    found = parse_html(page).find("html")
     return found if isinstance(found, Tag) else None
 
 

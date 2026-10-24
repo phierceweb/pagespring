@@ -64,12 +64,19 @@ BANNED_CALLS = [
         "pw_foundation.utils.io.atomic_write_text / _json / _bytes",
         "the temp-file-then-rename dance is already written and tested",
     ),
+    (
+        "html-parse",
+        re.compile(r"\bBeautifulSoup\s*\("),
+        "pagespring.patterns._soup.parse_html",
+        "3.12's html.parser decodes &reg= in an attribute; 3.13+ and the HTML spec do not",
+    ),
 ]
 
 # {(rule, path relative to SRC): why it does not apply}. The key is the whole
 # path — two files can share a basename.
 EXEMPT: dict[tuple[str, str], str] = {
     ("print", "cli.py"): "the CLI entry point is where user-facing output belongs",
+    ("html-parse", "patterns/_soup.py"): "parse_html, which every other parse goes through",
 }
 
 

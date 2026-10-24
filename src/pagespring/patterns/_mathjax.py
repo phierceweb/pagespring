@@ -9,6 +9,8 @@ from collections.abc import Iterator
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
+from pagespring.patterns._soup import parse_html
+
 _TOKENS = frozenset({"mi", "mn", "mo", "mtext", "ms"})
 # MathML presentation elements; any other name a group carries is page data.
 _ELEMENTS = _TOKENS | frozenset(
@@ -56,7 +58,7 @@ def rebuild_math(root: Tag) -> None:
         top = box.select_one("[data-mml-node=math]")
         if not isinstance(top, Tag):
             continue
-        math = _element(BeautifulSoup("", "html.parser"), top)
+        math = _element(parse_html(""), top)
         if box.get("display") == "true":
             math["display"] = "block"
         box.replace_with(math)

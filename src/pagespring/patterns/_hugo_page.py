@@ -10,6 +10,7 @@ from bs4.element import Tag
 
 from pagespring.patterns._nav_order import page_key
 from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
+from pagespring.patterns._soup import parse_html
 
 # Most specific first: a Docsy site layout may repeat the title and add a TOC
 # around td-content, inside <main>.
@@ -83,7 +84,7 @@ def _shows_nothing(root: Tag) -> bool:
 
 def is_empty(fragment: str) -> bool:
     """True when ``fragment`` shows a reader nothing: no text and no media."""
-    return _shows_nothing(BeautifulSoup(fragment, "html.parser"))
+    return _shows_nothing(parse_html(fragment))
 
 
 def _entry_target(article: Tag, page_url: str) -> str | None:
@@ -104,7 +105,7 @@ def _entry_target(article: Tag, page_url: str) -> str | None:
 def listed_pages(fragment: str, page_url: str) -> set[str]:
     """The page keys a list page's entries link to, or an empty set when the
     fragment holds anything besides those entries."""
-    root = BeautifulSoup(fragment, "html.parser")
+    root = parse_html(fragment)
     targets: set[str] = set()
     for article in root.find_all("article"):
         if article.find_parent("article") is not None:

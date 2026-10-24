@@ -8,7 +8,6 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -16,6 +15,7 @@ from pw_foundation.log import get_logger
 from pagespring.base import AcquireResult
 from pagespring.patterns import _readable, _sitemap
 from pagespring.patterns._site import slug_from_host
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -27,7 +27,7 @@ def _site_name(page: str | None) -> str | None:
     """The site's name as the page declares it (``og:site_name``), or None."""
     if page is None:
         return None
-    meta = BeautifulSoup(page, "html.parser").find("meta", attrs={"property": "og:site_name"})
+    meta = parse_html(page).find("meta", attrs={"property": "og:site_name"})
     content = meta.get("content") if isinstance(meta, Tag) else None
     return content.strip() or None if isinstance(content, str) else None
 

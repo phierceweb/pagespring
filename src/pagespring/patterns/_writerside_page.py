@@ -15,6 +15,7 @@ from pw_foundation.log import get_logger
 from pagespring import http
 from pagespring.patterns._mathjax import rebuild_math
 from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -124,7 +125,7 @@ def _rebuild_client_blocks(soup: BeautifulSoup, root: Tag) -> None:
             continue
         box = _tag(soup, "div", **{"class": "tldr"})
         for part in parts if isinstance(parts, list) else []:
-            box.append(BeautifulSoup(str(part), "html.parser"))
+            box.append(parse_html(str(part)))
         micro.replace_with(box)
     for player in root.select("div.video-player"):
         obj = player.find("object")
@@ -252,7 +253,7 @@ def _section_page(soup: BeautifulSoup, page_url: str, fallback_title: str) -> Ta
 def extract(page: str, page_url: str, *, title: str, labels: LabelNames) -> Tag | None:
     """The topic as a cleaned, absolutized ``<article>``; None when the page is
     neither an article nor a starting page."""
-    soup = BeautifulSoup(page, "html.parser")
+    soup = parse_html(page)
     article = soup.select_one("article.article")
     if isinstance(article, Tag):
         _clean(soup, article, page_url, labels)

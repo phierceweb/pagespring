@@ -7,7 +7,6 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -21,6 +20,7 @@ from pagespring.patterns._site import (
     names_a_file,
     strip_scripts,
 )
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -76,7 +76,7 @@ def _topic_ids(toc_js: str) -> list[str]:
 
 
 def _extract(page_html: str, page_url: str) -> str | None:
-    soup = BeautifulSoup(page_html, "html.parser")
+    soup = parse_html(page_html)
     node = soup.find(id=_CONTENT_ID)
     if not isinstance(node, Tag):
         return None

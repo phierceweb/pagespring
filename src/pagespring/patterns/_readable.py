@@ -3,12 +3,12 @@ it to what a reader sees, with tab labels, code text and MathML kept."""
 
 from __future__ import annotations
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from pagespring.patterns._mathjax import rebuild_math
 from pagespring.patterns._shiki import flatten_shiki
 from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
+from pagespring.patterns._soup import parse_html
 
 _CHROME_CSS = "nav, footer, [role=navigation], [role=search], [role=contentinfo]"
 _UNSEEN_CSS = "link, template, .sr-only, .visually-hidden, .screen-reader-text"
@@ -130,7 +130,7 @@ def _line_text(line: Tag) -> str:
 def _label_tab_panels(root: Tag) -> None:
     """Show every tab panel under its tab's label; the strip goes only once every tab labels a
     panel, since otherwise it holds the only copy of some labels."""
-    factory = BeautifulSoup("", "html.parser")
+    factory = parse_html("")
     used: set[int] = set()
     for panel in root.select('[role="tabpanel"]'):
         if panel.has_attr("hidden"):
@@ -167,7 +167,7 @@ def _tab_for(root: Tag, panel: Tag) -> Tag | None:
 
 def extract_main(html: str, page_url: str) -> str | None:
     """The page's main content without site chrome, cleaned; None when it has no text."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     for el in soup.select(_CHROME_CSS):
         if not el.decomposed:
             el.decompose()

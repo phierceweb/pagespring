@@ -29,6 +29,10 @@ BREACHES = [
         "import json\n\n\ndef f(p, o):\n    p.write_text(json.dumps(o, indent=2) + '\\n')\n",
         "json-write_text",
     ),
+    (
+        "from bs4 import BeautifulSoup\n\n\ndef f(m):\n    return BeautifulSoup(m, 'html.parser')\n",
+        "BeautifulSoup",
+    ),
 ]
 
 

@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -24,6 +23,7 @@ from pagespring.patterns._site import (
     strip_scripts,
     toc_heading,
 )
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -137,7 +137,7 @@ def _strip_query(root: Tag) -> None:
 
 
 def _extract(page_html: str, page_url: str, depth: int) -> str | None:
-    soup = BeautifulSoup(page_html, "html.parser")
+    soup = parse_html(page_html)
     node = soup.select_one(_CONTENT_CSS)
     if not isinstance(node, Tag):
         return None

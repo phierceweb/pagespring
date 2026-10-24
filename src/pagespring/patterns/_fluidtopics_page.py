@@ -22,6 +22,7 @@ from pagespring.patterns._site import (
     strip_scripts,
     toc_heading,
 )
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -103,7 +104,7 @@ def clean_topic(
     bundle: ImageBundle,
 ) -> BeautifulSoup | None:
     """The topic headed by its TOC ``title`` at ``depth``; None when its content is empty."""
-    soup = BeautifulSoup(fragment, "html.parser")
+    soup = parse_html(fragment)
     strip_scripts(soup)
     for hidden in soup.select(".u-sr-only"):
         hidden.decompose()
@@ -116,5 +117,5 @@ def clean_topic(
     # Again for a lazy or srcset winner flatten promoted; bundle refs stay relative for staging.
     absolutize_refs(soup, page_url, keep=(f"{IMAGES_DIR}/",))
     seat_headings(soup, depth=depth + 1, name="")
-    soup.insert(0, BeautifulSoup(toc_heading(depth, title), "html.parser"))
+    soup.insert(0, parse_html(toc_heading(depth, title)))
     return soup

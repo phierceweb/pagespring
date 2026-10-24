@@ -29,6 +29,7 @@ from pagespring.patterns._site import (
     seat_headings,
     strip_scripts,
 )
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -142,7 +143,7 @@ def _clean(node: Tag, page_url: str) -> None:
 
 def _print_chapters(html: str) -> list[Tag] | None:
     """The print page's ``<main>`` cut at its page-break divs, one node per chapter."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     main = soup.find("main")
     if not isinstance(main, Tag):
         return None
@@ -210,7 +211,7 @@ def _crawl(
             lost += 1
             log.warning("mdbook.left_book", url=url, root=root)
             continue
-        main = BeautifulSoup(body, "html.parser").find("main")
+        main = parse_html(body).find("main")
         if not isinstance(main, Tag):
             lost += 1
             log.warning("mdbook.no_main", url=url)
@@ -231,13 +232,13 @@ def _crawl(
 def acquire(url: str, workdir: Path, *, slug: str, title: str | None) -> AcquireResult:
     entry_url, entry = http.fetch_text(_seed(url))
     root = book_root(entry_url, entry)
-    soup = BeautifulSoup(entry, "html.parser")
+    soup = parse_html(entry)
     chapters = _toc(soup, entry_url, root)
     if not chapters:
         http.polite_sleep()
         toc = _optional(f"{root}toc.html")
         if toc is not None:
-            chapters = _toc(BeautifulSoup(toc[1], "html.parser"), toc[0], root)
+            chapters = _toc(parse_html(toc[1]), toc[0], root)
     http.polite_sleep()
     printed = _optional(f"{root}print.html")
     print_page = printed if printed is not None and is_mdbook(printed[1]) else None

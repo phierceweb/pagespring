@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urldefrag, urljoin, urlparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -19,6 +18,7 @@ from pw_foundation.utils.slugify import slugify
 from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.patterns._site import names_a_file, raw_stem
+from pagespring.patterns._soup import parse_html
 from pagespring.patterns._toc_stage import Section, TopicLost, stage_toc
 from pagespring.patterns._writerside_page import LabelNames, extract, shift_headings
 
@@ -39,7 +39,7 @@ class _Entry:
 def is_writerside(page: str) -> bool:
     """True when the page carries the help app's own hooks: the in-page TOC data
     block and the template the client renders into."""
-    soup = BeautifulSoup(page, "html.parser")
+    soup = parse_html(page)
     body = soup.body
     return (
         soup.find("script", id="virtual-toc-data") is not None

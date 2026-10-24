@@ -9,17 +9,16 @@ import urllib.error
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-from bs4 import BeautifulSoup
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.patterns._site import absolutize_refs, flatten_responsive_images
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
-_PARSER = "html.parser"
 _ARTICLE_RE = re.compile(r"/[a-z]{2}-[a-z]{2}/office/[A-Za-z0-9._-]+")
 _CHROME_RE = re.compile(
     "feedback|wasThisHelpful|articleExperience|supExternalSurvey|supLeftNav|leftNav"
@@ -38,7 +37,7 @@ _MAX_FAILED_COOLDOWNS = 3  # consecutive failed retries → sustained block; the
 
 
 def _title_and_body(page_html: str, page_url: str) -> tuple[str | None, str | None]:
-    soup = BeautifulSoup(page_html, _PARSER)
+    soup = parse_html(page_html)
     body = (
         soup.find(class_="learnArticleContent")
         or soup.find(id="ocMainContent")

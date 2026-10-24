@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -20,6 +19,7 @@ from pagespring import http
 from pagespring.config import cfg
 from pagespring.liveness import ProgressWatchdog
 from pagespring.patterns._site import names_a_file, raw_stem
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -73,7 +73,7 @@ def _locs(root: ET.Element, entry: str) -> list[str]:
 
 def sitemap_link(html: str, page_url: str) -> str | None:
     """The sitemap a page declares with ``<link rel="sitemap">``, absolute, or None."""
-    link = BeautifulSoup(html, "html.parser").find("link", rel="sitemap")
+    link = parse_html(html).find("link", rel="sitemap")
     href = link.get("href") if isinstance(link, Tag) else None
     return urljoin(page_url, href) if isinstance(href, str) and href.strip() else None
 

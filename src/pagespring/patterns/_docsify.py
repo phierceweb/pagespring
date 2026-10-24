@@ -8,7 +8,6 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
 from pw_foundation.log import get_logger
 from pw_foundation.utils.hashing import content_hash
 
@@ -36,6 +35,7 @@ from pagespring.patterns._docsify_routes import (
 )
 from pagespring.patterns._md_code import outside_code
 from pagespring.patterns._site import raw_stem
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -52,7 +52,7 @@ _TITLE_RE = re.compile(r"^ {0,3}#[ \t]|<h1\b|^[^\n]+\n=+[ \t]*$", re.I | re.M)
 
 def is_docsify(html: str) -> bool:
     """A script loading the Docsify runtime (a plugin alone is not the runtime)."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     for script in soup.find_all("script", src=True):
         src = script.get("src")
         if isinstance(src, str) and _RUNTIME_RE.search(urlparse(src).path):

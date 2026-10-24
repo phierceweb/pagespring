@@ -13,10 +13,10 @@ from pw_foundation.log import get_logger
 from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.patterns._site import flatten_responsive_images
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
-_PARSER = "html.parser"
 _MAX = 1500  # page cap — the largest OpenStax books run a few hundred pages
 _TITLE_SUFFIX = " | OpenStax"
 
@@ -93,7 +93,7 @@ def _walk_to_first(seed: str) -> tuple[str, str]:
     _f, html = http.fetch_text(url)
     for _ in range(_MAX):
         seen.add(url)
-        prev = _nav_href(BeautifulSoup(html, _PARSER), "Previous Page")
+        prev = _nav_href(parse_html(html), "Previous Page")
         if not prev:
             break
         nxt = urljoin(url, prev)
@@ -145,7 +145,7 @@ class OpenStaxPattern:
                     truncated = True
                     log.warning("openstax.fetch_error", url=cur, error=str(exc))
                     break
-            soup = BeautifulSoup(html, _PARSER)
+            soup = parse_html(html)
             if i == 0:
                 book_title = _book_title(soup)
             content = _extract(soup, cur)

@@ -26,6 +26,7 @@ from pagespring.patterns._site import (
     raw_stem,
     strip_scripts,
 )
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -48,7 +49,7 @@ def is_vitepress(html: str) -> bool:
     """Generator meta, or the default theme's appearance script."""
     if "vitepress" in generator_meta(html):
         return True
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     return any(_THEME_KEY in script.get_text() for script in soup.find_all("script"))
 
 
@@ -85,7 +86,7 @@ def _sidebar(soup: BeautifulSoup, page_url: str, host: str) -> list[str] | None:
 
 def _label(block: Tag, text: str) -> None:
     """Put ``text`` in front of ``block`` as a bold paragraph."""
-    para = BeautifulSoup("<p><strong></strong></p>", "html.parser").p
+    para = parse_html("<p><strong></strong></p>").p
     if para is not None and para.strong is not None:
         para.strong.string = text
         block.insert_before(para)
@@ -135,7 +136,7 @@ def _entry(url: str) -> tuple[str, BeautifulSoup, list[str]]:
     """The first page with a sidebar: the entry itself, or its hero's first action."""
     final, body = http.fetch_text(url)
     host = urlparse(final).netloc
-    soup = BeautifulSoup(body, "html.parser")
+    soup = parse_html(body)
     links = _sidebar(soup, final, host)
     if links is None:
         hero = _same_host_pages(soup.select(_HERO_LINKS_CSS), final, host)
@@ -143,7 +144,7 @@ def _entry(url: str) -> tuple[str, BeautifulSoup, list[str]]:
             log.info("vitepress.follow_hero", entry=final, to=hero[0])
             http.polite_sleep()
             final, body = http.fetch_text(hero[0])
-            soup = BeautifulSoup(body, "html.parser")
+            soup = parse_html(body)
             links = _sidebar(soup, final, host)
     if links is None:
         raise InvalidInputError(
@@ -167,7 +168,7 @@ def _section(url: str, host: str) -> tuple[str, BeautifulSoup, list[str]] | None
     except Exception as exc:
         log.warning("vitepress.nav_fetch_error", url=url, error=str(exc))
         return None
-    soup = BeautifulSoup(body, "html.parser")
+    soup = parse_html(body)
     links = _sidebar(soup, final, host) if urlparse(final).netloc == host else None
     if links is None:
         log.info("vitepress.nav_without_sidebar", url=final)
@@ -239,7 +240,7 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
             if not is_vitepress(body):
                 log.info("vitepress.not_vitepress", url=final)
                 continue
-            soup = BeautifulSoup(body, "html.parser")
+            soup = parse_html(body)
         enqueue(_sidebar(soup, final, host) or [])
         fragment = _extract(soup, final)
         if fragment is None:

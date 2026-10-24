@@ -8,7 +8,6 @@ import json
 import re
 from pathlib import Path
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -22,6 +21,7 @@ from pagespring.patterns._site import (
     generator_meta,
     strip_scripts,
 )
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -48,7 +48,7 @@ def rest_endpoint(html: str) -> str | None:
 
 
 def _clean(rendered: str, page_url: str) -> str:
-    soup = BeautifulSoup(rendered, "html.parser")
+    soup = parse_html(rendered)
     for junk in soup.select(_CHROME_CSS):
         junk.decompose()
     strip_scripts(soup)
@@ -81,7 +81,7 @@ def acquire(url: str, workdir: Path, *, slug: str, title: str | None) -> Acquire
     # After cleaning, not before: a nav-only body passes a raw check and then
     # cleans to nothing.
     cleaned = _clean(rendered, url)
-    if not BeautifulSoup(cleaned, "html.parser").get_text(strip=True):
+    if not parse_html(cleaned).get_text(strip=True):
         raise InvalidInputError(
             f"{endpoint} has no content once navigation and empty blocks are "
             "removed — the post is a stub or the REST endpoint is wrong."

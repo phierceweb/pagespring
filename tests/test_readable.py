@@ -1,8 +1,11 @@
 """_readable — main-content extraction for crawled docs pages (pure, no network)."""
 
+import re
+
 import pytest
 from bs4 import BeautifulSoup
 
+from pagespring import images
 from pagespring.patterns import _readable
 
 
@@ -177,3 +180,16 @@ def test_a_button_heading_a_disclosure_keeps_its_text_and_controls_go():
     )
     assert '<h2 class="accordion-header">How do I reset?</h2>' in out
     assert "<button" not in out and "Copy" not in out
+
+
+def test_an_image_query_parameter_named_like_an_entity_survives_the_parse():
+    """The image pass reads refs from the staged text; 3.12's parser turned ``&reg=`` into ``®=``."""
+    url = "https://cdn.test/shot.png?w=1&reg=us&section=2&copy2;=x&amp;h=3"
+    html = f"<main><p>Body text.</p><img src='{url}'></main>"
+    out = _readable.extract_main(html, "https://docs.test/page/")
+    assert out is not None
+    src = re.search(r'src="([^"]*)"', out)
+    assert src is not None
+    assert (
+        images.decode_ref(src[1]) == "https://cdn.test/shot.png?w=1&reg=us&section=2&copy2;=x&h=3"
+    )

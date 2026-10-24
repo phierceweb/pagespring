@@ -10,8 +10,8 @@ from pathlib import Path
 from bs4 import BeautifulSoup, Tag
 
 from pagespring.patterns._site import flatten_responsive_images, strip_scripts
+from pagespring.patterns._soup import parse_html
 
-_PARSER = "html.parser"
 _SLUG_RE = re.compile(r"/guide/[^/]+/([^/]+)/")
 _GUIDE_RE = re.compile(r"/guide/([^/]+)/")
 _SKIP_SLUGS = {"welcome", "aside"}
@@ -32,7 +32,7 @@ def toc_topic_slugs(welcome: Path, guide_slug: str) -> set[str]:
     (``--slug`` renames the deliverable, not the guide)."""
     if not welcome.exists():
         return set()
-    soup = BeautifulSoup(welcome.read_text(encoding="utf-8", errors="ignore"), _PARSER)
+    soup = parse_html(welcome.read_text(encoding="utf-8", errors="ignore"))
     container = soup.find(id="modal-toc-container")
     if not isinstance(container, Tag):
         return set()
@@ -52,7 +52,7 @@ def toc_topic_slugs(welcome: Path, guide_slug: str) -> set[str]:
 def app_title(slug: str, welcome: Path) -> str:
     """Guide title from welcome.html's hero <h1>; fallback to the slug."""
     if welcome.exists():
-        soup = BeautifulSoup(welcome.read_text(encoding="utf-8", errors="ignore"), _PARSER)
+        soup = parse_html(welcome.read_text(encoding="utf-8", errors="ignore"))
         h1 = soup.find("h1")
         if h1 and h1.get_text(strip=True):
             return h1.get_text(" ", strip=True).replace("\xa0", " ")
@@ -62,7 +62,7 @@ def app_title(slug: str, welcome: Path) -> str:
 def toc_items(welcome: Path, files_by_slug: dict[str, Path]) -> list[tuple[str, str, int]]:
     """Walk welcome's TOC tree -> ordered ('group', name, level) /
     ('topic', slug, level) items. level = min(2 + depth, 6) (app title is H1)."""
-    soup = BeautifulSoup(welcome.read_text(encoding="utf-8", errors="ignore"), _PARSER)
+    soup = parse_html(welcome.read_text(encoding="utf-8", errors="ignore"))
     container = soup.find(id="modal-toc-container")
     root_ul = container.find("ul", class_="toc") if container else None
     items: list[tuple[str, str, int]] = []
@@ -124,7 +124,7 @@ def _tidy_see_also(soup: BeautifulSoup, root: Tag) -> None:
 def extract_body(page_html: str, target_level: int) -> str | None:
     """Inner HTML of #article-section with headings shifted so its title sits at
     ``target_level``. Drops the topic icon. None if there's no article body."""
-    soup = BeautifulSoup(page_html, _PARSER)
+    soup = parse_html(page_html)
     section = soup.find(id="article-section")
     if section is None:
         return None
