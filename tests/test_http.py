@@ -19,7 +19,9 @@ from pagespring import http
 URL = "https://docs.example.com/manual"
 _ETAG = '"abc123"'
 _LAST_MODIFIED = "Sat, 18 Jul 2026 10:00:00 GMT"
-_TLS_OFF_ENV_VARS = ["PW_VERIFY_TLS", "PF_VERIFY_TLS", "URL_CHECK_VERIFY_TLS"]
+_TLS_OFF_ENV_VARS = ["PW_VERIFY_TLS", "URL_CHECK_VERIFY_TLS"]
+# Deprecated spellings the framework may still honour; immunity must hold whether or not it does.
+_DEPRECATED_TLS_OFF_ENV_VARS = ["PF_VERIFY_TLS"]
 
 
 @pytest.fixture(autouse=True)
@@ -239,7 +241,8 @@ class TestTlsVerification:
         monkeypatch.setenv(env_var, "0")
         assert verify_tls() is False
 
-    @pytest.mark.parametrize("env_var", _TLS_OFF_ENV_VARS)
+    @pytest.mark.filterwarnings("ignore:PF_VERIFY_TLS is deprecated:DeprecationWarning")
+    @pytest.mark.parametrize("env_var", [*_TLS_OFF_ENV_VARS, *_DEPRECATED_TLS_OFF_ENV_VARS])
     def test_off_switch_cannot_disable_certificate_verification(self, seam, env_var, monkeypatch):
         """The fetch core's TLS switch is process-wide; one set for another consumer
         must not turn verification off for pagespring's fetches."""
