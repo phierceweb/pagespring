@@ -43,16 +43,19 @@ And hold the change to these standards:
   `pagespring.http` — they never hit the network.
 - **Patterns get a live verification.** A green mocked suite proves the
   transform logic, not the source's current shape — before calling a pattern
-  done, run a real `ingest` and read the deliverable in `incoming/`
-  (see [`.ai/rules/pattern-verification.md`](.ai/rules/pattern-verification.md)).
+  done, run a real `ingest` and read the deliverable in `incoming/`. Check the
+  printed `pages:` count for a silently truncated crawl, and look for page
+  chrome leaking in, a hub that lists only part of its catalog, and a host
+  rate-limiting pages away.
 - **Docs travel with code.** A behavior change is incomplete without the
-  matching `docs/*.md` update — see [`.ai/rules/docs-sync.md`](.ai/rules/docs-sync.md).
+  matching `docs/*.md` update.
 - **File-size gate.** Python files over the hard limit fail the build; split by
   concern instead of growing a monolith.
 
 ## Coding conventions
 
-The full set lives in [`.ai/rules/`](.ai/rules/). The essentials:
+`bin/setup` installs the framework's full rule set into `.ai/rules/`
+(gitignored, so it exists only in a set-up checkout). The essentials:
 
 - Modern Python 3.12+ syntax — `X | None`, lowercase `dict`/`list`/`tuple`.
 - Type hints on every public signature; Google-style docstrings on public APIs.
@@ -60,6 +63,8 @@ The full set lives in [`.ai/rules/`](.ai/rules/). The essentials:
   `print` outside CLI entry points.
 - Polite fetching: identifying UA, `polite_sleep()` between crawl requests,
   crawl caps with a `log.warning` when they truncate.
+- Parse HTML with `pagespring.patterns._soup.parse_html`, never a bare
+  `BeautifulSoup(...)`, so attribute values read the same on every Python.
 
 ## Versioning
 
