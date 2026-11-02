@@ -504,7 +504,45 @@ def test_reuse_unchanged_keeps_the_cached_image_when_its_source_is_unreachable(
 
     assert (tmp_path / "images" / "fig.png").read_bytes() == _PNG
     assert images.read_sidecar(tmp_path) == [rec]
-    assert images.count_remote_images(doc) == 1  # still pending, so prune stays off
+    assert images.count_remote_images(doc) == 1  # still pending, so a later pass retries it
+
+
+@pytest.mark.parametrize("code", [404, 410])
+def test_reuse_unchanged_points_at_the_cached_image_when_its_source_is_gone(
+    tmp_path, monkeypatch, code
+):
+    """A ref whose source is gone for good would otherwise stay remote on every pass."""
+    doc, rec = _cached(tmp_path, "fig.png", "https://x.com/fig.png", _PNG)
+
+    def gone(url, **kwargs):
+        raise urllib.error.HTTPError(url, code, "gone", Message(), None)
+
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
+    monkeypatch.setattr(http, "fetch_bytes_meta", gone)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 1
+
+    assert (tmp_path / "images" / "fig.png").read_bytes() == _PNG
+    assert "](images/fig.png)" in doc.read_text(encoding="utf-8")
+    assert images.read_sidecar(tmp_path) == [rec]
+
+
+@pytest.mark.parametrize("code", [403, 429, 500, 503])
+def test_reuse_unchanged_leaves_a_ref_remote_when_its_source_may_come_back(
+    tmp_path, monkeypatch, code
+):
+    doc, _rec = _cached(tmp_path, "fig.png", "https://x.com/fig.png", _PNG)
+
+    def failing(url, **kwargs):
+        raise urllib.error.HTTPError(url, code, "nope", Message(), None)
+
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
+    monkeypatch.setattr(http, "fetch_bytes_meta", failing)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 0
+    assert images.count_remote_images(doc) == 1
 
 
 def test_reuse_unchanged_keeps_the_cached_image_when_a_page_comes_back(tmp_path, monkeypatch):
@@ -647,17 +685,54 @@ def test_prune_orphans_deletes_unreferenced_files_and_records(tmp_path):
     assert [r["local"] for r in images.read_sidecar(tmp_path)] == ["used.png"]
 
 
-def test_prune_orphans_refuses_while_remote_refs_remain(tmp_path):
-    """Mid-localize the refs are still remote, so every local file looks unreferenced.
-    Pruning then would delete the whole image cache."""
+def _record(local, url):
+    return {
+        "local": local,
+        "source_url": url,
+        "etag": None,
+        "last_modified": None,
+        "sha256": "s",
+        "bytes": 1,
+    }
+
+
+def test_prune_orphans_keeps_only_the_files_a_remote_ref_could_still_settle_on(tmp_path):
+    """A re-ingest stages every ref remote again: what the sidecar records for a remote URL stays,
+    while a file merely named after one goes, since the localizer never reuses it."""
     imgs = tmp_path / "images"
     imgs.mkdir()
-    (imgs / "a.png").write_bytes(_PNG)
+    for name in ("a.png", "rec.png", "b.png", "b-2.png", "c.jpg", "d.gif"):
+        (imgs / name).write_bytes(_PNG)
+    images.write_sidecar(tmp_path, [_record("rec.png", "https://x.com/r?w=1&h=2")])
     doc = tmp_path / "d.md"
-    doc.write_text("![a](images/a.png)\n![b](https://x.com/b.png)\n", encoding="utf-8")
+    doc.write_text(
+        "![a](images/a.png)\n![r](https://x.com/r?w=1&amp;h=2)\n"
+        "![b](https://x.com/b.png)\n![c](https://cdn.x.com/c)\n",
+        encoding="utf-8",
+    )
 
-    assert _image_cache.prune_orphans(doc, tmp_path) == 0
-    assert (imgs / "a.png").exists()
+    assert _image_cache.prune_orphans(doc, tmp_path) == 4
+
+    assert sorted(p.name for p in imgs.glob("*")) == ["a.png", "rec.png"]
+
+
+def test_one_dead_remote_ref_does_not_stop_the_sweep(tmp_path):
+    """Leftovers are pruned while a ref that never localizes stays remote."""
+    imgs = tmp_path / "images"
+    imgs.mkdir()
+    (imgs / "used.png").write_bytes(_PNG)
+    (imgs / "used-2.png").write_bytes(_PNG)
+    images.write_sidecar(
+        tmp_path,
+        [_record("used.png", "https://x.com/old"), _record("used-2.png", "https://x.com/u.png")],
+    )
+    doc = tmp_path / "d.md"
+    doc.write_text("![u](images/used-2.png)\n![dead](https://x.com/dead.png)\n", encoding="utf-8")
+
+    assert _image_cache.prune_orphans(doc, tmp_path) == 1
+
+    assert [p.name for p in imgs.glob("*")] == ["used-2.png"]
+    assert [r["local"] for r in images.read_sidecar(tmp_path)] == ["used-2.png"]
 
 
 def test_two_urls_with_identical_bytes_get_separate_records(tmp_path, monkeypatch):
@@ -942,6 +1017,108 @@ def test_provenance_does_not_claim_an_earlier_runs_identical_file(tmp_path, monk
     assert (imgs / by_url["https://y.com/zebra.png"]["local"]).is_file()
 
 
+def test_provenance_names_the_file_claimed_around_a_same_byte_file_already_there(
+    tmp_path, monkeypatch
+):
+    """A bundled or unrecorded ``fig.png`` holding the same bytes is not this download's file."""
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    imgs = tmp_path / "images"
+    imgs.mkdir()
+    (imgs / "fig.png").write_bytes(_PNG)
+    doc = tmp_path / "d.md"
+    doc.write_text("![b](https://b.example/fig.png)\n", encoding="utf-8")
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta()))
+
+    images.download_images(doc, imgs)
+
+    [rec] = images.read_sidecar(tmp_path)
+    assert rec["local"] == "fig-2.png"
+    assert "](images/fig-2.png)" in doc.read_text(encoding="utf-8")
+
+
+def test_provenance_claims_by_the_localizers_extension_list(tmp_path, monkeypatch):
+    """``a.ico.foobar1`` names ``a.ico``: ``.ico`` is an image extension to the localizer only."""
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    doc = tmp_path / "d.md"
+    doc.write_text("![i](https://cdn.example/a.ico.foobar1)\n", encoding="utf-8")
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta()))
+
+    images.download_images(doc, tmp_path / "images")
+
+    [rec] = images.read_sidecar(tmp_path)
+    assert rec["local"] == "a.ico"
+    assert "](images/a.ico)" in doc.read_text(encoding="utf-8")
+
+
+def test_a_claim_naming_a_file_with_other_bytes_records_nothing(tmp_path, monkeypatch):
+    """Should the claim ever disagree with the localizer, the file's hash keeps the pair out."""
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    imgs = tmp_path / "images"
+    imgs.mkdir()
+    (imgs / "other.png").write_bytes(_JPG)
+    doc = tmp_path / "d.md"
+    doc.write_text("![b](https://b.example/fig.png)\n", encoding="utf-8")
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta()))
+    monkeypatch.setattr(images._PacedFetcher, "_claim", lambda self, url, data: "other.png")
+
+    images.download_images(doc, imgs)
+
+    assert images.read_sidecar(tmp_path) == []
+
+
+def test_a_name_freed_by_a_dropped_cache_never_pairs_with_its_old_url(tmp_path, monkeypatch):
+    """A new download under a name an older record still holds takes that name alone."""
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+    imgs = tmp_path / "images"
+    doc = tmp_path / "d.md"
+    src = "![c](https://old.example/v1/fig.png)\n![b](https://cdn.example/v2/fig.png)\n"
+    doc.write_text(src, encoding="utf-8")
+    monkeypatch.setattr(
+        http, "fetch_bytes_meta", lambda u, **k: (u, _PNG + u.encode(), _meta(etag='"e"'))
+    )
+    images.download_images(doc, imgs)
+
+    def gone_or_served(url, **kwargs):
+        if "old.example" in url:
+            raise urllib.error.HTTPError(url, 404, "gone", Message(), None)
+        return url, _PNG + url.encode(), _meta(etag='"e"')
+
+    # A renormalize drops images/ and stages every ref remote again.
+    for p in imgs.glob("*"):
+        p.unlink()
+    doc.write_text(src, encoding="utf-8")
+    monkeypatch.setattr(http, "fetch_bytes_meta", gone_or_served)
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
+    images.download_images(doc, imgs)
+    _image_cache.reuse_unchanged(doc, tmp_path)
+
+    locals_ = [r["local"] for r in images.read_sidecar(tmp_path)]
+    assert len(locals_) == len(set(locals_))
+    assert "](https://old.example/v1/fig.png)" in doc.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("answer", ["gone", "new-bytes"])
+def test_a_record_whose_file_holds_other_bytes_is_never_reused(tmp_path, monkeypatch, answer):
+    """A pass killed before it recorded leaves an older record on a file now holding another image."""
+    doc, _rec = _cached(tmp_path, "fig.png", "https://old.example/fig.png", _PNG)
+    other = _PNG + b"another figure"
+    (tmp_path / "images" / "fig.png").write_bytes(other)
+
+    def fetch(url, **kwargs):
+        if answer == "gone":
+            raise urllib.error.HTTPError(url, 404, "gone", Message(), None)
+        return url, _PNG + b"-v2", _meta()
+
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
+    monkeypatch.setattr(http, "fetch_bytes_meta", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert _image_cache.reuse_unchanged(doc, tmp_path) == 0
+
+    assert (tmp_path / "images" / "fig.png").read_bytes() == other
+    assert "](https://old.example/fig.png)" in doc.read_text(encoding="utf-8")
+
+
 def test_provenance_guard_survives_a_corrupt_sidecar(tmp_path, monkeypatch):
     """Prior files are read from the directory: ``read_sidecar`` answers [] for a corrupt sidecar,
     exactly when the guard matters."""
@@ -1145,3 +1322,21 @@ def test_reuse_unchanged_reuses_an_extensionless_url_with_a_dot_in_its_name(tmp_
 
     assert _image_cache.reuse_unchanged(doc, tmp_path) == 1
     assert "](images/asset-v3.1-large.png)" in doc.read_text(encoding="utf-8")
+
+
+def test_an_image_whose_fetch_raises_a_url_error_does_not_end_the_pass(tmp_path, monkeypatch):
+    doc = tmp_path / "d.md"
+    doc.write_text("![a](https://x.com/bad.png)\n![b](https://x.com/ok.png)\n", encoding="utf-8")
+
+    def fetch(url, **kwargs):
+        if url.endswith("bad.png"):
+            raise ValueError("malformed URL")
+        return url, _PNG, _meta()
+
+    monkeypatch.setattr(http, "fetch_bytes_meta", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert images.download_images(doc, tmp_path / "images") == 1
+    text = doc.read_text(encoding="utf-8")
+    assert "](https://x.com/bad.png)" in text
+    assert "](images/ok.png)" in text

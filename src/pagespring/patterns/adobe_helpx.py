@@ -7,7 +7,6 @@ import html as _html
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -15,6 +14,7 @@ from pw_foundation.log import get_logger
 from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -48,7 +48,7 @@ class AdobeHelpxPattern:
 
     def _topic_urls(self, guide_html: str, guide_url: str, product: str) -> list[str]:
         """Every leaf topic in the guide's TOC, deduped, scoped to this product."""
-        soup = BeautifulSoup(guide_html, "html.parser")
+        soup = parse_html(guide_html)
         seen: set[str] = set()
         out: list[str] = []
         for a in soup.select("ul.tocList a"):
@@ -67,7 +67,7 @@ class AdobeHelpxPattern:
         return out
 
     def _extract(self, page_html: str, page_url: str) -> str | None:
-        soup = BeautifulSoup(page_html, "html.parser")
+        soup = parse_html(page_html)
         node = soup.select_one(_CONTENT_CSS)
         if not isinstance(node, Tag):
             return None

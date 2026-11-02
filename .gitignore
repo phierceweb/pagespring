@@ -36,6 +36,7 @@ dist/
 .claude
 .cursor
 .superpowers/
+.cbmignore
 CLAUDE.md
 
 # Playwright MCP artifacts

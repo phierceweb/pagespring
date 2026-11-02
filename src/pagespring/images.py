@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from pw_core.fetch import images as _core
 from pw_core.pipeline.run_record import file_sha256
+from pw_foundation.exceptions import ClientError
 from pw_foundation.log import get_logger
 from pw_foundation.utils.hashing import content_hash
 from pw_foundation.utils.io import atomic_write_text
@@ -65,7 +66,11 @@ class _PacedFetcher:
         """Fetch on ``fetch_bytes``' long budget, decoding the HTML-escaped ref: a CDN reads
         ``amp;wid`` as an unknown parameter and serves its default rendition."""
         decoded = decode_ref(url)
-        final_url, data, meta = http.fetch_bytes_meta(decoded)
+        try:
+            final_url, data, meta = http.fetch_bytes_meta(decoded)
+        except ValueError as exc:
+            # The localizer skips only the errors it knows; any other one would end the pass.
+            raise ClientError("image fetch failed", context={"url": decoded}, cause=exc) from exc
         fields: _Provenance = {
             "source_url": decoded,
             "etag": meta["etag"],
@@ -122,8 +127,9 @@ def write_sidecar(slug_dir: Path, records: list[ImageRecord]) -> None:
 
 
 def _merge(old: list[ImageRecord], new: list[ImageRecord]) -> list[ImageRecord]:
-    """New records win per source_url; a resumed run must not drop earlier passes."""
-    merged = {r["source_url"]: r for r in old}
+    """New records win per source_url and per file; a resumed run must not drop earlier passes."""
+    taken = {r["local"] for r in new}
+    merged = {r["source_url"]: r for r in old if r["local"] not in taken}
     merged.update({r["source_url"]: r for r in new})
     return sorted(merged.values(), key=lambda r: r["source_url"])
 

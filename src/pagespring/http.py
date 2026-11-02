@@ -1,12 +1,15 @@
-"""pagespring's policy over ``pw_core.fetch``: User-Agent, ``timeout=``, crawl delay, size caps. Raw
-urllib errors propagate, TLS is always verified, and private addresses are refused."""
+"""pagespring's policy over ``pw_core.fetch``: User-Agent, ``timeout=``, URL encoding, crawl delay,
+size caps. Raw urllib errors propagate, TLS is always verified, private addresses are refused."""
 
 from __future__ import annotations
 
+import re
 import time
+import unicodedata
+from urllib.parse import quote, urlsplit
 
 from pw_core.fetch import Body, Fetcher, Validators
-from pw_foundation.exceptions import ClientError
+from pw_foundation.exceptions import ClientError, InvalidInputError
 from pw_foundation.utils.env import resolve_int, resolve_str
 
 from pagespring import __version__
@@ -53,6 +56,64 @@ def _download_max_bytes() -> int:
     return n if n > 0 else _DOWNLOAD_MAX_BYTES_DEFAULT
 
 
+# What an HTTP request line cannot carry: controls, space, DEL and every non-ASCII character.
+_UNSENDABLE = re.compile(r"[^\x21-\x7e]")
+# Python's IDNA 2003 codec (Unicode 3.2) encodes these unlike a browser's UTS 46: another host.
+_IDNA_DEVIATIONS = re.compile(
+    r"[\u00df\u1e9e\u03c2\u200c\u200d\u115f\u1160\u17b4\u17b5\u3164\uffa0"
+    r"\U0002f868\U0002f874\U0002f91f\U0002f95f\U0002f9bf]"
+)
+_LABEL_DOTS = re.compile("[.\u3002\uff0e\uff61]")
+# A browser drops these anywhere in a URL, and strips C0 controls and spaces from its ends.
+_BROWSER_DROPS = re.compile(r"[\t\n\r]")
+_C0_AND_SPACE = "".join(map(chr, range(0x21)))
+
+
+def _idna_host(host: str) -> str:
+    """``host`` IDNA-encoded as a browser encodes it; a host it would encode otherwise is refused.
+
+    Raises:
+        InvalidInputError: the host cannot be encoded, or a browser would reach another host.
+    """
+    try:
+        ascii_host = host.encode("idna").decode("ascii")
+        labels = ascii_host.encode("ascii").decode("idna")
+    except UnicodeError as exc:
+        raise InvalidInputError(f"not a valid internationalized host: {host!r}") from exc
+    if (
+        _IDNA_DEVIATIONS.search(host)
+        or any(unicodedata.ucd_3_2_0.category(c) == "Cn" for c in host)
+        or len(_LABEL_DOTS.findall(host)) != ascii_host.count(".")
+        or unicodedata.normalize("NFKC", labels.casefold()) != labels
+    ):
+        raise InvalidInputError(f"host encodes differently than a browser sends it: {host!r}")
+    return ascii_host
+
+
+def _ascii_url(url: str) -> str:
+    """``url`` as a browser sends it: tabs and line breaks dropped, ends trimmed, the host
+    IDNA-encoded, any other unsendable character percent-encoded as UTF-8; escapes are kept.
+
+    Raises:
+        InvalidInputError: the URL cannot be read, or its host, userinfo or port cannot be sent.
+    """
+    if not _UNSENDABLE.search(url):
+        return url
+    url = _BROWSER_DROPS.sub("", url).strip(_C0_AND_SPACE)
+    try:
+        netloc = urlsplit(url).netloc
+    except ValueError as exc:
+        raise InvalidInputError(f"not a readable URL: {url!r}") from exc
+    if not netloc.isascii():
+        userinfo, at, hostport = netloc.rpartition("@")
+        host, colon, port = hostport.partition(":")
+        if not (userinfo + port).isascii():
+            raise InvalidInputError(f"a URL's userinfo and port must be ASCII: {url!r}")
+        ascii_host = _idna_host(host)
+        url = url.replace(netloc, f"{userinfo}{at}{ascii_host}{colon}{port}", 1)
+    return _UNSENDABLE.sub(lambda m: quote(m.group(), safe=""), url)
+
+
 def _fetcher(retries: int = 2, *, max_bytes: int | None = None) -> Fetcher:
     """A fetch core with pagespring's UA, built per call so ``PAGESPRING_UA`` can change; TLS is
     explicit (pw-core's switch is process-wide), and the cap bounds the inflated body."""
@@ -65,14 +126,16 @@ def fetch_text(
     """(final_url, text) after redirects, decoded by ``encoding``, else the Content-Type charset,
     else utf-8, with replacement."""
     return _fetcher(retries, max_bytes=_text_max_bytes()).get_text(
-        url, timeout_s=timeout, encoding=encoding
+        _ascii_url(url), timeout_s=timeout, encoding=encoding
     )
 
 
 def fetch_body(url: str, *, timeout: float = 30, retries: int = 2) -> Body:
     """``fetch_text``'s request, keeping the bytes, their charset and the validators;
     ``Body.text()`` decodes exactly as ``fetch_text`` does."""
-    return _fetcher(retries, max_bytes=_text_max_bytes()).get_body(url, timeout_s=timeout)
+    return _fetcher(retries, max_bytes=_text_max_bytes()).get_body(
+        _ascii_url(url), timeout_s=timeout
+    )
 
 
 def check_download_budget(url: str, data: bytes) -> None:
@@ -86,7 +149,9 @@ def check_download_budget(url: str, data: bytes) -> None:
 def fetch_bytes(url: str, *, timeout: float = 180, retries: int = 2) -> tuple[str, bytes]:
     """(final_url, bytes) for binary downloads, with a longer timeout: vendor PDFs and archives can
     be tens of MB on a slow CDN."""
-    return _fetcher(retries, max_bytes=_download_max_bytes()).get_bytes(url, timeout_s=timeout)
+    return _fetcher(retries, max_bytes=_download_max_bytes()).get_bytes(
+        _ascii_url(url), timeout_s=timeout
+    )
 
 
 def fetch_bytes_meta(
@@ -94,14 +159,20 @@ def fetch_bytes_meta(
 ) -> tuple[str, bytes, Validators]:
     """``fetch_bytes`` + the response's cache validators, for callers that
     persist them (a later ``not_modified`` probe skips the re-download)."""
-    return _fetcher(retries, max_bytes=_download_max_bytes()).get_bytes_meta(url, timeout_s=timeout)
+    return _fetcher(retries, max_bytes=_download_max_bytes()).get_bytes_meta(
+        _ascii_url(url), timeout_s=timeout
+    )
 
 
 def not_modified(url: str, *, etag: str | None, last_modified: str | None) -> bool:
     """One conditional GET: True on a 304, or a 200 carrying the strong ETag it sent; False on
     anything else, errors included, so the caller can always fall back to a full fetch."""
+    try:
+        sendable = _ascii_url(url)
+    except InvalidInputError:
+        return False
     return _fetcher(max_bytes=_text_max_bytes()).not_modified(
-        url, etag=etag, last_modified=last_modified
+        sendable, etag=etag, last_modified=last_modified
     )
 
 
@@ -110,7 +181,9 @@ def post_form(
 ) -> tuple[str, str]:
     """``fetch_text`` for an endpoint that only answers a form POST: same UA, cap, retries and SSRF
     guard; the body is decoded by the Content-Type charset, else utf-8."""
-    body = _fetcher(retries, max_bytes=_text_max_bytes()).post_form(url, fields, timeout_s=timeout)
+    body = _fetcher(retries, max_bytes=_text_max_bytes()).post_form(
+        _ascii_url(url), fields, timeout_s=timeout
+    )
     return body.final_url, body.text()
 
 

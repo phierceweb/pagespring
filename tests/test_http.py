@@ -19,7 +19,9 @@ from pagespring import http
 URL = "https://docs.example.com/manual"
 _ETAG = '"abc123"'
 _LAST_MODIFIED = "Sat, 18 Jul 2026 10:00:00 GMT"
-_TLS_OFF_ENV_VARS = ["PW_VERIFY_TLS", "PF_VERIFY_TLS", "URL_CHECK_VERIFY_TLS"]
+_TLS_OFF_ENV_VARS = ["PW_VERIFY_TLS", "URL_CHECK_VERIFY_TLS"]
+# Deprecated spellings the framework may still honour; immunity must hold whether or not it does.
+_DEPRECATED_TLS_OFF_ENV_VARS = ["PF_VERIFY_TLS"]
 
 
 @pytest.fixture(autouse=True)
@@ -239,7 +241,8 @@ class TestTlsVerification:
         monkeypatch.setenv(env_var, "0")
         assert verify_tls() is False
 
-    @pytest.mark.parametrize("env_var", _TLS_OFF_ENV_VARS)
+    @pytest.mark.filterwarnings("ignore:PF_VERIFY_TLS is deprecated:DeprecationWarning")
+    @pytest.mark.parametrize("env_var", [*_TLS_OFF_ENV_VARS, *_DEPRECATED_TLS_OFF_ENV_VARS])
     def test_off_switch_cannot_disable_certificate_verification(self, seam, env_var, monkeypatch):
         """The fetch core's TLS switch is process-wide; one set for another consumer
         must not turn verification off for pagespring's fetches."""
@@ -327,3 +330,100 @@ class TestPostForm:
             http.post_form(URL, self.FIELDS)
         assert exc.value.code == 302
         assert len(seam.calls) == 1
+
+
+class TestNonAsciiUrls:
+    """urllib's request line is ASCII-only, so a URL is encoded the way a browser sends it."""
+
+    @pytest.mark.parametrize(
+        ("url", "sent"),
+        [
+            ("https://x.example/img/café.png", "https://x.example/img/caf%C3%A9.png"),
+            ("https://x.example/a.png?v=1®=us", "https://x.example/a.png?v=1%C2%AE=us"),
+            ("https://x.example/my img.png", "https://x.example/my%20img.png"),
+            (
+                "https://x.example/a%20b/ü?q=a/b&c=%2F#f",
+                "https://x.example/a%20b/%C3%BC?q=a/b&c=%2F#f",
+            ),
+            ("https://bücher.example/a.png", "https://xn--bcher-kva.example/a.png"),
+            ("https://bücher.example:8443/a.png", "https://xn--bcher-kva.example:8443/a.png"),
+            ("https://x.example/a\n.png", "https://x.example/a.png"),
+            (" https://bü\tcher.example/a.png\r\n", "https://xn--bcher-kva.example/a.png"),
+        ],
+        ids=[
+            "path",
+            "query",
+            "space",
+            "already-escaped-kept",
+            "idn-host",
+            "idn-host-port",
+            "newline-removed",
+            "tab-and-edges-removed",
+        ],
+    )
+    def test_every_fetch_sends_an_ascii_url(self, seam, url, sent):
+        for call in (
+            http.fetch_text,
+            http.fetch_body,
+            http.fetch_bytes,
+            http.fetch_bytes_meta,
+            lambda u: http.not_modified(u, etag='"e"', last_modified=None),
+            lambda u: http.post_form(u, {"a": "b"}),
+        ):
+            call(url)
+        assert [request.full_url for request, _t in seam.calls] == [sent] * 6
+
+    def test_an_ascii_url_is_sent_unchanged(self, seam):
+        url = "https://x.example/a%2Fb/c.png?w=1&h=%3D2;x=[1]#frag"
+        http.fetch_bytes(url)
+        assert seam.calls[0][0].full_url == url
+
+    def test_not_modified_answers_false_for_a_host_idna_cannot_encode(self, seam):
+        assert (
+            http.not_modified(
+                "https://" + "é" * 64 + ".example/a.png", etag='"e"', last_modified=None
+            )
+            is False
+        )
+        assert seam.calls == []
+
+    def test_a_fetch_from_a_host_idna_cannot_encode_is_invalid_input(self, seam):
+        with pytest.raises(InvalidInputError):
+            http.fetch_bytes("https://" + "é" * 64 + ".example/a.png")
+
+    @pytest.mark.parametrize(
+        "url", ["https://й@x.example/a.png", "https://x.example:١٢/a.png", "https://ü@[::1]/a"]
+    )
+    def test_a_non_ascii_userinfo_or_port_is_invalid_input(self, seam, url):
+        """urllib writes both into the Host header, which is Latin-1 at best."""
+        with pytest.raises(InvalidInputError):
+            http.fetch_bytes(url)
+        assert seam.calls == []
+
+    def test_a_url_with_no_readable_host_is_invalid_input(self, seam):
+        url = "https://[ü/a.png"
+        assert http.not_modified(url, etag='"e"', last_modified=None) is False
+        with pytest.raises(InvalidInputError):
+            http.fetch_bytes(url)
+        assert seam.calls == []
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "straße.de",
+            "STRAẞE.de",
+            "ς.example",
+            "a\u200db.example",
+            "a\u200cb.example",
+            "a\u2024com",
+            "bücher\u2488evil.com",
+            "a\u10a0b.example",
+            "a\u1c90b.example",
+            "a\u3164b.example",
+        ],
+    )
+    def test_a_host_a_browser_would_send_elsewhere_is_refused(self, seam, host):
+        """Python's IDNA 2003 encodes these unlike a browser, so the request would reach another host."""
+        with pytest.raises(InvalidInputError):
+            http.fetch_bytes(f"https://{host}/a.png")
+        assert seam.calls == []

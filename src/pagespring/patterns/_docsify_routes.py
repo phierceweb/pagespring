@@ -8,10 +8,10 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
-from bs4 import BeautifulSoup
 from pw_foundation.log import get_logger
 
 from pagespring.patterns._site import names_a_file
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -41,7 +41,7 @@ class Site:
 
 def config(html: str) -> str:
     """The inline script holding ``$docsify``, comments removed ('' when absent)."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     for script in soup.find_all("script"):
         text = script.get_text()
         if "$docsify" in text:

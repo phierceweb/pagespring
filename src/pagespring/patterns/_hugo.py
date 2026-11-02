@@ -7,7 +7,6 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
 from pw_foundation.exceptions import ClientError, InvalidInputError
 from pw_foundation.log import get_logger
 from pw_foundation.utils.hashing import content_hash
@@ -23,6 +22,7 @@ from pagespring.patterns._hugo_page import (
 )
 from pagespring.patterns._nav_order import page_key, reading_order
 from pagespring.patterns._site import names_a_file, raw_stem
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -42,7 +42,7 @@ def is_docsy(html: str) -> bool:
     """Docsy's page shell: a ``td-<kind>`` body class around its ``td-main`` layout.
 
     A Docsy page may carry no generator tag; this tell routes it here all the same."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     body = soup.body
     if body is None or not _DOCSY_KINDS.intersection(body.get_attribute_list("class")):
         return False
@@ -134,7 +134,7 @@ def _fullest_sidebar(
         finally:
             http.polite_sleep()
         fetched[page_key(url)] = (final, body)
-        nav = sidebar(BeautifulSoup(body, "html.parser"), final)
+        nav = sidebar(parse_html(body), final)
         if len(keys.intersection(nav)) > len(keys.intersection(best)):
             best = nav
     return best
@@ -177,7 +177,7 @@ def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> Ac
             continue
         finally:
             http.polite_sleep()
-        soup = BeautifulSoup(body, "html.parser")
+        soup = parse_html(body)
         if is_whole_section_view(soup):
             log.info("hugo.whole_section_view", url=page)
             continue

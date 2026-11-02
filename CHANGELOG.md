@@ -4,6 +4,36 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.18.0] — 2026-11-01
+
+### Changed
+
+- **CI tests on Python 3.12, 3.13 and 3.14**, and the package lists all three as supported.
+- **`bin/check-framework` refuses a bare `BeautifulSoup(...)` call in the package**; patterns
+  parse HTML through `pagespring.patterns._soup.parse_html`.
+
+### Fixed
+
+- **An HTML source's attribute values read as written on Python 3.12**: a URL whose query has a
+  parameter beginning with a legacy HTML entity name (`&reg=`, `&section=`, `&copy2;`) is no longer
+  decoded to `®=`, `§ion=`, `©2;` when a pattern parses the page, and its image pass fetches the
+  URL the source wrote. A manual staged on 3.12 picks this up when it is re-ingested, or
+  renormalized from a kept `raw/`.
+- **A URL holding a non-ASCII character is requested instead of crashing**: pagespring sends it as
+  a browser does, with tabs and line breaks dropped, the ends trimmed, a non-ASCII host
+  IDNA-encoded and any other character a request line cannot carry percent-encoded as UTF-8. A host
+  a browser would encode differently, or a non-ASCII userinfo or port, is refused. An image URL
+  that cannot be fetched is skipped like any failed image, so the rest of the image pass continues.
+- **An image whose source answers `404` or `410` settles on its cached copy**: `localize` and
+  `ingest --download-images` re-point its ref at the file already in `images/` instead of leaving
+  it remote on every pass. Any other failure still keeps the ref remote for the next pass.
+- **An image never settles on, or refetches into, another image's file**: a cached file is reused
+  only while it holds the bytes its sidecar record names, and a download saved under a name an older
+  record holds replaces that record, as after a renormalize drops `images/`.
+- **One remote ref that never localizes no longer stops the orphan sweep**: an image pass deletes
+  every file the deliverable no longer references, keeping only the file the sidecar records for
+  each still-remote ref, which that ref can settle on.
+
 ## [0.17.0] — 2026-10-23
 
 ### Added
