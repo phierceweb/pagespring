@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from bs4 import BeautifulSoup
 from pw_core.utils.url_parse import domain_of
 from pw_foundation.log import get_logger
 from pw_foundation.utils.slugify import slugify
@@ -25,6 +24,7 @@ from pagespring.patterns._site import (
     seat_headings,
     strip_scripts,
 )
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -72,7 +72,7 @@ def _body_html(fields: dict[str, Any]) -> str:
 
 
 def _clean(body: str, page_url: str) -> str:
-    soup = BeautifulSoup(body, "html.parser")
+    soup = parse_html(body)
     strip_scripts(soup)
     seat_headings(soup, depth=2, name="")
     flatten_responsive_images(soup)

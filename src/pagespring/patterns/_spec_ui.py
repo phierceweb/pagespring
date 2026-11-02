@@ -13,6 +13,7 @@ from bs4.element import Tag
 from pw_foundation.exceptions import InvalidInputError
 
 from pagespring import http
+from pagespring.patterns._soup import parse_html
 from pagespring.patterns.api_spec import is_openapi
 
 Fetch = Callable[[str], str | None]
@@ -51,7 +52,7 @@ UI_NAMES = ("redoc", "scalar", "swagger-ui")
 def ui_name(html: str) -> str | None:
     """The API reference UI a page is built on (one of ``UI_NAMES``), from its
     elements and scripts."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     srcs = " ".join(str(s.get("src") or "") for s in soup.find_all("script")).lower()
     inline = " ".join(_inline_scripts(soup))
     if soup.find("redoc") is not None or ("redoc" in srcs and "Redoc.init(" in inline):
@@ -109,7 +110,7 @@ def _candidates(page_url: str, html: str, fetch: Fetch) -> tuple[list[str], list
     query = parse_qs(urlparse(page_url).query)
     if query.get("url"):
         return _absolute(page_url, query["url"]), []
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     explicit = [str(t["spec-url"]) for t in soup.find_all("redoc") if t.get("spec-url")]
     reference = soup.find("script", id="api-reference")
     if isinstance(reference, Tag) and reference.get("data-url"):

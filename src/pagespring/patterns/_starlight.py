@@ -8,7 +8,6 @@ from collections import defaultdict
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -17,6 +16,7 @@ from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.patterns import _readable, _sitemap
 from pagespring.patterns._site import names_a_file
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -182,7 +182,7 @@ def _heading(main: Tag) -> list[Tag]:
 def _extract(html: str, page_url: str) -> str | None:
     """The title and markdown body as one cleaned fragment, None without a body; everything else in
     ``<main>`` (banners, footers, sponsor blocks a site adds) is frame."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     main = soup.find("main")
     if not isinstance(main, Tag):
         return None
@@ -203,7 +203,7 @@ def _extract(html: str, page_url: str) -> str | None:
 def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> AcquireResult:
     # Scope anchors on the post-redirect URL: a site root often redirects into a locale.
     entry_url, entry = http.fetch_text(_seed(base_url))
-    soup = BeautifulSoup(entry, "html.parser")
+    soup = parse_html(entry)
     sidebar, adopters = _sidebar(soup, entry_url)
     sitemap = _sitemap.sitemap_link(entry, entry_url)
     child_failed = False

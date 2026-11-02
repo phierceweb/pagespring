@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
 from pw_core.utils.url_parse import domain_of
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -23,6 +22,7 @@ from pagespring.patterns._site import (
     flatten_responsive_images,
     strip_scripts,
 )
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -94,7 +94,7 @@ class ZendeskHelpPattern:
 
     def _clean_body(self, body: str, page_url: str) -> str:
         """Article bodies are author-supplied HTML — embeds, trackers and all."""
-        soup = BeautifulSoup(body, "html.parser")
+        soup = parse_html(body)
         strip_scripts(soup)
         flatten_responsive_images(soup)
         if page_url:

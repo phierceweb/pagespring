@@ -10,7 +10,7 @@ from typing import NamedTuple
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
 from pw_foundation.utils.slugify import slugify
@@ -21,6 +21,7 @@ from pagespring.patterns._archive_extract import extract
 from pagespring.patterns._archive_images import MemberImages
 from pagespring.patterns._archive_links import MemberLinks
 from pagespring.patterns._ordering import natural_key
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -131,7 +132,7 @@ def _ordered_members(raw_dir: Path, exts: tuple[str, ...]) -> list[Path]:
 def _content(member: Path) -> Tag | None:
     """A document's <body> less scripts and boilerplate, or None when nothing is left.
     Archives ship whole standalone pages; nesting them in one deliverable is invalid."""
-    soup = BeautifulSoup(member.read_text(encoding="utf-8", errors="replace"), "html.parser")
+    soup = parse_html(member.read_text(encoding="utf-8", errors="replace"))
     # .pg-boilerplate: Project Gutenberg's header and license footer.
     for junk in soup.find_all(["script", "style", "noscript"]) + soup.select(".pg-boilerplate"):
         junk.decompose()

@@ -25,6 +25,7 @@ from pagespring.patterns._site import (
     raw_stem,
     strip_scripts,
 )
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -40,7 +41,7 @@ def is_antora(html: str) -> bool:
     """Generator meta naming Antora, or its layout: ``article.doc`` beside ``nav.nav-menu``."""
     if any(tag.strip().startswith("antora") for tag in generator_meta(html).split(",")):
         return True
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     return (
         soup.select_one("article.doc") is not None and soup.select_one("nav.nav-menu") is not None
     )
@@ -168,7 +169,7 @@ def _seed(url: str) -> str:
 
 
 def _article(html: str, page_url: str) -> Tag | None:
-    article = BeautifulSoup(html, "html.parser").select_one("article.doc")
+    article = parse_html(html).select_one("article.doc")
     if article is None:
         return None
     for el in article.select(_CHROME_CSS):
@@ -200,7 +201,7 @@ def acquire(url: str, workdir: Path, *, slug: str, title: str | None) -> Acquire
             raise
         entry_url, entry = http.fetch_text(url)  # an extensionless page, not a directory
     http.polite_sleep()
-    soup = BeautifulSoup(entry, "html.parser")
+    soup = parse_html(entry)
     start, nav = _nav(soup, entry_url)
     root = _scope_root([entry_url, *([start] if start else [])], nav)
     container = soup.select_one(".nav-container[data-component]")

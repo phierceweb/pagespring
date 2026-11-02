@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urljoin, urlparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Comment, Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -25,6 +24,7 @@ from pagespring.patterns._site import (
     generator_meta,
     strip_scripts,
 )
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -39,7 +39,7 @@ _STEM_CHARS = 80
 
 def _edit_uri(page: str) -> str | None:
     """The head's EditURI href when it names ``api.php``; WordPress's names xmlrpc.php."""
-    link = BeautifulSoup(page, "html.parser").find("link", rel="EditURI")
+    link = parse_html(page).find("link", rel="EditURI")
     href = link.get("href") if isinstance(link, Tag) else None
     return href if isinstance(href, str) and "api.php" in href else None
 
@@ -116,7 +116,7 @@ def _linked_titles(parsed: dict[str, Any], namespaces: set[int], seed: str) -> l
     ]
     anchored = [
         str(a["title"])
-        for a in BeautifulSoup(_text(parsed), "html.parser").find_all("a", title=True)
+        for a in parse_html(_text(parsed)).find_all("a", title=True)
         if isinstance(a, Tag)
     ]
     first: dict[str, int] = {}
@@ -127,7 +127,7 @@ def _linked_titles(parsed: dict[str, Any], namespaces: set[int], seed: str) -> l
 
 def _clean(content: str, page_url: str) -> str | None:
     """The rendered content without parser chrome, refs absolute; None when empty."""
-    soup = BeautifulSoup(content, "html.parser")
+    soup = parse_html(content)
     for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
         comment.extract()
     for el in soup.select(_CHROME_CSS):

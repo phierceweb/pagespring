@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 from urllib.parse import urljoin, urlparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
+from pagespring.patterns._soup import parse_html
 
 _CODE_LANG_RE = re.compile(r"mc-code-lang:\s*([\w+#.-]+)", re.I)
 
@@ -16,7 +16,7 @@ _CODE_LANG_RE = re.compile(r"mc-code-lang:\s*([\w+#.-]+)", re.I)
 def _help_controls(node: Tag) -> None:
     """A related-topics control becomes the links it lists; one the runtime fills from the index
     (keywords, concepts) shows nothing here and goes."""
-    maker = BeautifulSoup("", "html.parser")
+    maker = parse_html("")
     for control in node.select("a.MCHelpControl"):
         listed = control.get("data-mc-topics")
         pairs = (
@@ -39,7 +39,7 @@ def _help_controls(node: Tag) -> None:
 
 def _code_snippets(node: Tag) -> None:
     """A code snippet loses its copy button and highlighting: plain lines, its language kept."""
-    maker = BeautifulSoup("", "html.parser")
+    maker = parse_html("")
     for snippet in node.select("div.codeSnippet"):
         pre = snippet.find("pre")
         if not isinstance(pre, Tag):
@@ -82,7 +82,7 @@ def _clean(node: Tag, page_url: str) -> None:
 
 def extract(page: str, page_url: str) -> Tag | None:
     """The topic body, cleaned and absolutized; None when the page has none."""
-    node = BeautifulSoup(page, "html.parser").find(id="mc-main-content")
+    node = parse_html(page).find(id="mc-main-content")
     if not isinstance(node, Tag):
         return None
     _clean(node, page_url)

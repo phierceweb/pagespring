@@ -39,7 +39,6 @@ def _image_pass(deliverable: Path, incoming_dir: Path) -> _ImagePass:
     reused = _image_cache.reuse_unchanged(deliverable, incoming_dir)
     localized = images.download_images(deliverable, images_dir)
     remaining = images.count_remote_images(deliverable)
-    # Only safe once nothing is still remote — see prune_orphans.
     pruned = _image_cache.prune_orphans(deliverable, incoming_dir)
     total = sum(1 for p in images_dir.iterdir() if p.is_file()) if images_dir.exists() else 0
     return _ImagePass(localized, reused, pruned, remaining, total)

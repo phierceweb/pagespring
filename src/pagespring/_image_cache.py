@@ -3,9 +3,11 @@ server still serves unchanged, prune what the deliverable no longer references."
 
 from __future__ import annotations
 
+import urllib.error
 from pathlib import Path
 
 from pw_core.fetch import images as _core
+from pw_core.pipeline.run_record import file_sha256
 from pw_foundation.log import get_logger
 from pw_foundation.utils.hashing import content_hash
 from pw_foundation.utils.io import atomic_write_bytes, atomic_write_text
@@ -13,7 +15,6 @@ from pw_foundation.utils.io import atomic_write_bytes, atomic_write_text
 from pagespring import http
 from pagespring.images import (
     ImageRecord,
-    count_remote_images,
     decode_ref,
     local_name,
     read_sidecar,
@@ -22,6 +23,9 @@ from pagespring.images import (
 )
 
 log = get_logger(__name__)
+
+# The source is gone for good, so the ref settles on its cached copy instead of retrying.
+_GONE = {404, 410}
 
 
 def normalize_case(doc_path: Path, slug_dir: Path) -> int:
@@ -52,8 +56,8 @@ def normalize_case(doc_path: Path, slug_dir: Path) -> int:
 
 
 def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
-    """Re-point refs at sidecar images the server still serves unchanged; returns how many settled.
-    Otherwise refetch: new bytes replace the file in place, a failed fetch keeps file and ref."""
+    """Re-point refs at sidecar images the server still serves unchanged, or no longer serves at all;
+    returns how many settled. Otherwise new bytes replace the file in place, or file and ref stay."""
     records = {r["source_url"]: r for r in read_sidecar(slug_dir)}
     if not records:
         return 0
@@ -65,7 +69,11 @@ def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
         # the rewrite below must still match the escaped form the document holds.
         decoded = decode_ref(url)
         rec = records.get(decoded)
-        if rec is None or not (images_dir / rec["local"]).is_file():
+        if rec is None:
+            continue
+        cached = images_dir / rec["local"]
+        # A pass killed before it recorded can leave this record on a file now holding another image.
+        if not cached.is_file() or file_sha256(cached) != rec["sha256"]:
             continue
         unchanged = False
         if rec["etag"] or rec["last_modified"]:
@@ -78,6 +86,8 @@ def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
             if not _refetch_into(rec, images_dir, decoded):
                 continue
             if rec["sha256"] != cached_sha:
+                # Saved now: a pass killed later must not leave the new bytes under the old hash.
+                write_sidecar(slug_dir, sorted(records.values(), key=lambda r: r["source_url"]))
                 refreshed += 1
         # The localizer's anchored rewriter: CDN sizing variants make one URL a prefix of another,
         # so a bare replace corrupts the longer ref.
@@ -91,10 +101,16 @@ def reuse_unchanged(doc_path: Path, slug_dir: Path) -> int:
 
 
 def _refetch_into(rec: ImageRecord, images_dir: Path, url: str) -> bool:
-    """Fetch ``url`` and, when its bytes still belong under ``rec["local"]``, write
-    them there and update ``rec``; False leaves both untouched."""
+    """Fetch ``url`` and, when its bytes still belong under ``rec["local"]``, write them there and
+    update ``rec``; True leaves both untouched when the source is gone, False when it failed."""
     try:
         _final, data, meta = http.fetch_bytes_meta(url)
+    except urllib.error.HTTPError as exc:
+        if exc.code in _GONE:
+            log.info("images.source_gone", url=url, code=exc.code, local=rec["local"])
+            return True
+        log.warning("images.refetch_failed", url=url, error=str(exc))
+        return False
     except Exception as exc:
         log.warning("images.refetch_failed", url=url, error=str(exc))
         return False
@@ -118,20 +134,24 @@ def _refetch_into(rec: ImageRecord, images_dir: Path, url: str) -> bool:
     return True
 
 
+def _settleable(doc_path: Path, slug_dir: Path) -> set[str]:
+    """Files the sidecar records for a remote ref still in the document: the files it can settle on."""
+    wanted = {decode_ref(url) for url in remote_image_urls(doc_path)}
+    return {r["local"] for r in read_sidecar(slug_dir) if r["source_url"] in wanted}
+
+
 def prune_orphans(doc_path: Path, slug_dir: Path) -> int:
     """Delete images the document no longer references (the sidecar can miss a replaced file), and
-    their records. Refuses while a ref is remote: mid-localize, every file looks unreferenced."""
+    their records, keeping any file a ref that is still remote could settle on."""
     images_dir = slug_dir / "images"
     if not images_dir.is_dir():
         return 0
-    if count_remote_images(doc_path):
-        log.info("images.prune_skipped", slug=slug_dir.name, reason="remote refs remain")
-        return 0
 
     text = doc_path.read_text(encoding="utf-8")
+    settleable = _settleable(doc_path, slug_dir)
     pruned = 0
     for path in sorted(images_dir.glob("*")):
-        if not path.is_file() or f"images/{path.name}" in text:
+        if not path.is_file() or f"images/{path.name}" in text or path.name in settleable:
             continue
         path.unlink(missing_ok=True)
         pruned += 1

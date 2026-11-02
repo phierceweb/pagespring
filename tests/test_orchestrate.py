@@ -1,5 +1,6 @@
 """Ingest orchestration with a mocked pattern; an autouse fixture stages into a tmp dir."""
 
+import hashlib
 import pathlib
 import re
 import urllib.error
@@ -1076,7 +1077,7 @@ def test_localize_images_reuses_unchanged_before_downloading(tmp_path, monkeypat
                 "source_url": "https://x.com/a.png",
                 "etag": '"a"',
                 "last_modified": None,
-                "sha256": "unused",
+                "sha256": hashlib.sha256(b"\x89PNG\r\n\x1a\nold").hexdigest(),
                 "bytes": 11,
             }
         ],
@@ -1135,6 +1136,47 @@ def test_localize_during_an_outage_keeps_every_cached_image(tmp_path, monkeypatc
     assert (imgs / "a.png").read_bytes() == cached
     assert images.read_sidecar(slug_dir) == [record]
     assert (res["remaining"], res["pruned"], res["images_total"]) == (1, 0, 1)
+
+
+def test_localize_settles_a_gone_source_on_its_cached_image(tmp_path, monkeypatch):
+    """A 404 settles the ref on its recorded file; a file merely named after a dead ref is pruned."""
+    from email.message import Message
+
+    from pagespring import images
+
+    slug_dir = tmp_path / "incoming" / "bk"
+    _write_manifest(slug_dir)
+    (slug_dir / "bk.html").write_text(
+        '<img src="https://x.com/a.png"><img src="https://x.com/b.png">', encoding="utf-8"
+    )
+    _seal(slug_dir)
+    imgs = slug_dir / "images"
+    imgs.mkdir()
+    cached = b"\x89PNG\r\n\x1a\nold"
+    (imgs / "a.png").write_bytes(cached)
+    (imgs / "b.png").write_bytes(cached)
+    record = {
+        "local": "a.png",
+        "source_url": "https://x.com/a.png",
+        "etag": '"a"',
+        "last_modified": None,
+        "sha256": hashlib.sha256(cached).hexdigest(),
+        "bytes": len(cached),
+    }
+    images.write_sidecar(slug_dir, [record])
+
+    def gone(url, **kwargs):
+        raise urllib.error.HTTPError(url, 404, "Not Found", Message(), None)
+
+    monkeypatch.setattr(http, "not_modified", lambda u, **k: False)
+    monkeypatch.setattr(http, "fetch_bytes_meta", gone)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    res = localize.localize_images("bk")
+
+    assert 'src="images/a.png"' in (slug_dir / "bk.html").read_text(encoding="utf-8")
+    assert sorted(p.name for p in imgs.glob("*")) == ["a.png"]
+    assert (res["reused"], res["remaining"], res["pruned"]) == (1, 1, 1)
 
 
 def test_reingest_preserves_images_and_sidecar(tmp_path, monkeypatch):

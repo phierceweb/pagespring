@@ -8,9 +8,10 @@ from contextlib import suppress
 from html import escape
 from urllib.parse import urljoin, urlparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pw_foundation.utils.slugify import slugify
+
+from pagespring.patterns._soup import parse_html
 
 _GENERIC_LABELS = {"www", "docs", "manual", "manuals", "help", "support", "wiki"}
 # A file extension, not merely any dot — "v2.1" and "example.test" are not files.
@@ -77,7 +78,7 @@ _MAX_REFRESH_DELAY_S = 10
 def meta_refresh_target(html: str, page_url: str) -> str | None:
     """Where a ``<meta http-equiv="refresh">`` shell sends the reader on the same site, else None;
     one in ``<noscript>`` is the no-JS fallback a scripted reader never follows."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     for meta in soup.find_all("meta"):
         if not isinstance(meta, Tag) or str(meta.get("http-equiv") or "").lower() != "refresh":
             continue
@@ -111,14 +112,14 @@ def slug_from_host(host: str) -> str:
 
 def page_title(html: str) -> str | None:
     """The page's <title> text, or None."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     return soup.title.get_text(strip=True) if soup.title else None
 
 
 def generator_meta(html: str) -> str:
     """Every <meta name="generator"> content, lowercased and comma-joined ('' when
     absent). A platform often names itself after its framework (Astro, then Starlight)."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     tags = soup.find_all("meta", attrs={"name": "generator"})
     return ", ".join(str(t.get("content") or "").lower() for t in tags if isinstance(t, Tag))
 
@@ -160,7 +161,7 @@ def seat_headings(node: Tag, *, depth: int, name: str) -> None:
     heads = node.find_all(_HEADING_RE)
     if not heads:
         if name:
-            node.insert(0, BeautifulSoup(toc_heading(depth, name), "html.parser"))
+            node.insert(0, parse_html(toc_heading(depth, name)))
         return
     shift = top - int(heads[0].name[1])
     for head in heads:
@@ -270,7 +271,7 @@ def flatten_responsive_images(root: Tag) -> None:
         sources = [s for s in picture.find_all("source") if isinstance(s, Tag)]
         img = picture.find("img")
         if not isinstance(img, Tag):
-            made = BeautifulSoup('<img alt=""/>', "html.parser").img
+            made = parse_html('<img alt=""/>').img
             if made is None:
                 picture.decompose()
                 continue

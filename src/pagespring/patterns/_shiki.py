@@ -3,8 +3,9 @@ several times over."""
 
 from __future__ import annotations
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
+
+from pagespring.patterns._soup import parse_html
 
 _DIFF_MARKS = {"add": "+", "remove": "-"}
 _POPUP_CSS = ".twoslash-popup-container"
@@ -52,7 +53,7 @@ def _text(code: Tag) -> str:
 
 def flatten_shiki(root: Tag) -> None:
     """Replace each shiki ``<pre>`` under ``root`` with a plain one, keeping its language."""
-    factory = BeautifulSoup("", "html.parser")
+    factory = parse_html("")
     for pre in root.find_all("pre"):
         code = pre.find("code")
         if not isinstance(code, Tag) or code.find(True) is None or not _is_shiki(pre):

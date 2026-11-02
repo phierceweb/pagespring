@@ -11,7 +11,6 @@ from typing import Any
 from urllib.parse import unquote, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
-from bs4 import BeautifulSoup
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
 from pw_foundation.utils.hashing import content_hash
@@ -21,6 +20,7 @@ from pagespring import http
 from pagespring.base import IMAGES_DIR, AcquireResult
 from pagespring.patterns._fluidtopics_page import ImageBundle, clean_topic
 from pagespring.patterns._site import raw_stem
+from pagespring.patterns._soup import parse_html
 from pagespring.patterns._toc_stage import Section, TopicLost, stage_toc
 
 log = get_logger(__name__)
@@ -53,7 +53,7 @@ class _Topic:
 def is_fluidtopics(page: str) -> bool:
     """True when the page is the Fluid Topics app shell: its tenant meta, its portal client, or its
     page script beside the app loader (the script alone could be an embed on another site)."""
-    soup = BeautifulSoup(page, "html.parser")
+    soup = parse_html(page)
     if soup.find("meta", attrs={"name": _BASE_META}) is not None:
         return True
     srcs = [s for tag in soup.find_all("script", src=True) if isinstance(s := tag.get("src"), str)]
@@ -64,7 +64,7 @@ def is_fluidtopics(page: str) -> bool:
 
 def tenant_base(page_url: str, page: str) -> str:
     """The portal's base URL as the shell declares it, else the page's origin."""
-    meta = BeautifulSoup(page, "html.parser").find("meta", attrs={"name": _BASE_META})
+    meta = parse_html(page).find("meta", attrs={"name": _BASE_META})
     declared = meta.get("content") if meta is not None else None
     if isinstance(declared, str) and urlparse(declared).scheme in ("http", "https"):
         return declared if declared.endswith("/") else f"{declared}/"

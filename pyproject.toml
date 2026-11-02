@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pagespring"
-version = "0.17.0"
+version = "0.18.0"
 description = "Acquire and normalize online documentation into clean, convertible source files — the acquisition front-end to pagespeak."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -17,6 +17,8 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
     "Topic :: Text Processing :: Markup :: Markdown",
     "Typing :: Typed",

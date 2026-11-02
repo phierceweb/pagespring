@@ -8,7 +8,6 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
@@ -16,6 +15,7 @@ from pw_foundation.log import get_logger
 from pagespring import http
 from pagespring.base import AcquireResult
 from pagespring.patterns._site import absolutize_refs, flatten_responsive_images, strip_scripts
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
 
@@ -50,7 +50,7 @@ def _keep(url: str, base: str, versions: set[str]) -> bool:
 
 def _extract(html: str, page_url: str) -> str | None:
     """The page's <article> as a cleaned, absolutized fragment (None if absent)."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_html(html)
     article = soup.find("article")
     if not isinstance(article, Tag):
         return None

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pw_core.fetch.images as core_images
 import pytest
+import structlog
 from pw_core.fetch import Body
 
 from pagespring import _image_cache, _staging, http, images, manifest, orchestrate
@@ -56,6 +57,21 @@ def _entry_fetch_through_fetch_text(request, monkeypatch):
         return Body(final, text.encode("utf-8"), "utf-8", {"etag": None, "last_modified": None})
 
     monkeypatch.setattr(http, "fetch_body", fetch_body)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _uncached_loggers():
+    """``capture_logs()`` reconfigures structlog, which a logger cached on first use never sees, so
+    no configuration this session, ``setup_logging``'s included, may turn caching on."""
+    real = structlog.configure
+
+    def configure(**kwargs):
+        real(**{**kwargs, "cache_logger_on_first_use": False})
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(structlog, "configure", configure)
+        real(cache_logger_on_first_use=False)
+        yield
 
 
 @pytest.fixture(autouse=True, scope="session")

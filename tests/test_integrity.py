@@ -306,7 +306,7 @@ def _run_until_checkpointed_then_kill(tmp_path):
         stderr=subprocess.PIPE,
     )
     try:
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + 120  # generous: a loaded machine is slow to start Python
         while not started.exists():
             assert proc.poll() is None, proc.communicate()[1].decode()
             assert time.monotonic() < deadline, "the pass never reached its second fetch"
