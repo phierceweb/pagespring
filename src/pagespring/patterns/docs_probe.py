@@ -44,6 +44,7 @@ from pagespring.patterns._spec_ui import fetch_or_none as _fetch_or_none
 from pagespring.patterns.api_spec import ApiSpecPattern
 from pagespring.patterns.gitbook import GitBookPattern
 from pagespring.patterns.pdf_url import PdfUrlPattern
+from pagespring.patterns.zendesk_help import ZendeskHelpPattern
 
 log = get_logger(__name__)
 
@@ -109,6 +110,10 @@ class DocsProbePattern:
                 acq.etag = acq.last_modified = None
             return acq
         slug = slug_from_host(urlparse(found.base).netloc)
+        if found.route == "zendesk_help":
+            acq = ZendeskHelpPattern().acquire(found.final, workdir, host_slug=slug)
+            acq.title = found.title
+            return acq
         if found.route == "llms_txt":
             # Only a GitBook page needs its rendered twin, to resolve /files/<id> images.
             rendered = not found.generator or "gitbook" in found.generator

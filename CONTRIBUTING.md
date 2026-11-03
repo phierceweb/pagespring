@@ -24,7 +24,7 @@ Python 3.12+ is required.
 ```bash
 git clone https://github.com/phierceweb/pagespring
 cd pagespring
-bin/setup        # venv + editable install with [dev] + pre-commit hooks
+bin/setup        # venv + editable install with [dev] + pre-commit hooks + pre-push tag guard
 ```
 
 ## Before you open a pull request

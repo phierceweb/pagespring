@@ -13,6 +13,7 @@ from pagespring import manifest
 from pagespring._integrity import image_pass_ran, integrity, local_image_refs, usable
 from pagespring._staging import source_key
 from pagespring.config import cfg
+from pagespring.images import decode_ref, read_gone, remote_image_refs, remote_image_starts
 from pagespring.paths import slug_dir
 from pagespring.registry import pattern_by_name
 
@@ -68,6 +69,12 @@ def _sha_findings(incoming_dir: Path, m: manifest.Manifest, doc_text: str) -> li
             )
         ]
     return []
+
+
+def _declined_refs(doc_text: str) -> int:
+    """Distinct remote image refs audit's matcher finds where no localizer match begins."""
+    taken = remote_image_starts(doc_text)
+    return len({m[1] for m in _REMOTE_IMG_RE.finditer(doc_text) if m.start(1) not in taken})
 
 
 def audit_slug(slug: str) -> list[Finding]:
@@ -154,13 +161,36 @@ def audit_slug(slug: str) -> list[Finding]:
         # images/ existing is the fact that a localize pass ran; the count can be
         # 0 when every download failed.
         if m["images"] > 0 or (incoming_dir / "images").is_dir():
-            remaining = len(set(_REMOTE_IMG_RE.findall(doc_text)))
-            if remaining:
+            # Counted as localize counts: distinct refs as written, gone by their decoded URL.
+            refs = remote_image_refs(doc_text)
+            marked = set(read_gone(incoming_dir))
+            gone = sum(1 for ref in refs if decode_ref(ref) in marked)
+            declined = _declined_refs(doc_text)
+            if len(refs) > gone:
                 findings.append(
                     _f(
                         "localize_incomplete",
                         "warning",
-                        f"{remaining} remote image ref(s) remain — re-run localize",
+                        f"{len(refs) - gone} remote image ref(s) remain — re-run localize",
+                    )
+                )
+            if declined:
+                findings.append(
+                    _f(
+                        "image_ref_declined",
+                        "warning",
+                        f"{declined} remote image ref(s) localize does not fetch "
+                        "(its matcher does not take them: not an image URL, an unreadable host or "
+                        "port, an uppercase markdown scheme)",
+                    )
+                )
+            if gone:
+                findings.append(
+                    _f(
+                        "image_source_gone",
+                        "warning",
+                        f"{gone} remote image ref(s) answered 404/410 at the source — "
+                        "re-running localize cannot fetch them",
                     )
                 )
         # A local ref whose file is gone renders broken; the remote-ref check above can't see it.

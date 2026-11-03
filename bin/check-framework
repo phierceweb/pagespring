@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ast
 import io
+import os
 import re
 import sys
 import tokenize
@@ -174,5 +175,24 @@ def main(argv: list[str]) -> int:
     return 0
 
 
+_RERUN_MARK = "PAGESPRING_GATE_RERUN"
+
+
+def _rerun_under_venv() -> None:
+    """A bare ``python3`` can be older than the 3.12 this needs: re-run under the project venv."""
+    if sys.version_info >= (3, 12):  # noqa: UP036 - a bare python3 runs this file too
+        return
+    venv = ROOT / ".venv" / "bin" / "python"
+    if not venv.is_file():
+        sys.exit(f"{Path(__file__).name} needs Python 3.12+: run bin/setup")
+    # Set by the re-run itself: an old venv python would otherwise re-run forever.
+    if os.environ.get(_RERUN_MARK):
+        name = Path(__file__).name
+        sys.exit(f"{name}: .venv is older than 3.12: remove .venv, then run bin/setup")
+    os.environ[_RERUN_MARK] = "1"
+    os.execv(venv, [str(venv), __file__, *sys.argv[1:]])
+
+
 if __name__ == "__main__":
+    _rerun_under_venv()
     sys.exit(main(sys.argv[1:]))

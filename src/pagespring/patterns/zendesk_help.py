@@ -59,12 +59,13 @@ def _articles_endpoint(url: str) -> str:
     return f"{base}/articles.json?per_page=100"
 
 
-def _slug(url: str) -> str:
+def _slug(url: str, host_slug: str | None = None) -> str:
     """Host id, plus the article's name when the URL names one: host alone collides across articles,
     article alone across vendors."""
     article = _ARTICLE_RE.search(urlparse(url).path)
-    host = domain_of(url).removeprefix("support.")
-    host_slug = slugify(host.split(".")[0]) or "help"
+    if host_slug is None:
+        host = domain_of(url).removeprefix("support.")
+        host_slug = slugify(host.split(".")[0]) or "help"
     if article:
         return slugify(f"{host_slug}-{article.group(2) or article.group(1)}")
     return host_slug
@@ -101,7 +102,8 @@ class ZendeskHelpPattern:
             absolutize_refs(soup, page_url)
         return str(soup)
 
-    def acquire(self, url: str, workdir: Path) -> AcquireResult:
+    def acquire(self, url: str, workdir: Path, *, host_slug: str | None = None) -> AcquireResult:
+        """``host_slug`` names the source in place of the center's host, for a vendor's redirect."""
         origin, locale = _api_base_and_locale(url)
         page_url: str | None = _articles_endpoint(url)
 
@@ -131,7 +133,7 @@ class ZendeskHelpPattern:
                 encoding="utf-8",
             )
 
-        slug = _slug(url)
+        slug = _slug(url, host_slug)
         # One article IS the deliverable, so pages=1 is correct here — not the
         # collapsed crawl audit's single_page_crawl check exists to catch.
         is_article = bool(_ARTICLE_RE.search(urlparse(url).path))

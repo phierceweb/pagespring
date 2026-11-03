@@ -426,6 +426,8 @@ class TestNonAsciiUrls:
             "a\u3164b.example",
             "a\u180fb.example",
             "a\U0001bca0b.example",
+            "a\u1806b.example",
+            "a\uff01b.example",
         ],
     )
     def test_a_host_a_browser_would_send_elsewhere_is_refused(self, seam, host):
@@ -433,3 +435,22 @@ class TestNonAsciiUrls:
         with pytest.raises(InvalidInputError):
             http.fetch_bytes(f"https://{host}/a.png")
         assert seam.calls == []
+
+    # The redirect walk is pw-core's; these pin the behaviour pagespring's CHANGELOG claims for it.
+    def test_a_redirect_to_a_non_ascii_path_is_followed_as_a_browser_sends_it(self, seam):
+        # The raw bytes, as http.client reads them.
+        location = "/doc/ü/page é.html".encode().decode("latin-1")
+        seam.queue.extend([_http_error(302, {"Location": location}), _Resp(b"body")])
+
+        http.fetch_text(URL)
+
+        assert seam.calls[1][0].full_url == "https://docs.example.com/doc/%C3%BC/page%20%C3%A9.html"
+
+    @pytest.mark.parametrize("host", ["faß.de", "a\u1806b.example"])
+    def test_a_redirect_to_a_host_a_browser_would_send_elsewhere_is_refused(self, seam, host):
+        location = f"https://{host}/x".encode().decode("latin-1")
+        seam.queue.append(_http_error(302, {"Location": location}))
+
+        with pytest.raises(InvalidInputError, match="browser"):
+            http.fetch_text(URL)
+        assert len(seam.calls) == 1

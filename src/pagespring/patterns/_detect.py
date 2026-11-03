@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
+from urllib.parse import urlparse
 
 from pw_core.fetch import Body
 from pw_foundation.exceptions import ClientError, InvalidInputError
@@ -21,6 +22,7 @@ from pagespring.patterns import (
     _hugo,
     _mdbook,
     _mediawiki,
+    _mkdocs,
     _paligo,
     _spec_ui,
     _sphinx,
@@ -39,6 +41,7 @@ from pagespring.patterns._site import (
 )
 from pagespring.patterns._spec_ui import fetch_or_none as _fetch_or_none
 from pagespring.patterns.api_spec import is_openapi
+from pagespring.patterns.zendesk_help import ZendeskHelpPattern
 
 log = get_logger(__name__)
 # Magic bytes survive the text decode (ASCII); a window allows leading whitespace/BOM.
@@ -160,6 +163,9 @@ def detect(url: str) -> Detection:
     ui = _spec_ui.ui_name(home)
     if ui is not None:
         return found(ui, "page")
+    # A vendor domain redirecting into its Zendesk Help Center, whose API holds the content.
+    if urlparse(final).path.startswith("/hc/") and ZendeskHelpPattern().match(final):
+        return found("zendesk_help", "redirect")
 
     # Before the meta sniff: ClickHelp publishes no generator meta at all, so
     # it is only identifiable by its own asset tells.
@@ -185,6 +191,9 @@ def detect(url: str) -> Detection:
     if _mdbook.is_mdbook(home):
         return found("mdbook", "comment")
 
+    if "mkdocs" in gen:
+        # A deep page seed: the index lives at the root the page names, not under the page.
+        base = _mkdocs.site_root(home, page_url) or base
     for route in _META_ROUTES:
         if route in gen:
             return found(route, "meta")
@@ -215,11 +224,11 @@ def detect(url: str) -> Detection:
         detected = found("llms_txt", f"{index}/llms.txt", index=index)
         return replace(detected, section=llms_section(base, index, pages))
     raise InvalidInputError(
-        f"unrecognized docs site: {base} — probed for an API reference UI "
-        "(Swagger UI/Redoc/Scalar), the generator meta tag "
-        "(MkDocs/Docusaurus/Hugo/Asciidoctor/Antora/Starlight/VitePress/WordPress/MediaWiki/"
-        "Sphinx), the tells of ClickHelp, Paligo, SCHEMA ST4, Writerside, MadCap Flare, Fluid "
-        "Topics, mdBook, Docsy and Docsify, _static/ assets (Sphinx), "
+        f"unrecognized docs site: {base} — probed, in order, for a PDF or OpenAPI body, an API "
+        "reference UI (Swagger UI/Redoc/Scalar), a redirect into a Zendesk Help Center, the tells "
+        "of ClickHelp, Paligo, SCHEMA ST4, Writerside, MadCap Flare, Fluid Topics and mdBook, the "
+        "generator meta tag (MkDocs/Docusaurus/Hugo/Asciidoctor), the tells of Docsy, Antora, "
+        "Starlight, VitePress, WordPress, MediaWiki, Sphinx and Docsify, "
         "search/search_index.json (MkDocs), and llms.txt at and above the URL's path; "
         f"none matched{f' (generator tags: {gen})' if gen else ''}. The source needs its "
         "own pattern (see docs/architecture.md, 'Adding a new pattern')."

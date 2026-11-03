@@ -1,0 +1,40 @@
+#!/bin/sh
+# Refuse to push a version tag that is not on the main the remote will hold: publish builds the
+# tagged commit and checks it against that main. bin/setup installs this as the pre-push hook.
+zero=0000000000000000000000000000000000000000
+lines=$(cat)
+printf '%s\n' "$lines" | awk '$3 ~ /^refs\/tags\/v/' | grep -q . || exit 0
+pushed=$(printf '%s\n' "$lines" \
+  | awk -v z="$zero" '$3 == "refs/heads/main" && $2 != z { print $2 }')
+local_main=$(git rev-parse --verify -q refs/heads/main)
+# The remote's main now (git leaves an up-to-date main out of the input); the last fetched one only
+# when the remote cannot be asked. An empty answer means the remote has no main.
+if answer=$(git ls-remote "$2" refs/heads/main 2>/dev/null); then
+  remote_main=$(printf '%s' "$answer" | cut -f1)
+else
+  remote_main=$(git rev-parse --verify -q "refs/remotes/$1/main")
+fi
+target=${pushed:-$remote_main}
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in refs/tags/v*) ;; *) continue ;; esac
+  [ "$local_sha" = "$zero" ] && continue
+  commit=$(git rev-parse "$local_sha^{commit}")
+  [ "$commit" = "$target" ] && continue
+  tag=${remote_ref#refs/tags/}
+  short=$(git rev-parse --short "$commit")
+  status=1
+  if [ -z "$pushed" ] && [ "$commit" = "$local_main" ] && { [ -z "$remote_main" ] \
+    || git merge-base --is-ancestor "$remote_main" "$local_main" 2>/dev/null; }; then
+    echo "pre-push: $tag is on main ($short), which $1 does not have yet; push both at once:" >&2
+    echo "    git push --atomic $1 main refs/tags/$tag" >&2
+  else
+    main_short=$(printf '%.7s' "${target:-none}")
+    echo "pre-push: $tag is on $short, but $1's main will be on $main_short." >&2
+    echo "  A release tag must be on that commit: integrate $1's main into local main," >&2
+    echo "  tag main's tip and push again. If $tag is an older release, push without it." >&2
+  fi
+done <<EOF
+$lines
+EOF
+exit $status

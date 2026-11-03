@@ -343,6 +343,7 @@ def test_localize_command_reports_done(monkeypatch):
             "reused": 0,
             "pruned": 0,
             "remaining": 0,
+            "gone": 0,
             "images_total": 5,
         },
     )
@@ -364,6 +365,7 @@ def test_localize_command_reports_remaining(monkeypatch):
             "reused": 0,
             "pruned": 0,
             "remaining": 120,
+            "gone": 0,
             "images_total": 50,
         },
     )
@@ -387,6 +389,7 @@ def test_localize_all_iterates_incoming(monkeypatch, tmp_path):
             "reused": 0,
             "pruned": 0,
             "remaining": 0,
+            "gone": 0,
             "images_total": 1,
         }
 

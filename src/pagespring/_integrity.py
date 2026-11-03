@@ -40,9 +40,9 @@ def _has_pass_ref(doc_text: str) -> bool:
 # What an image pass writes: a ref's target (pw-core's retarget) and the case of an
 # images/ name (normalize_case).
 _REF_TARGET_RE = re.compile(
-    r"(\]\()(?:https?://|images/)[^)]*"
-    r'|(src=")(?:https?://|images/)[^"]*'
-    r"|(src=')(?:https?://|images/)[^']*"
+    r"(\]\()(?:(?i:https?://)|images/)[^)]*"
+    r'|((?i:src)=")(?:(?i:https?://)|images/)[^"]*'
+    r"|((?i:src)=')(?:(?i:https?://)|images/)[^']*"
 )
 _IMAGE_NAME_RE = re.compile(r"images/[^\"'()<>\n]*")
 

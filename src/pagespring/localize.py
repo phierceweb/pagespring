@@ -23,6 +23,7 @@ class _ImagePass(NamedTuple):
     reused: int
     pruned: int
     remaining: int
+    gone: int  # of ``remaining``, refs whose source answered 404/410
     total: int  # images now in incoming/<slug>/images/
 
 
@@ -39,9 +40,10 @@ def _image_pass(deliverable: Path, incoming_dir: Path) -> _ImagePass:
     reused = _image_cache.reuse_unchanged(deliverable, incoming_dir)
     localized = images.download_images(deliverable, images_dir)
     remaining = images.count_remote_images(deliverable)
+    gone = images.gone_remote_images(deliverable, incoming_dir)
     pruned = _image_cache.prune_orphans(deliverable, incoming_dir)
     total = sum(1 for p in images_dir.iterdir() if p.is_file()) if images_dir.exists() else 0
-    return _ImagePass(localized, reused, pruned, remaining, total)
+    return _ImagePass(localized, reused, pruned, remaining, gone, total)
 
 
 def _recorded_image_pass(deliverable: Path, incoming_dir: Path, m: manifest.Manifest) -> _ImagePass:
@@ -73,12 +75,13 @@ class LocalizeResult(TypedDict):
     reused: int  # refs re-pointed from the sidecar without a download
     pruned: int  # image files deleted because the deliverable no longer references them
     remaining: int  # remote refs still left (0 ⇒ fully localized)
+    gone: int  # of ``remaining``, refs whose source answered 404/410: a re-run cannot fetch them
     images_total: int  # images now in incoming/<slug>/images/
 
 
 def localize_images(slug: str) -> LocalizeResult:
     """Download a staged deliverable's remote images into ``images/`` and re-point refs, without a
-    re-crawl. Resumable: re-run until ``remaining`` is 0.
+    re-crawl. Resumable: re-run until ``remaining`` equals ``gone``.
 
     Raises:
         PreconditionError: the slug has no readable manifest, or its deliverable is missing or
@@ -100,6 +103,7 @@ def localize_images(slug: str) -> LocalizeResult:
             "reused": 0,
             "pruned": 0,
             "remaining": 0,
+            "gone": 0,
             "images_total": m["images"],
         }
 
@@ -111,6 +115,7 @@ def localize_images(slug: str) -> LocalizeResult:
         reused=p.reused,
         pruned=p.pruned,
         remaining=p.remaining,
+        gone=p.gone,
         images=p.total,
     )
     return {
@@ -119,5 +124,6 @@ def localize_images(slug: str) -> LocalizeResult:
         "reused": p.reused,
         "pruned": p.pruned,
         "remaining": p.remaining,
+        "gone": p.gone,
         "images_total": p.total,
     }

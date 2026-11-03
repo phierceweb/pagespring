@@ -205,6 +205,28 @@ def test_a_pass_killed_after_a_checkpoint_resumes(tmp_path, images_served):
     assert _checks("bk") == []
 
 
+@pytest.mark.parametrize(
+    "ref",
+    [
+        f'<IMG SRC="{_REMOTE[0]}">',
+        f"<img Src='{_REMOTE[0]}'>",
+        f'![b]({_REMOTE[0]} "t")',
+        '<img src="HTTPS://img.example/b.png">',
+        '<img src="HTTPS://img.example/b.png">\n\n![b](HTTPS://img.example/b.png)',
+    ],
+    ids=["upper-src", "mixed-case-src", "titled-markdown", "upper-scheme", "upper-scheme-twice"],
+)
+def test_any_ref_pw_core_retargets_is_pass_progress(tmp_path, ref):
+    slug_dir, doc = _localized_slug(tmp_path, body=f"<h1>Bk</h1>{ref}")
+    _open_pass(slug_dir)
+    (target,) = images.remote_image_refs(ref)
+
+    doc.write_text(images._core._retarget(doc.read_text("utf-8"), target, "images/b.png"))
+
+    assert "images/b.png" in doc.read_text(encoding="utf-8")
+    assert _state(slug_dir) == "interrupted"
+
+
 @pytest.mark.parametrize("damage", ["truncated", "edited"])
 def test_damage_after_a_killed_pass_is_still_refused(tmp_path, images_served, damage):
     slug_dir, doc = _localized_slug(tmp_path)

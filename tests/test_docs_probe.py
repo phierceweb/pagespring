@@ -1,5 +1,7 @@
 """docs_probe — generator sniffing + strategy dispatch, all http mocked."""
 
+import json
+
 import pytest
 from pw_core.fetch import Body
 from pw_foundation.exceptions import ClientError, InvalidInputError
@@ -1127,3 +1129,83 @@ def test_a_pdf_too_large_to_read_behind_a_meta_refresh_is_handed_to_pdf_url(tmp_
     assert acq.kind == "pdf"
     assert downloaded == ["https://vendor.example/files/manual.pdf"]
     assert (acq.etag, acq.last_modified) == (None, None)
+
+
+@pytest.mark.parametrize(
+    "final",
+    [
+        "https://guides.vendor.example/hc/en-gb",
+        "https://guides.vendor.example/hc/de/categories/123-Synths",
+        "https://vendor.zendesk.com/hc/en-us",
+    ],
+)
+def test_a_redirect_into_a_zendesk_help_center_routes_to_zendesk_help(monkeypatch, final):
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (final, _PLAIN_HOME))
+
+    found = _detect.detect("https://guides.vendor.example/")
+
+    assert (found.route, found.via, found.final) == ("zendesk_help", "redirect", final)
+
+
+def test_a_pdf_a_redirect_lands_on_in_a_help_center_path_is_a_pdf(monkeypatch):
+    final = "https://help.vendor.example/hc/en-us/manual"
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (final, "%PDF-1.7 binary"))
+
+    assert _detect.detect("https://vendor.example/manual").route == "pdf"
+
+
+def test_a_zendesk_sign_in_page_is_not_taken_for_a_help_center(monkeypatch):
+    final = "https://vendor.zendesk.com/auth/v2/login/signin?return_to=x"
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (final, _PLAIN_HOME))
+
+    with pytest.raises(InvalidInputError):
+        _detect.detect("https://vendor.example/manual")
+
+
+def test_a_zendesk_attachment_redirect_is_not_taken_for_a_help_center(monkeypatch):
+    final = "https://guides.vendor.example/hc/article_attachments/1/manual.html"
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (final, _PLAIN_HOME))
+
+    with pytest.raises(InvalidInputError):
+        _detect.detect("https://guides.vendor.example/manual")
+
+
+def test_a_help_center_redirect_hands_the_final_url_to_zendesk_help(tmp_path, monkeypatch):
+    events = []
+    final = "https://help.vendor.example/hc/en-gb"
+
+    def fetch(url, **kwargs):
+        events.append("fetch")
+        return final, "<html><head><title>Vendor Help</title></head></html>"
+
+    def hand_off(self, url, workdir, *, host_slug=None):
+        events.append(("hand-off", url))
+        raw = tmp_path / "raw"
+        raw.mkdir(exist_ok=True)
+        return AcquireResult(raw_dir=raw, kind="html", slug=host_slug, pages=2)
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: events.append("sleep"))
+    monkeypatch.setattr(docs_probe.ZendeskHelpPattern, "acquire", hand_off)
+
+    acq = DocsProbePattern().acquire("https://guides.vendor.example/", tmp_path)
+
+    assert events == ["fetch", "sleep", ("hand-off", final)]
+    # Named for the seed like every docs_probe route, not the help center's generic host.
+    assert (acq.slug, acq.title) == ("guides", "Vendor Help")
+
+
+def test_a_redirect_to_one_article_keeps_the_articles_name_in_the_slug(tmp_path, monkeypatch):
+    final = "https://help.vendor.example/hc/en-us/articles/360001-quick-start"
+    api = {"article": {"title": "Quick start", "body": "<p>hi</p>", "html_url": final}}
+
+    def fetch(url, **kwargs):
+        if "/api/v2/" in url:
+            return url, json.dumps(api)
+        return final, _PLAIN_HOME
+
+    monkeypatch.setattr(http, "fetch_text", fetch)
+
+    acq = DocsProbePattern().acquire("https://guides.vendor.example/start", tmp_path)
+
+    assert (acq.slug, acq.single_document) == ("guides-quick-start", True)

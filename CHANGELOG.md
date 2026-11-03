@@ -4,6 +4,48 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.19.0] — 2026-11-03
+
+### Added
+
+- **A vendor domain that redirects into its Zendesk Help Center ingests that center**: when the
+  probe's fetch lands on a `/hc/` path, `docs_probe` hands that URL to `zendesk_help`, and the slug
+  names the seed's host (plus the article, when the redirect lands on one).
+- **`audit` reports `image_source_gone`** for remote image refs whose source answered `404` or `410`
+  on the last image pass and that have no cached copy; they no longer count toward
+  `localize_incomplete`. `images.json` lists them under `gone`.
+- **`audit` reports `image_ref_declined`** for remote image refs `localize` does not fetch (not an
+  image URL, an unreadable host or port, an uppercase markdown scheme); they no longer count toward
+  `localize_incomplete`.
+- **A release tag must be on `main`'s tip**: `bin/check-release` refuses any other commit, publish
+  runs it first against `origin/main`, and `bin/setup` installs a pre-push hook that refuses a tag
+  off the main the remote will hold (asking the remote for it) and says what to do instead.
+
+### Changed
+
+- **`localize` counts gone images apart**: it prints how many remaining refs a re-run can still
+  fetch and how many are gone at the source, instead of advising a re-run for all of them.
+- **`bin/check-framework` and `bin/check-release` run under the project venv** when started by an
+  older `python3`.
+- Depends on `pw-core[cli]~=1.0.0`.
+
+### Fixed
+
+- **A deep MkDocs page URL ingests the whole site**: the probe reads the site root the page names
+  instead of looking for the search index under the page.
+- **More non-ASCII hosts are encoded as a browser encodes them**: one with uppercase letters
+  (`bücher.EXAMPLE`) is lowercased and fetched, and one holding an emoji or a letter newer than
+  Unicode 3.2 (`💩.example`) is IDNA-encoded. Only a host that might not encode as a browser
+  encodes it is refused, which now includes one that 0.18.0 sent to another host (`a᠆b.example`
+  to `ab.example`) or that is not a DNS name once encoded (an ideographic space).
+- **An image refreshed in place is recorded at once**, so an image pass killed later cannot leave
+  the new file under the old hash, where its ref would never settle.
+- **`localize` takes more image refs**: one with a title (`![x](url "title")`) and an uppercase
+  `<IMG SRC=…>` are downloaded and re-pointed, and one with an unreadable host or port
+  (`https://[x/b.png`) is skipped instead of stopping the pass.
+- **Redirects**: one to a non-ASCII path is followed, encoded as a browser sends it; one to a host
+  a browser might send elsewhere (`faß.de`) is refused.
+
 ## [0.18.0] — 2026-11-01
 
 ### Changed
@@ -22,9 +64,8 @@ semantic versioning.
 - **A URL holding a non-ASCII character is requested instead of crashing**: pagespring sends it as
   a browser does, with tabs and line breaks dropped, the ends trimmed, a non-ASCII host
   IDNA-encoded and any other character a request line cannot carry percent-encoded as UTF-8. A host
-  that might not encode as a browser encodes it, or a non-ASCII userinfo or port, is refused. An
-  image URL that cannot be fetched is skipped like any failed image, so the rest of the image pass
-  continues.
+  a browser would encode differently, or a non-ASCII userinfo or port, is refused. An image URL
+  that cannot be fetched is skipped like any failed image, so the rest of the image pass continues.
 - **An image whose source answers `404` or `410` settles on its cached copy**: `localize` and
   `ingest --download-images` re-point its ref at the file already in `images/` instead of leaving
   it remote on every pass. Any other failure still keeps the ref remote for the next pass.

@@ -146,3 +146,92 @@ def test_page_blob_kept_when_no_section_carries_text(tmp_path, monkeypatch):
     merged = "".join(p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*")))
 
     assert "The entire page body." in merged, "dropped the only copy of the body"
+
+
+_MATERIAL = (
+    '<html><head><meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0"></head><body>'
+    '<script id="__config" type="application/json">{"base": "%s", "features": []}</script>'
+    "</body></html>"
+)
+_CLASSIC = (
+    '<html><head><meta name="generator" content="mkdocs-1.6.1"></head><body>'
+    '<script>var base_url = "%s";</script></body></html>'
+)
+
+
+@pytest.mark.parametrize("shell", [_MATERIAL, _CLASSIC], ids=["material", "classic"])
+@pytest.mark.parametrize(
+    ("page", "base", "root"),
+    [
+        ("https://h.example/proj/reference/images/", "../..", "https://h.example/proj"),
+        ("https://h.example/proj/guide/page.html", "..", "https://h.example/proj"),
+        ("https://h.example/proj/", ".", "https://h.example/proj"),
+    ],
+)
+def test_site_root_is_the_base_the_page_names(shell, page, base, root):
+    assert _mkdocs.site_root(shell % base, page) == root
+
+
+@pytest.mark.parametrize(
+    ("shell", "page", "base", "root"),
+    [
+        (_CLASSIC, "https://h.example/proj/guide", "..", "https://h.example/proj"),
+        (_MATERIAL, "https://h.example/proj", ".", "https://h.example/proj"),
+    ],
+)
+def test_a_slashless_page_url_is_read_as_its_directory(shell, page, base, root):
+    assert _mkdocs.site_root(shell % base, page) == root
+
+
+def test_a_base_url_in_page_content_is_not_the_themes():
+    home = (
+        '<html><body><pre><code>var base_url = "/";</code></pre>'
+        '<script>var base_url = ".";</script></body></html>'
+    )
+    assert _mkdocs.site_root(home, "https://h.example/proj/") == "https://h.example/proj"
+
+
+@pytest.mark.parametrize(
+    "home",
+    [
+        "<html><body>no config here</body></html>",
+        _MATERIAL % "https://elsewhere.example/docs",
+        _MATERIAL % "/other/site",
+        _MATERIAL.replace('{"base"', "not json {"),
+    ],
+    ids=["none", "other-host", "not-above-the-page", "unreadable"],
+)
+def test_site_root_is_none_unless_the_page_names_one_on_its_own_host(home):
+    assert _mkdocs.site_root(home, "https://h.example/proj/a/") is None
+
+
+def test_a_deep_page_seed_probes_the_site_roots_index(monkeypatch):
+    from pagespring.patterns import _detect
+
+    page = "https://h.example/proj/reference/images/"
+    monkeypatch.setattr(http, "fetch_text", lambda url, **k: (url, _MATERIAL % "../.."))
+
+    found = _detect.detect(page)
+
+    assert (found.route, found.base) == ("mkdocs", "https://h.example/proj")
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        '// var base_url = "/";\nvar base_url = "..";',
+        'var note = "var base_url = \'/\'";\nvar base_url = "..";',
+        '/*\nvar base_url = "/";\n*/\nvar base_url = "..";',
+        'var mkdocs_page_name = "G"; var base_url = "..";',
+    ],
+    ids=["comment", "string", "block-comment", "after-another-statement"],
+)
+def test_a_base_url_in_a_comment_or_string_is_not_the_themes(script):
+    home = f"<html><body><script>{script}</script></body></html>"
+    assert _mkdocs.site_root(home, "https://h.example/proj/guide/") == "https://h.example/proj"
+
+
+def test_a_root_on_another_scheme_is_not_the_pages():
+    assert (
+        _mkdocs.site_root(_MATERIAL % "http://h.example/proj", "https://h.example/proj/a/") is None
+    )

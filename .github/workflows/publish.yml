@@ -3,7 +3,22 @@ on:
   push:
     tags: ["v*"]
 jobs:
+  # First, while main is most likely still where the tag was cut.
+  release-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      # The tag is what triggers the publish, so it — not the source tree — is
+      # what would ship under the wrong version or release notes, or behind main.
+      - name: Fetch main
+        run: git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+      - name: Tag, packaged version and CHANGELOG agree, and the tag is main's tip
+        run: python bin/check-release "${GITHUB_REF_NAME}" --main origin/main
   gates:
+    needs: release-tag
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -29,10 +44,6 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      # The tag is what triggers the publish, so it — not the source tree — is
-      # what would ship under the wrong version or release notes.
-      - name: Tag, packaged version and CHANGELOG agree
-        run: python bin/check-release "${GITHUB_REF_NAME}"
       - run: pip install build twine
       - run: python -m build
       - run: twine check dist/*

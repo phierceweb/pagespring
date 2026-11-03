@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -76,3 +77,62 @@ def test_the_gate_needs_the_tag():
     )
     assert result.returncode == 2
     assert "usage" in result.stderr
+
+
+def test_a_tag_off_mains_tip_is_refused():
+    """Publish builds the tagged commit, so a tag behind main would ship code main has replaced."""
+    found = _gate().problems(
+        "v1.2.0",
+        pyproject_version="1.2.0",
+        init_version="1.2.0",
+        changelog=_NOTES,
+        commit_date="2026-09-22",
+        release_sha="7b3bc59" + "0" * 33,
+        main_sha="aa61759" + "0" * 33,
+    )
+    assert len(found) == 1 and "7b3bc59" in found[0] and "aa61759" in found[0], found
+
+
+def test_a_tag_on_mains_tip_passes():
+    sha = "aa61759" + "0" * 33
+    found = _gate().problems(
+        "v1.2.0",
+        pyproject_version="1.2.0",
+        init_version="1.2.0",
+        changelog=_NOTES,
+        commit_date="2026-09-22",
+        release_sha=sha,
+        main_sha=sha,
+    )
+    assert found == []
+
+
+def test_the_gate_compares_with_the_named_main():
+    result = subprocess.run(
+        [sys.executable, str(GATE), "v0.0.0", "--main", "refs/heads/no-such-branch"],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "no-such-branch" in result.stderr
+
+
+def test_the_gate_refuses_a_head_that_is_not_the_named_mains_tip(monkeypatch, capsys):
+    gate = _gate()
+    shas = {"HEAD": "a" * 40, "release-main^{commit}": "b" * 40}
+
+    def git(*args: str) -> str:
+        if args[0] == "rev-parse":
+            return shas[args[-1]]
+        return "2026-09-22"
+
+    monkeypatch.setattr(gate, "_git", git)
+    pyproject = gate.ROOT / "pyproject.toml"
+    version = re.search(r'^version = "([^"]+)"', pyproject.read_text(), re.M)[1]
+
+    rc = gate.main(["check-release", f"v{version}", "--main", "release-main"])
+
+    err = capsys.readouterr().err
+    assert rc == 1 and "is not main's tip" in err, err

@@ -14,6 +14,7 @@ from pw_foundation.utils.io import atomic_write_bytes, atomic_write_text
 
 from pagespring import http
 from pagespring.images import (
+    GONE_CODES,
     ImageRecord,
     decode_ref,
     local_name,
@@ -23,9 +24,6 @@ from pagespring.images import (
 )
 
 log = get_logger(__name__)
-
-# The source is gone for good, so the ref settles on its cached copy instead of retrying.
-_GONE = {404, 410}
 
 
 def normalize_case(doc_path: Path, slug_dir: Path) -> int:
@@ -106,7 +104,8 @@ def _refetch_into(rec: ImageRecord, images_dir: Path, url: str) -> bool:
     try:
         _final, data, meta = http.fetch_bytes_meta(url)
     except urllib.error.HTTPError as exc:
-        if exc.code in _GONE:
+        # Gone for good, so the ref settles on its cached copy instead of retrying.
+        if exc.code in GONE_CODES:
             log.info("images.source_gone", url=url, code=exc.code, local=rec["local"])
             return True
         log.warning("images.refetch_failed", url=url, error=str(exc))

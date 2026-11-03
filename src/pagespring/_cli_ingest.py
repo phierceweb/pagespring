@@ -212,8 +212,8 @@ def localize(
     ),
 ) -> None:
     """Download an already-ingested deliverable's remote images into images/ and
-    re-point refs — no re-crawl. Resumable: re-run until none remain, so a book too
-    big to localize in one pass finishes across runs."""
+    re-point refs — no re-crawl. Resumable: re-run while refs remain (images gone at the
+    source are counted apart), so a book too big to localize in one pass finishes across runs."""
     if all_books:
         incoming = Path(cfg.INCOMING_DIR)
         targets = (
@@ -236,12 +236,20 @@ def localize(
             if not all_books:
                 raise typer.Exit(2) from None
             continue
-        tail = "done" if r["remaining"] == 0 else f"{r['remaining']} remaining — re-run to continue"
+        tail = _localize_tail(r["remaining"], r["gone"])
         reused = f", {r['reused']} reused" if r["reused"] else ""
         pruned = f", {r['pruned']} pruned" if r["pruned"] else ""
         typer.echo(
             f"{s}: +{r['localized']} images{reused}{pruned} (total {r['images_total']}) — {tail}"
         )
+
+
+def _localize_tail(remaining: int, gone: int) -> str:
+    retry = remaining - gone
+    parts = [f"{retry} remaining — re-run to continue"] if retry else []
+    if gone:
+        parts.append(f"{gone} gone at the source (404/410), a re-run cannot fetch them")
+    return "; ".join(parts) or "done"
 
 
 def human_size(n: int) -> str:

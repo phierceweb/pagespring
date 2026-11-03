@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import re
 import time
-import unicodedata
 from urllib.parse import quote, urlsplit
 
 from pw_core.fetch import Body, Fetcher, Validators
+from pw_core.fetch._host import encode_host
 from pw_foundation.exceptions import ClientError, InvalidInputError
 from pw_foundation.utils.env import resolve_int, resolve_str
 
@@ -58,45 +58,9 @@ def _download_max_bytes() -> int:
 
 # What an HTTP request line cannot carry: controls, space, DEL and every non-ASCII character.
 _UNSENDABLE = re.compile(r"[^\x21-\x7e]")
-# Python's IDNA 2003 codec (Unicode 3.2) encodes these unlike a browser's UTS 46: another host.
-_IDNA_DEVIATIONS = re.compile(
-    r"[\u00df\u1e9e\u03c2\u200c\u200d\u115f\u1160\u17b4\u17b5\u3164\uffa0"
-    r"\U0002f868\U0002f874\U0002f91f\U0002f95f\U0002f9bf]"
-)
-_LABEL_DOTS = re.compile("[.\u3002\uff0e\uff61]")
 # A browser drops these anywhere in a URL, and strips C0 controls and spaces from its ends.
 _BROWSER_DROPS = re.compile(r"[\t\n\r]")
 _C0_AND_SPACE = "".join(map(chr, range(0x21)))
-
-
-def _newer_and_unsafe(char: str) -> bool:
-    """Whether Unicode added ``char`` after the codec's 3.2 and it is not a letter, digit or symbol,
-    which both encoders keep; a browser may drop or refuse any other newer character."""
-    return (
-        unicodedata.ucd_3_2_0.category(char) == "Cn" and unicodedata.category(char)[0] not in "LNS"
-    )
-
-
-def _idna_host(host: str) -> str:
-    """``host`` IDNA-encoded as a browser encodes it; a host it might encode otherwise is refused.
-
-    Raises:
-        InvalidInputError: the host cannot be encoded, or a browser might reach another host.
-    """
-    try:
-        # The codec folds only non-ASCII labels; a browser lowercases every one.
-        ascii_host = host.encode("idna").decode("ascii").lower()
-        labels = ascii_host.encode("ascii").decode("idna")
-    except UnicodeError as exc:
-        raise InvalidInputError(f"not a valid internationalized host: {host!r}") from exc
-    if (
-        _IDNA_DEVIATIONS.search(host)
-        or any(_newer_and_unsafe(c) for c in host)
-        or len(_LABEL_DOTS.findall(host)) != ascii_host.count(".")
-        or unicodedata.normalize("NFKC", labels.casefold()) != labels
-    ):
-        raise InvalidInputError(f"host may not encode as a browser sends it: {host!r}")
-    return ascii_host
 
 
 def _ascii_url(url: str) -> str:
@@ -118,7 +82,7 @@ def _ascii_url(url: str) -> str:
         host, colon, port = hostport.partition(":")
         if not (userinfo + port).isascii():
             raise InvalidInputError(f"a URL's userinfo and port must be ASCII: {url!r}")
-        ascii_host = _idna_host(host)
+        ascii_host = encode_host(host)
         url = url.replace(netloc, f"{userinfo}{at}{ascii_host}{colon}{port}", 1)
     return _UNSENDABLE.sub(lambda m: quote(m.group(), safe=""), url)
 

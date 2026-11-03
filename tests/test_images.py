@@ -163,6 +163,42 @@ def test_non_image_body_keeps_remote_ref(tmp_path, monkeypatch):
     assert images.count_remote_images(doc) == 1
 
 
+def test_a_titled_ref_and_an_uppercase_src_are_localized(tmp_path, monkeypatch):
+    doc = tmp_path / "d.md"
+    doc.write_text(
+        '![a](https://x.com/a.png "A title")\n\n<IMG SRC="https://x.com/b.png">\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(http, "fetch_bytes_meta", lambda u, **k: (u, _PNG, _meta()))
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert images.download_images(doc, tmp_path / "images") == 2
+    text = doc.read_text(encoding="utf-8")
+    assert '](images/a.png "A title")' in text and 'SRC="images/b.png"' in text
+    assert images.download_images(doc, tmp_path / "images") == 0
+
+
+def test_a_ref_with_an_unreadable_host_or_port_does_not_stop_the_pass(tmp_path, monkeypatch):
+    doc = tmp_path / "d.md"
+    doc.write_text(
+        "![b](https://[x/b.png)\n![p](https://x.com:99999/p.png)\n![ok](https://x.com/ok.png)\n",
+        encoding="utf-8",
+    )
+    fetched: list[str] = []
+
+    def fetch(url, **kwargs):
+        fetched.append(url)
+        return url, _PNG, _meta()
+
+    monkeypatch.setattr(http, "fetch_bytes_meta", fetch)
+    monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
+
+    assert images.download_images(doc, tmp_path / "images") == 1
+    assert fetched == ["https://x.com/ok.png"]
+    text = doc.read_text(encoding="utf-8")
+    assert "](https://[x/b.png)" in text and "](https://x.com:99999/p.png)" in text
+    assert "](images/ok.png)" in text
+
+
 def test_count_remote_images_ignores_localized(tmp_path):
     doc = tmp_path / "d.md"
     doc.write_text(
@@ -1382,3 +1418,16 @@ def test_an_image_whose_fetch_raises_a_url_error_does_not_end_the_pass(tmp_path,
     text = doc.read_text(encoding="utf-8")
     assert "](https://x.com/bad.png)" in text
     assert "](images/ok.png)" in text
+
+
+def test_remote_image_starts_finds_every_ref_the_localizer_targets():
+    doc = (
+        '![a](https://x.com/a.png "t")\n<img alt="b" SRC="HTTPS://x.com/b.png">\n'
+        "![c](https://x.com/page.html)\n<img src='https://x.com/d e.png'>\n![a](https://x.com/a.png)\n"
+    )
+    refs = images.remote_image_refs(doc)
+
+    starts = images.remote_image_starts(doc)
+
+    assert {max((r for r in refs if doc.startswith(r, s)), key=len) for s in starts} == set(refs)
+    assert len(starts) == 4

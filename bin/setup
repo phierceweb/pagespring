@@ -43,6 +43,29 @@ if [[ -f .pre-commit-config.yaml ]]; then
   .venv/bin/pre-commit install >/dev/null 2>&1 && ok "pre-commit hooks installed" || true
 fi
 
+# A version tag is pushed only from main's tip (bin/pre-push); publish.yml refuses the rest too.
+hooks="$(git rev-parse --git-path hooks 2>/dev/null || true)"
+guard='#!/bin/sh
+# pagespring tag guard: runs the pushing checkout'"'"'s bin/pre-push (installed by bin/setup).
+hook="$(git rev-parse --show-toplevel)/bin/pre-push"
+[ -x "$hook" ] && exec "$hook" "$@"
+echo "pre-push: this checkout has no bin/pre-push, so release tags are not checked" >&2'
+hook="$hooks/pre-push"
+if git config --get core.hooksPath >/dev/null; then
+  info "core.hooksPath is set: the tag guard (bin/pre-push) is not installed"
+elif [[ -n "$hooks" ]]; then
+  # Replaced: this wrapper, a link to this bin/pre-push, or a dangling link.
+  if [[ -L "$hook" && -e "$hook" && ! "$hook" -ef bin/pre-push ]]; then
+    info "$hook links to $(readlink "$hook"):"
+    info "  remove it and re-run bin/setup to install the tag guard (bin/pre-push)"
+  elif [[ -e "$hook" && ! -L "$hook" ]] && ! grep -q "pagespring tag guard" "$hook"; then
+    info "$hook is another hook: the tag guard (bin/pre-push) is not installed"
+  else
+    mkdir -p "$hooks" && rm -f "$hook" && printf '%s\n' "$guard" > "$hook" && chmod +x "$hook" \
+      && ok "pre-push tag guard installed"
+  fi
+fi
+
 # pw-setup (pw-foundation) links the framework docs under docs/, installs the starter
 # rules into .ai/rules/ and points .claude/ and .cursor/ at .ai/. Last: it refuses (exit 1)
 # when a real directory sits where a link goes, and says what to move.

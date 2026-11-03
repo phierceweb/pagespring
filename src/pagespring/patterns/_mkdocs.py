@@ -4,16 +4,56 @@ is flattened, so code blocks lose their fencing."""
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 from pw_foundation.exceptions import InvalidInputError
 from pw_foundation.log import get_logger
 
 from pagespring import http
 from pagespring.base import AcquireResult
+from pagespring.patterns._site import names_a_file
+from pagespring.patterns._soup import parse_html
 
 log = get_logger(__name__)
+
+# A statement's start (a line's, or after ``;``) outside block comments: a line comment or a string
+# that mentions the assignment is not it.
+_CLASSIC_BASE = re.compile(r"""(?:^|;)\s*var\s+base_url\s*=\s*["']([^"']*)["']""", re.MULTILINE)
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _named_bases(home: str) -> list[object]:
+    soup = parse_html(home)
+    config = soup.find("script", id="__config")
+    if config is not None:
+        try:
+            return [json.loads(config.get_text()).get("base")]
+        except (ValueError, AttributeError):
+            return []
+    scripts = (_BLOCK_COMMENT.sub("", s.get_text()) for s in soup.find_all("script"))
+    return [m.group(1) for text in scripts for m in _CLASSIC_BASE.finditer(text)]
+
+
+def site_root(home: str, page_url: str) -> str | None:
+    """The site root a page names, resolved against it: Material's ``__config`` ``base``, or the
+    classic themes' ``base_url``. None unless it is the page's directory or above, on its origin."""
+    page = urlparse(page_url)
+    last = page.path.rsplit("/", 1)[-1]
+    if last and not names_a_file(last):
+        page = page._replace(path=f"{page.path}/")
+    for base in _named_bases(home):
+        if not isinstance(base, str):
+            continue
+        root = urlparse(urljoin(page.geturl(), base))
+        root_dir = root.path.rstrip("/") + "/"
+        if (root.scheme, root.netloc) == (page.scheme, page.netloc) and page.path.startswith(
+            root_dir
+        ):
+            return f"{root.scheme}://{root.netloc}{root_dir}".rstrip("/")
+    return None
 
 
 def acquire(base_url: str, workdir: Path, *, slug: str, title: str | None) -> AcquireResult:

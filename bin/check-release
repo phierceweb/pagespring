@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Refuse a release whose tag, packaged version and CHANGELOG disagree.
 
-    bin/check-release v0.13.0
+    bin/check-release v0.13.0 [--main REF]
 
 Run it on the release commit before tagging; publish.yml runs it on the tag.
 The CHANGELOG's top section must name the version and carry the release
-commit's date.
+commit's date, and the release commit must be the tip of REF (default main).
 """
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,10 +24,22 @@ _INIT_VERSION_RE = re.compile(r'^__version__ = "([^"]+)"', re.MULTILINE)
 
 
 def problems(
-    tag: str, *, pyproject_version: str, init_version: str, changelog: str, commit_date: str
+    tag: str,
+    *,
+    pyproject_version: str,
+    init_version: str,
+    changelog: str,
+    commit_date: str,
+    release_sha: str = "",
+    main_sha: str = "",
 ) -> list[str]:
     """Every way the release disagrees with itself; empty when it is consistent."""
     found: list[str] = []
+    if release_sha != main_sha:
+        found.append(
+            f"the release commit {release_sha[:7]} is not main's tip {main_sha[:7]}: "
+            "tag the commit main points at"
+        )
     if tag != f"v{pyproject_version}":
         found.append(f"tag {tag} != packaged v{pyproject_version} (pyproject.toml)")
     if init_version != pyproject_version:
@@ -46,31 +58,60 @@ def problems(
     return found
 
 
+def _git(*args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: bin/check-release vX.Y.Z", file=sys.stderr)
+    if len(argv) not in (2, 4) or (len(argv) == 4 and argv[2] != "--main"):
+        print("usage: bin/check-release vX.Y.Z [--main REF]", file=sys.stderr)
         return 2
+    main_ref = argv[3] if len(argv) == 4 else "main"
+    try:
+        main_sha = _git("rev-parse", "--verify", f"{main_ref}^{{commit}}")
+    except subprocess.CalledProcessError:
+        print(f"cannot resolve {main_ref}", file=sys.stderr)
+        return 2
+    import tomllib  # 3.11+, so not at the top: an older python3 must reach _rerun_under_venv
+
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     init = (ROOT / "src" / "pagespring" / "__init__.py").read_text(encoding="utf-8")
     init_version = _INIT_VERSION_RE.search(init)
-    commit_date = subprocess.run(
-        ["git", "log", "-1", "--format=%cs"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    commit_date = _git("log", "-1", "--format=%cs")
     found = problems(
         argv[1],
         pyproject_version=pyproject["project"]["version"],
         init_version=init_version.group(1) if init_version else "(missing)",
         changelog=(ROOT / "CHANGELOG.md").read_text(encoding="utf-8"),
         commit_date=commit_date,
+        release_sha=_git("rev-parse", "HEAD"),
+        main_sha=main_sha,
     )
     for problem in found:
         print(problem, file=sys.stderr)
     return 1 if found else 0
 
 
+_RERUN_MARK = "PAGESPRING_GATE_RERUN"
+
+
+def _rerun_under_venv() -> None:
+    """A bare ``python3`` can be older than the 3.12 this needs: re-run under the project venv."""
+    if sys.version_info >= (3, 12):  # noqa: UP036 - a bare python3 runs this file too
+        return
+    venv = ROOT / ".venv" / "bin" / "python"
+    if not venv.is_file():
+        sys.exit(f"{Path(__file__).name} needs Python 3.12+: run bin/setup")
+    # Set by the re-run itself: an old venv python would otherwise re-run forever.
+    if os.environ.get(_RERUN_MARK):
+        name = Path(__file__).name
+        sys.exit(f"{name}: .venv is older than 3.12: remove .venv, then run bin/setup")
+    os.environ[_RERUN_MARK] = "1"
+    os.execv(venv, [str(venv), __file__, *sys.argv[1:]])
+
+
 if __name__ == "__main__":
+    _rerun_under_venv()
     sys.exit(main(sys.argv))
