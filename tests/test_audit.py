@@ -323,6 +323,36 @@ def test_a_markdown_image_sample_in_an_html_deliverable_is_not_a_broken_ref(tmp_
 
 
 @pytest.mark.parametrize(
+    "sample",
+    [
+        "```md\n![a](images/gone.png)\n```\n",
+        '~~~html\n<img src="images/gone.png">\n~~~\n',
+        "write `![a](images/gone.png)` for it\n",
+        '<pre><code class="language-markdown">![a](images/gone.png)</code></pre>\n',
+    ],
+    ids=["fence", "tilde-fence-tag", "span", "pre-code"],
+)
+def test_a_ref_in_a_markdown_code_sample_is_not_a_broken_ref(tmp_path, sample):
+    """A sample showing how to write an image ref is text to the reader; the localizer still
+    rewrites it, so after a pass its target can name a file that never fetched."""
+    d = _stage(tmp_path, body=f"# T\n\n{sample}\n![b](images/kept.png)\n", images=1)
+    (d / "images").mkdir()
+    (d / "images" / "kept.png").write_bytes(b"png")
+    assert ("broken_image_ref", "error") not in _checks(audit.audit_slug("fakeapp"))
+
+
+def test_a_code_sample_hides_no_real_broken_ref(tmp_path):
+    body = "# T\n\n```md\n![a](images/x.png)\n```\n\n![b](images/gone.png)\n"
+    d = _stage(tmp_path, body=body, images=1)
+    (d / "images").mkdir()
+    finding = next(f for f in audit.audit_slug("fakeapp") if f["check"] == "broken_image_ref")
+    assert (
+        finding["detail"].startswith("1 local image ref(s)")
+        and "images/gone.png" in finding["detail"]
+    )
+
+
+@pytest.mark.parametrize(
     "between", ["", " see ", '<pre><code class="x">'], ids=["adjacent", "text", "tag"]
 )
 def test_a_real_tag_before_a_sample_does_not_reach_into_it(tmp_path, between):
@@ -455,6 +485,79 @@ def test_remote_non_image_refs_are_not_localize_findings(tmp_path):
     (d / "images" / "a.png").write_bytes(b"png")
 
     assert "localize_incomplete" not in [c for c, _l in _checks(audit.audit_slug("fakeapp"))]
+
+
+@pytest.mark.parametrize(
+    ("kind", "sample"),
+    [
+        (
+            "html",
+            '<pre><code class="language-markdown">![a](https://img.example/a.png)</code></pre>',
+        ),
+        ("html", "<p>Use <code>![a](https://img.example/a.png)</code></p>"),
+        ("markdown", "```md\n![a](https://img.example/a.png)\n```\n"),
+        ("markdown", "<pre><code>![a](https://img.example/a.png)</code></pre>\n"),
+    ],
+    ids=["html-pre", "html-code", "md-fence", "md-pre"],
+)
+def test_a_remote_ref_in_a_code_sample_is_not_an_unfinished_localize(tmp_path, kind, sample):
+    """A sample's placeholder host never fetches, so counting it would warn on every run."""
+    d = _stage(tmp_path, kind=kind, body=f"# T\n\n<h1>T</h1>\n{sample}\n", images=0)
+    (d / "images").mkdir()
+    checks = [c for c, _l in _checks(audit.audit_slug("fakeapp"))]
+    assert "localize_incomplete" not in checks
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<p><code><img src="https://img.example/a.png"></code></p>',
+        '<pre><img src="https://img.example/a.png"></pre>',
+    ],
+    ids=["code", "pre"],
+)
+def test_a_real_remote_tag_inside_a_code_element_is_an_unfinished_localize(tmp_path, markup):
+    d = _stage(tmp_path, kind="html", body=f"<h1>T</h1>{markup}", images=0)
+    (d / "images").mkdir()
+    assert ("localize_incomplete", "warning") in _checks(audit.audit_slug("fakeapp"))
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_a_blank_line_does_not_end_an_html_code_element(tmp_path, newline):
+    """The paragraph bound on ``<code>`` is markdown's; html keeps the element open."""
+    sample = f"<code>a{newline}{newline}![a](https://img.example/a.png){newline}</code>"
+    d = _stage(tmp_path, kind="html", body=f"<h1>T</h1>{sample}", images=0)
+    (d / "images").mkdir()
+    assert "localize_incomplete" not in [c for c, _l in _checks(audit.audit_slug("fakeapp"))]
+
+
+def test_an_empty_comment_does_not_expose_a_code_sample(tmp_path):
+    body = "<h1>T</h1><!--><pre>![a](https://img.example/a.png)</pre>"
+    d = _stage(tmp_path, kind="html", body=body, images=0)
+    (d / "images").mkdir()
+    assert "localize_incomplete" not in [c for c, _l in _checks(audit.audit_slug("fakeapp"))]
+
+
+@pytest.mark.parametrize(("where", "declined"), [("prose", True), ("fence", False)])
+def test_a_declined_ref_counts_only_outside_a_code_sample(tmp_path, where, declined):
+    """A ``.html`` target is one localize does not fetch, so prose counts it as declined."""
+    ref = "![a](https://img.example/page.html)"
+    body = f"```\n{ref}\n```\n" if where == "fence" else f"{ref}\n"
+    d = _stage(tmp_path, body=f"# T\n\n{body}\n![b](images/b.png)\n", images=1)
+    (d / "images").mkdir()
+    (d / "images" / "b.png").write_bytes(b"png")
+    checks = _checks(audit.audit_slug("fakeapp"))
+    assert (("image_ref_declined", "warning") in checks) is declined
+
+
+def test_a_code_sample_hides_no_real_remote_ref(tmp_path):
+    body = "# T\n\n```md\n![a](https://img.example/a.png)\n```\n\n![b](https://img.example/b.png)\n"
+    d = _stage(tmp_path, body=body, images=0)
+    (d / "images").mkdir()
+    [detail] = [
+        f["detail"] for f in audit.audit_slug("fakeapp") if f["check"] == "localize_incomplete"
+    ]
+    assert detail.startswith("1 remote image ref(s)")
 
 
 def test_single_operation_api_spec_is_not_a_collapsed_crawl(tmp_path):
@@ -660,6 +763,23 @@ def test_the_deliverable_is_read_at_most_once_per_audit(tmp_path, monkeypatch):
     audit.audit_slug("fakeapp")
 
     assert len(reads) <= 1, f"deliverable decoded {len(reads)} times in one audit"
+
+
+def test_the_code_samples_are_found_once_per_audit(tmp_path, monkeypatch):
+    d = _stage(tmp_path, body="# T\n\n![a](images/a.png)\n![b](https://img.example/b.png)\n")
+    (d / "images").mkdir()
+    calls = []
+    real = audit.prose
+
+    def counting(*a, **kw):
+        calls.append(1)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(audit, "prose", counting)
+    monkeypatch.setattr(_integrity, "prose", counting)
+    audit.audit_slug("fakeapp")
+
+    assert len(calls) == 1
 
 
 def test_a_source_path_through_a_symlink_loop_does_not_stop_the_audit(tmp_path):

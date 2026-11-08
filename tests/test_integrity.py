@@ -73,8 +73,10 @@ _MD_SAMPLE = '<h1>Bk</h1><pre><code class="language-markdown">![Logo](images/log
 def test_an_html_deliverable_has_only_its_tags_as_local_refs():
     tags = '<img alt="a" src="images/a.png"><svg><image href="images/b.svg"/></svg>'
 
-    assert _integrity.local_image_refs(_MD_SAMPLE, kind="html") == set()
-    assert _integrity.local_image_refs(_MD_SAMPLE, kind="markdown") == {"images/logo.svg"}
+    md_syntax = "<h1>Bk</h1><p>![Logo](images/logo.svg)</p>"
+
+    assert _integrity.local_image_refs(md_syntax, kind="html") == set()
+    assert _integrity.local_image_refs(md_syntax, kind="markdown") == {"images/logo.svg"}
     assert _integrity.local_image_refs(tags, kind="html") == {"images/a.png", "images/b.svg"}
     assert _integrity.local_image_refs(tags, kind="markdown") == {"images/a.png", "images/b.svg"}
 
@@ -111,6 +113,122 @@ def test_a_tag_match_ends_at_its_own_closing_bracket():
     assert _integrity.local_image_refs(quoted_gt, kind="html") == {"images/a.png"}
     assert _integrity.local_image_refs(quoted_lt, kind="html") == {"images/a.png"}
     assert _integrity.local_image_refs('<img src="Images/A.png">', kind="html") == set()
+
+
+@pytest.mark.parametrize(
+    ("kind", "doc"),
+    [
+        ("markdown", "# T\n\n```md\n![a](images/x.png)\n```\n\n![b](images/kept.png)\n"),
+        ("markdown", '# T\n\n~~~\n<img src="images/x.png">\n~~~\n\n![b](images/kept.png)\n'),
+        ("markdown", "# T\n\n    ![a](images/x.png)\n\n![b](images/kept.png)\n"),
+        ("markdown", "# T\n\nwrite `![a](images/x.png)` for ![b](images/kept.png)\n"),
+        (
+            "markdown",
+            "# T\n\n<pre><code>![a](images/x.png)</code></pre>\n\n![b](images/kept.png)\n",
+        ),
+        ("markdown", "# T\n\n<p><code>![a](images/x.png)</code></p>\n\n![b](images/kept.png)\n"),
+        (
+            "markdown",
+            '# T\n\n<PRE class="hl">\n![a](images/x.png)\n</PRE >\n\n![b](images/kept.png)\n',
+        ),
+    ],
+    ids=["fence", "tilde-fence-tag", "indented", "span", "md-pre", "md-code", "md-PRE-attrs"],
+)
+def test_a_ref_in_a_code_sample_is_not_a_local_ref(kind, doc):
+    """A sample that shows an image ref is text to the reader."""
+    assert _integrity.local_image_refs(doc, kind=kind) == {"images/kept.png"}
+
+
+@pytest.mark.parametrize("kind", ["html", "markdown"])
+@pytest.mark.parametrize(
+    "doc",
+    [
+        '<h1>T</h1><p><code><img src="images/k.png"> Save</code></p>',
+        '<h1>T</h1><pre><img src="images/k.png"></pre>',
+        '<h1>T</h1><pre><code>![a](images/x.png) <img src="images/k.png"></code></pre>',
+    ],
+    ids=["code", "pre", "beside-a-sample"],
+)
+def test_a_real_tag_inside_a_code_element_is_a_local_ref(kind, doc):
+    """A browser renders an ``<img>`` wherever it sits; only markdown syntax there is text."""
+    assert _integrity.local_image_refs(doc, kind=kind) == {"images/k.png"}
+
+
+@pytest.mark.parametrize("tag", ["code-block", "code-group", "pre-wrap", "code.x", "prefix"])
+def test_an_element_whose_name_only_begins_with_pre_or_code_is_not_code(tag):
+    """Left open, a name read as ``pre`` or ``code`` would hide the image up to the later closer."""
+    doc = f'# T\n\n<{tag} lang="x">a ![b](images/k.png) <code>x</code>\n'
+    assert _integrity.local_image_refs(doc, kind="markdown") == {"images/k.png"}
+
+
+@pytest.mark.parametrize(
+    ("lead", "tail"),
+    [
+        ("<!-- the <code> tag -->", ""),
+        ("<!-- use <pre> -->", ""),
+        ('<img alt="<pre>" src="images/a.png">', ""),
+        ("# The <code> element", ""),
+        ("# The <code> element", "Use <code>x</code>."),
+    ],
+    ids=["comment-code", "comment-pre", "attribute", "unclosed-code", "code-past-its-paragraph"],
+)
+def test_an_opener_that_starts_no_code_hides_nothing_after_it(lead, tail):
+    doc = f"{lead}\n\n![b](images/k.png)\n\n{tail}\n"
+    assert "images/k.png" in _integrity.local_image_refs(doc, kind="markdown")
+
+
+def test_a_code_span_inside_a_ref_target_hides_the_ref():
+    """The span is read as code even inside a target, so the ref goes unseen; no placeholder leaks."""
+    refs = _integrity.local_image_refs("# T\n\n![a](images/`x`.png)\n", kind="markdown")
+    assert refs == set()
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        "<pre>\n// a<b isn't sorted\n</pre>\n\nThe menu's items:\n\n> Note.\n\n![b](images/k.png)\n",
+        "Sort if a<b isn't.\n\n<pre>\n![a](images/x.png)\n</pre>\n\nIt's done -> next\n\n![b](images/k.png)\n",
+        "<pre class=it's>\n![a](images/x.png)\n</pre>\n\n![b](images/k.png)\n",
+    ],
+    ids=["closer", "opener", "unquoted-value"],
+)
+def test_a_quote_opens_a_value_only_after_an_equals_sign(doc):
+    assert _integrity.local_image_refs(doc, kind="markdown") == {"images/k.png"}
+
+
+@pytest.mark.parametrize(
+    ("lead", "trail"),
+    [
+        ("<!-->", ""),
+        ("<!--->", ""),
+        ("a <!-- b", ""),
+        ("<!-->", "\n\n<!-- c -->"),
+        ("<!--->", "\n\n<!-- c -->"),
+    ],
+    ids=["empty", "empty-dash", "unclosed", "empty-then-comment", "empty-dash-then-comment"],
+)
+def test_a_comment_ends_where_html_ends_it(lead, trail):
+    """``<!-->`` and ``<!--->`` are whole comments, and a ``<!--`` that never closes is text."""
+    doc = f"{lead}\n\n<pre>\n![a](images/x.png)\n</pre>\n\n![b](images/k.png){trail}\n"
+    assert _integrity.local_image_refs(doc, kind="markdown") == {"images/k.png"}
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        "<pre><code>a</code>![a](images/x.png)</pre>\n\n![b](images/k.png)\n",
+        "The <code> tag\r\n\r\n![b](images/k.png)\r\n\r\nUse <code>x</code>.\r\n",
+        "</pre>\n\n![b](images/k.png)\n",
+    ],
+    ids=["closer-names-its-element", "crlf-paragraph", "stray-closer"],
+)
+def test_a_code_element_closes_only_on_its_own_closer(doc):
+    assert _integrity.local_image_refs(doc, kind="markdown") == {"images/k.png"}
+
+
+def test_an_unclosed_pre_runs_to_the_end():
+    doc = '# T\n\n<pre>\n![a](images/x.png)\n\n<img src="images/b.png">\n'
+    assert _integrity.local_image_refs(doc, kind="markdown") == {"images/b.png"}
 
 
 @pytest.mark.parametrize(
@@ -151,6 +269,13 @@ def test_an_image_pass_ref_is_a_real_tags_or_a_markdown_target():
         "<img a='" * 5000,
         "<img " + "'" * 60 + ">",
         "<img " + '"' * 60 + ">",
+        "<pre>" * 5000,
+        "<code " * 5000,
+        "<pre>x</pre>" * 5000,
+        "<!--" * 5000,
+        "<code>x\n\n" * 5000,
+        "<x 'q" * 5000,
+        "<" + "a" * 50000,
     ],
 )
 def test_a_run_of_unclosed_tags_is_scanned_in_linear_time(hostile):

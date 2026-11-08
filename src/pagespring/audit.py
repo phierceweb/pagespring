@@ -10,7 +10,8 @@ from typing import Literal, TypedDict
 from pw_foundation.log import get_logger
 
 from pagespring import manifest
-from pagespring._integrity import image_pass_ran, integrity, local_image_refs, usable
+from pagespring._integrity import image_pass_ran, integrity, local_refs_in_prose, usable
+from pagespring._prose import prose
 from pagespring._staging import source_key
 from pagespring.config import cfg
 from pagespring.images import decode_ref, read_gone, remote_image_refs, remote_image_starts
@@ -158,14 +159,16 @@ def audit_slug(slug: str) -> list[Finding]:
         )
 
     if m["kind"] in ("markdown", "html"):
+        # A code sample's ref is text to the reader, whatever the localizer does with it.
+        text = prose(doc_text, kind=m["kind"])
         # images/ existing is the fact that a localize pass ran; the count can be
         # 0 when every download failed.
         if m["images"] > 0 or (incoming_dir / "images").is_dir():
             # Counted as localize counts: distinct refs as written, gone by their decoded URL.
-            refs = remote_image_refs(doc_text)
+            refs = remote_image_refs(text)
             marked = set(read_gone(incoming_dir))
             gone = sum(1 for ref in refs if decode_ref(ref) in marked)
-            declined = _declined_refs(doc_text)
+            declined = _declined_refs(text)
             if len(refs) > gone:
                 findings.append(
                     _f(
@@ -196,7 +199,7 @@ def audit_slug(slug: str) -> list[Finding]:
         # A local ref whose file is gone renders broken; the remote-ref check above can't see it.
         dangling = sorted(
             ref
-            for ref in local_image_refs(doc_text, kind=m["kind"])
+            for ref in local_refs_in_prose(text, kind=m["kind"])
             if not (incoming_dir / ref).exists()
         )
         if dangling:

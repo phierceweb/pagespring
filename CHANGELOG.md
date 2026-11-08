@@ -4,6 +4,15 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.20.0] — 2026-11-07
+
+### Fixed
+
+- **`audit` skips image refs inside code samples**: `broken_image_ref`, `localize_incomplete`,
+  `image_ref_declined` and `image_source_gone` no longer count a ref inside a markdown deliverable's
+  fenced or indented code block or inline code span, or markdown image syntax inside a `<pre>` or
+  `<code>` element in either kind. A real `<img>` tag inside those elements still counts.
+
 ## [0.19.0] — 2026-11-03
 
 ### Added

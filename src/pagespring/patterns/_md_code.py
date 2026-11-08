@@ -114,3 +114,15 @@ def outside_code(md: str, rewrite: Callable[[str], str]) -> str:
             out.append(line)
     flush()
     return "".join(out)
+
+
+def prose_outside_code(md: str) -> str:
+    """``md``'s text outside code blocks and spans, each span left as a space."""
+    chunks: list[str] = []
+
+    def keep(text: str) -> str:
+        chunks.append(_PLACEHOLDER_RE.sub(" ", text))
+        return text
+
+    outside_code(md, keep)
+    return "".join(chunks)

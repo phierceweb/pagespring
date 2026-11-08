@@ -11,6 +11,7 @@ from pw_foundation.log import get_logger
 from pw_foundation.utils.hashing import content_hash
 
 from pagespring import manifest
+from pagespring._prose import prose
 
 log = get_logger(__name__)
 
@@ -26,10 +27,15 @@ _ANY_IMG_RE = re.compile(rf"(?:{_TAG_REF}|\]\(){_LOCAL_PATH}")
 
 
 def local_image_refs(doc_text: str, *, kind: str) -> set[str]:
-    """The ``images/…`` paths a deliverable renders: real tags in html (where ``](`` is only ever a
-    code sample's text), tags and ``](`` in any other kind."""
+    """The ``images/…`` paths a deliverable renders, outside its code samples."""
+    return local_refs_in_prose(prose(doc_text, kind=kind), kind=kind)
+
+
+def local_refs_in_prose(text: str, *, kind: str) -> set[str]:
+    """``local_image_refs`` of text already through ``prose``: real tags in html (where ``](`` is
+    only ever a code sample's text), tags and ``](`` in any other kind."""
     pattern = _HTML_IMG_RE if kind == "html" else _ANY_IMG_RE
-    return set(pattern.findall(doc_text))
+    return set(pattern.findall(text))
 
 
 def _has_pass_ref(doc_text: str) -> bool:
