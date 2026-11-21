@@ -38,8 +38,8 @@ class Manifest(TypedDict):
     lost: NotRequired[int]
     # 2-up spread pages cut into single pages; `pages` counts the deliverable after the cut
     spreads_split: NotRequired[int]
-    # the deliverable's hash AFTER localize re-pointed its refs; None when no
-    # image pass ran, in which case `sha256` still describes the file on disk
+    # when set, the hash the file must match once no image pass is open (its refs may be local,
+    # so `sha256` cannot vouch for it); None when `sha256` describes the file
     localized_sha256: NotRequired[str | None]
     # present only while an image pass is open: the file's hash blind to what the
     # pass writes, which tells a killed pass's checkpoints from damage

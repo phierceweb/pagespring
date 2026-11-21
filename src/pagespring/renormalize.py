@@ -10,10 +10,10 @@ from typing import TypedDict, cast
 from pw_foundation.exceptions import PreconditionError
 from pw_foundation.log import get_logger
 
-from pagespring import manifest
-from pagespring._integrity import deliverable_intact, read_usable
+from pagespring import _image_cache, manifest
+from pagespring._integrity import deliverable_intact, local_image_refs, read_usable
 from pagespring._staging import _stage_file, stage_bundled_images
-from pagespring.base import AcquireResult, SourceKind
+from pagespring.base import IMAGES_DIR, AcquireResult, SourceKind
 from pagespring.orchestrate import EmptyOutputError
 from pagespring.paths import slug_dir
 from pagespring.registry import pattern_by_name
@@ -31,6 +31,13 @@ class RenormalizeResult(TypedDict):
     pages: int | None
     bytes: int
     changed: bool  # False when the replay normalized byte-identical to the staged deliverable
+
+
+def _refs_unbundled_images(clean: Path, *, kind: str) -> bool:
+    """Whether ``clean`` refs ``images/`` files its pattern did not bundle beside it."""
+    if kind == "pdf" or (clean.parent / IMAGES_DIR).is_dir():
+        return False
+    return bool(local_image_refs(clean.read_text(encoding="utf-8", errors="replace"), kind=kind))
 
 
 def run_renormalize(slug: str) -> RenormalizeResult:
@@ -93,10 +100,12 @@ def run_renormalize(slug: str) -> RenormalizeResult:
         _stage_file(clean, staged)
         if old.exists() and old.name != staged.name:
             old.unlink()
+        # A raw split from an already-localized deliverable refs its own images/ files, which stay.
+        refs_local = _refs_unbundled_images(clean, kind=m["kind"])
         # A changed file drops images/: its names would push the next localize onto suffixed names.
         # A byte-identical replay names the very URLs the cache was fetched from.
-        if sha256 != m["sha256"]:
-            shutil.rmtree(incoming_dir / "images", ignore_errors=True)
+        if sha256 != m["sha256"] and not refs_local:
+            shutil.rmtree(incoming_dir / IMAGES_DIR, ignore_errors=True)
 
         m["deliverable"] = staged.name
         m["bytes"] = size_bytes
@@ -108,6 +117,12 @@ def run_renormalize(slug: str) -> RenormalizeResult:
         bundled = stage_bundled_images(clean, staged, incoming_dir)
         if bundled is not None:
             m["images"], m["localized_sha256"] = bundled, sha256
+        elif refs_local:
+            _image_cache.prune_orphans(staged, incoming_dir)
+            images_dir = incoming_dir / IMAGES_DIR
+            if images_dir.is_dir():
+                m["images"] = sum(1 for f in images_dir.iterdir() if f.is_file())
+            m["localized_sha256"] = sha256
         manifest.write_manifest(incoming_dir, m)
         log.info("renormalize.done", pattern=pattern.name, slug=slug, clean=str(staged))
         return {

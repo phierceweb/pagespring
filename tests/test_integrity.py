@@ -478,3 +478,64 @@ def test_a_sigkill_mid_pass_leaves_a_record_the_next_pass_resumes_from(tmp_path,
     assert not {"sha_mismatch", "sha_unverified"} & {check for check, _ in findings}
     assert localize.localize_images("bk")["remaining"] == 0
     assert manifest.read_manifest(slug_dir)["localized_sha256"] == manifest.sha256_file(doc)
+
+
+def _staged_slug(tmp_path, body, *, local_from_staging):
+    """A slug as ingest or renormalize staged it: its recorded ``sha256`` describes the file."""
+    slug_dir = tmp_path / "incoming" / "bk"
+    slug_dir.mkdir(parents=True)
+    if local_from_staging:
+        (slug_dir / "images").mkdir()
+        (slug_dir / "images" / "a.png").write_bytes(_PNG)
+    doc = slug_dir / "bk.html"
+    doc.write_text(body, encoding="utf-8")
+    sha = manifest.sha256_file(doc)
+    manifest.write_manifest(
+        slug_dir,
+        manifest.build_manifest(
+            source_url="https://x",
+            pattern="fake",
+            slug="bk",
+            kind="html",
+            deliverable="bk.html",
+            pages=1,
+            size_bytes=doc.stat().st_size,
+            sha256=sha,
+            images=1 if local_from_staging else 0,
+            ingested_at="2026-11-14T00:00:00Z",
+            localized_sha256=sha if local_from_staging else None,
+        ),
+    )
+    return slug_dir, doc
+
+
+def _kill_the_pass_before_it_writes(monkeypatch):
+    def killed(deliverable, incoming_dir):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(localize, "_image_pass", killed)
+
+
+def test_a_killed_pass_keeps_the_hash_of_a_file_staged_with_local_refs(tmp_path, monkeypatch):
+    slug_dir, doc = _staged_slug(tmp_path, _BODY, local_from_staging=True)
+    _kill_the_pass_before_it_writes(monkeypatch)
+
+    with pytest.raises(KeyboardInterrupt):
+        localize.localize_images("bk")
+
+    m = manifest.read_manifest(slug_dir)
+    assert m["localized_sha256"] == m["sha256"]
+    doc.write_text(_BODY + "<p>damage</p>", encoding="utf-8")
+    assert _state(slug_dir) == "damaged"
+
+
+def test_a_killed_pass_leaves_an_unlocalized_file_without_a_localized_hash(tmp_path, monkeypatch):
+    body = "<h1>Bk</h1>" + "".join(f'<img src="{u}">' for u in _REMOTE)
+    slug_dir, _doc = _staged_slug(tmp_path, body, local_from_staging=False)
+    _kill_the_pass_before_it_writes(monkeypatch)
+
+    with pytest.raises(KeyboardInterrupt):
+        localize.localize_images("bk")
+
+    assert manifest.read_manifest(slug_dir)["localized_sha256"] is None
+    assert _state(slug_dir) == "intact"

@@ -4,6 +4,26 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.21.0] — 2026-11-21
+
+### Changed
+
+- **OpenStax deliverables carry an `<h1>` per chapter and per back-matter node**: each appendix, the
+  answer key, references and the index get one, titled from the book tree the reader pages embed,
+  which `--keep-raw` keeps as `raw/book-tree.json`. A preface that opens the book stays under the
+  book title, and page headings keep their levels. A tree that disagrees with the crawled pages
+  leaves the deliverable as before and logs `openstax.tree_mismatch`.
+- **`renormalize` keeps the images a kept raw refs itself**: when a re-staged deliverable names
+  `images/` files the pattern did not bundle, those files stay, orphans are pruned as `localize`
+  prunes them, and the manifest records the count and `localized_sha256`. Any other changed replay
+  still clears `images/`.
+
+### Fixed
+
+- **An image pass stopped by Ctrl-C or an error before it re-points anything keeps the recorded
+  `localized_sha256`** (`localize`, `ingest --download-images`) of a deliverable with bundled
+  images, so later damage to it still reads as damaged, not unverifiable.
+
 ## [0.20.0] — 2026-11-07
 
 ### Fixed

@@ -370,3 +370,39 @@ def test_renormalize_rebundles_from_kept_raw(tmp_path, monkeypatch):
     m = manifest.read_manifest(slug_dir)
     assert m["images"] == 3
     assert audit.audit_slug("book") == []
+
+
+def test_a_changed_rebundle_still_clears_images_a_still_remote_ref_could_settle_on(
+    tmp_path, monkeypatch
+):
+    """Bundled figures are local refs too, but their replay clears ``images/`` as before."""
+    remote = "https://cdn.example.com/other.png"
+    data = _epub(
+        {"Text/ch1.xhtml": f'<h1>One</h1><img src="../Images/fig.png"/><img src="{remote}"/>'},
+        {"OEBPS/Images/fig.png": FIG_A},
+    )
+    _serve(monkeypatch, data)
+    orchestrate.run_ingest("https://x.com/book.epub", keep_raw=True)
+    slug_dir = _slug_dir(tmp_path)
+    (slug_dir / "images" / "stale-other.png").write_bytes(FIG_B)
+    images.write_sidecar(
+        slug_dir,
+        [
+            {
+                "local": "stale-other.png",
+                "source_url": remote,
+                "etag": None,
+                "last_modified": None,
+                "sha256": "0" * 64,
+                "bytes": len(FIG_B),
+            }
+        ],
+    )
+    chapter = slug_dir / "raw" / "OEBPS" / "Text" / "ch1.xhtml"
+    chapter.write_text(
+        chapter.read_text(encoding="utf-8").replace("One", "One, revised"), encoding="utf-8"
+    )
+
+    assert renormalize.run_renormalize("book")["changed"] is True
+    assert not (slug_dir / "images" / "stale-other.png").exists()
+    assert (slug_dir / "images" / "fig.png").read_bytes() == FIG_A

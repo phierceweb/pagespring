@@ -8,7 +8,7 @@ import urllib.error
 import pytest
 from pw_foundation.exceptions import ClientError, InvalidInputError, PreconditionError
 
-from pagespring import _staging, http, localize, manifest, orchestrate, renormalize
+from pagespring import _integrity, _staging, http, localize, manifest, orchestrate, renormalize
 from pagespring.base import AcquireResult
 from pagespring.patterns.docs_probe import DocsProbePattern
 from pagespring.patterns.microsoft_support import MicrosoftSupportPattern
@@ -930,6 +930,109 @@ def test_renormalize_changed_clears_stale_localized_images(tmp_path, monkeypatch
     assert res["changed"] is True
     assert not (slug_dir / "images").exists()
     assert (slug_dir / "raw" / "welcome.html").exists()  # raw untouched — it is the input
+
+
+class _LocalizedRawPattern(_RawDrivenPattern):
+    """A raw split from an already-localized deliverable: its refs name images/ files, not URLs."""
+
+    def acquire(self, url, workdir):
+        acq = super().acquire(url, workdir)
+        (acq.raw_dir / "welcome.html").write_text('<img src="images/fig.png">', encoding="utf-8")
+        return acq
+
+
+def test_renormalize_keeps_the_images_a_localized_raw_refs(tmp_path, monkeypatch):
+    p = _LocalizedRawPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    (slug_dir / "images").mkdir()
+    (slug_dir / "images" / "fig.png").write_bytes(b"png")
+    (slug_dir / "images" / "orphan.png").write_bytes(b"old")
+
+    p.prefix = "v2"
+    monkeypatch.setattr(renormalize, "pattern_by_name", lambda name: p)
+    res = renormalize.run_renormalize("fakeapp")
+
+    assert res["changed"] is True
+    assert (slug_dir / "images" / "fig.png").read_bytes() == b"png"
+    assert not (slug_dir / "images" / "orphan.png").exists()
+    after = manifest.read_manifest(slug_dir)
+    assert after["images"] == 1
+    assert after["sha256"] == manifest.sha256_file(slug_dir / "fakeapp.html")
+    assert after["localized_sha256"] == after["sha256"]
+    assert _integrity.integrity(slug_dir, after) == "intact"
+
+
+def test_damage_after_a_localized_raw_replay_is_caught_and_restored(tmp_path, monkeypatch):
+    """Local refs read as an image pass's work, so only a recorded localized hash tells damage."""
+    p = _LocalizedRawPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    (slug_dir / "images").mkdir()
+    (slug_dir / "images" / "fig.png").write_bytes(b"png")
+    p.prefix = "v2"
+    monkeypatch.setattr(renormalize, "pattern_by_name", lambda name: p)
+    renormalize.run_renormalize("fakeapp")
+    deliverable = slug_dir / "fakeapp.html"
+    clean = deliverable.read_text(encoding="utf-8")
+
+    deliverable.write_text(clean + "<p>damage</p>", encoding="utf-8")
+    assert _integrity.integrity(slug_dir, manifest.read_manifest(slug_dir)) == "damaged"
+
+    assert renormalize.run_renormalize("fakeapp")["changed"] is True
+    assert deliverable.read_text(encoding="utf-8") == clean
+    assert (slug_dir / "images" / "fig.png").read_bytes() == b"png"
+    restored = manifest.read_manifest(slug_dir)
+    assert restored["localized_sha256"] == restored["sha256"]
+
+    deliverable.write_text(clean + "<p>damage again</p>", encoding="utf-8")
+    assert _integrity.integrity(slug_dir, manifest.read_manifest(slug_dir)) == "damaged"
+
+
+def test_renormalize_of_a_localized_raw_without_its_images_counts_zero_images(
+    tmp_path, monkeypatch
+):
+    p = _LocalizedRawPattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x", keep_raw=True)
+
+    p.prefix = "v2"
+    monkeypatch.setattr(renormalize, "pattern_by_name", lambda name: p)
+    assert renormalize.run_renormalize("fakeapp")["changed"] is True
+    assert manifest.read_manifest(tmp_path / "incoming" / "fakeapp")["images"] == 0
+
+
+class _PdfCarryingAnHtmlSamplePattern(_RawDrivenPattern):
+    """A PDF whose bytes hold an ``<img src="images/…">`` sample: text, never a ref to re-point."""
+
+    def acquire(self, url, workdir):
+        acq = super().acquire(url, workdir)
+        acq.kind = "pdf"
+        acq.spreads_split = 1  # a cut PDF keeps raw/, so it can be replayed
+        return acq
+
+    def normalize(self, acq, workdir):
+        clean = workdir / f"{acq.slug}.pdf"
+        body = f'%PDF-1.4\n({self.prefix} <img src="images/fig.png">)\n%%EOF\n'
+        clean.write_bytes(body.encode())
+        return clean
+
+
+def test_a_changed_pdf_replay_clears_images_whatever_its_bytes_spell(tmp_path, monkeypatch):
+    p = _PdfCarryingAnHtmlSamplePattern(prefix="v1")
+    monkeypatch.setattr(orchestrate, "classify", lambda url: p)
+    orchestrate.run_ingest("https://x/manual.pdf", keep_raw=True)
+    slug_dir = tmp_path / "incoming" / "fakeapp"
+    (slug_dir / "images").mkdir()
+    (slug_dir / "images" / "fig.png").write_bytes(b"png")
+
+    p.prefix = "v2"
+    monkeypatch.setattr(renormalize, "pattern_by_name", lambda name: p)
+
+    assert renormalize.run_renormalize("fakeapp")["changed"] is True
+    assert not (slug_dir / "images").exists()
 
 
 def test_ingest_warns_when_content_duplicates_another_slug(tmp_path, monkeypatch):

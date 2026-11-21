@@ -13,7 +13,7 @@ from pw_core.fetch import Body
 
 from pagespring import _image_cache, _staging, http, images, manifest, orchestrate
 from pagespring.config import cfg
-from pagespring.patterns import apple_help
+from pagespring.patterns import apple_help, openstax
 
 # Read before `_sandbox_incoming_dir` rewrites it: a corpus configured elsewhere
 # (PAGESPRING_ENV_FILE / INCOMING_DIR) is as unrecoverable as the repo one.
@@ -108,6 +108,7 @@ def _refuse_to_touch_the_corpus():
             (_image_cache, "atomic_write_text"),
             (_image_cache, "atomic_write_bytes"),
             (apple_help, "atomic_write_json"),
+            (openstax, "atomic_write_json"),
             (core_images, "atomic_write_text"),
             (core_images, "atomic_write_bytes"),
         ):

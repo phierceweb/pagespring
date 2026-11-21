@@ -1,5 +1,5 @@
-"""openstax: OpenStax books, walked Prev to the first page then Next to the end (REX has no full
-server-side TOC), each page's ``<main class="page-content">`` with chrome left outside."""
+"""openstax: OpenStax books walked Prev to the first page, then Next to the end: each page's
+``<main class="page-content">`` minus chrome, and an ``<h1>`` per chapter from the book tree."""
 
 from __future__ import annotations
 
@@ -9,9 +9,11 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 from pw_foundation.log import get_logger
+from pw_foundation.utils.io import atomic_write_json
 
 from pagespring import http
 from pagespring.base import AcquireResult
+from pagespring.patterns._openstax_toc import TREE_NAME, book_tree, raw_headings
 from pagespring.patterns._site import flatten_responsive_images
 from pagespring.patterns._soup import parse_html
 
@@ -129,6 +131,7 @@ class OpenStaxPattern:
         i = 0
         truncated = False
         book_title: str | None = None
+        tree: dict[str, object] | None = None
         while cur is not None:
             if cur in visited:
                 break  # cycle guard
@@ -148,6 +151,8 @@ class OpenStaxPattern:
             soup = parse_html(html)
             if i == 0:
                 book_title = _book_title(soup)
+            if tree is None:
+                tree = book_tree(html)
             content = _extract(soup, cur)
             if content:
                 (raw_dir / f"{i:04d}.html").write_text(
@@ -167,6 +172,10 @@ class OpenStaxPattern:
 
         if truncated:
             log.warning("openstax.capped", saved=saved, cap=_MAX)
+        if tree is None:
+            log.warning("openstax.book_tree_missing", url=url)
+        else:
+            atomic_write_json(raw_dir / TREE_NAME, tree)
         log.info(
             "openstax.acquire",
             url=url,
@@ -189,12 +198,22 @@ class OpenStaxPattern:
     def normalize(self, acq: AcquireResult, workdir: Path) -> Path:
         title = acq.title or acq.slug.replace("-", " ").title()
         parts = [p.read_text(encoding="utf-8") for p in sorted(acq.raw_dir.glob("*.html"))]
+        headings = raw_headings(acq.raw_dir, parts)
+        body = list(parts)
+        for index, heading in reversed(headings):
+            body.insert(index, f"<h1>{_html.escape(heading)}</h1>")
         doc = (
             '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
             f"<title>{_html.escape(title)}</title></head>\n<body>\n"
-            f"<h1>{_html.escape(title)}</h1>\n" + "\n".join(parts) + "\n</body></html>\n"
+            f"<h1>{_html.escape(title)}</h1>\n" + "\n".join(body) + "\n</body></html>\n"
         )
         out = workdir / f"{acq.slug}.html"
         out.write_text(doc, encoding="utf-8")
-        log.info("openstax.normalize", slug=acq.slug, out=str(out), pages=len(parts))
+        log.info(
+            "openstax.normalize",
+            slug=acq.slug,
+            out=str(out),
+            pages=len(parts),
+            headings=len(headings),
+        )
         return out

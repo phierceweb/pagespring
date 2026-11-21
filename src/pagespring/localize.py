@@ -62,7 +62,10 @@ def _recorded_image_pass(deliverable: Path, incoming_dir: Path, m: manifest.Mani
         m["images"] = (
             sum(1 for f in images_dir.iterdir() if f.is_file()) if images_dir.is_dir() else 0
         )
-        m["localized_sha256"] = digest if finished or digest != m["sha256"] else None
+        unchanged_record = digest == m.get("localized_sha256")
+        m["localized_sha256"] = (
+            digest if finished or digest != m["sha256"] or unchanged_record else None
+        )
         m.pop("image_pass_open", None)
         manifest.write_manifest(incoming_dir, m)
 
