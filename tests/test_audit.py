@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from pagespring import _integrity, _staging, audit, images, manifest, orchestrate, refresh
+from pagespring import _integrity, _staging, audit, manifest, orchestrate, refresh
 from pagespring.cli import app
 
 
@@ -275,7 +275,7 @@ def test_single_document_source_does_not_fire_single_page_crawl(tmp_path):
 
 def test_dangling_local_image_ref_is_an_error(tmp_path):
     """A ref to images/<name> whose file is absent renders as a broken image, and
-    count_remote_images counts only REMOTE refs, so nothing else sees it."""
+    the remote-ref count sees only REMOTE refs, so nothing else sees it."""
     d = _stage(tmp_path, body="![a](images/gone.png)\n\n# T\n", images=1)
     (d / "images").mkdir()
     (d / "images" / "kept.png").write_bytes(b"png")
@@ -458,14 +458,11 @@ def test_failed_localize_with_empty_images_dir_is_a_warning(tmp_path):
     assert ("localize_incomplete", "warning") in _checks(audit.audit_slug("fakeapp"))
 
 
-def test_remote_ref_the_localizer_skipped_is_still_flagged(tmp_path, monkeypatch):
-    """The count is stubbed to 0: audit must read the file, since the localizer never counts a ref
-    it declines to claim."""
+def test_a_remote_img_tag_without_an_image_extension_is_flagged(tmp_path):
     skipped = "https://cdn.example.com/is/image/Prod/whats-new-widget-3.1-preview"
     d = _stage(tmp_path, body=f'![a](images/a.png)\n<img src="{skipped}">\n\n# T\n', images=1)
     (d / "images").mkdir()
     (d / "images" / "a.png").write_bytes(b"png")
-    monkeypatch.setattr(images, "count_remote_images", lambda _doc: 0)
 
     assert ("localize_incomplete", "warning") in _checks(audit.audit_slug("fakeapp"))
 
@@ -795,3 +792,11 @@ def test_a_source_path_through_a_symlink_loop_does_not_stop_the_audit(tmp_path):
     results = dict(audit.audit_all())
 
     assert results["spec"] == [] and results["other"] == []
+
+
+def test_an_escaped_backtick_hides_no_broken_ref(tmp_path):
+    """``\\``` is a literal backtick, so the image after it renders and its missing file counts."""
+    body = "# T\n\na \\` b ![b](images/gone.png) c ` d\n"
+    d = _stage(tmp_path, body=body, images=1)
+    (d / "images").mkdir()
+    assert ("broken_image_ref", "error") in _checks(audit.audit_slug("fakeapp"))

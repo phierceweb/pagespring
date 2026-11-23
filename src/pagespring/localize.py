@@ -11,6 +11,7 @@ from pw_foundation.log import get_logger
 
 from pagespring import manifest
 from pagespring._integrity import open_for_image_pass, read_usable
+from pagespring._prose import prose
 from pagespring.paths import slug_dir
 
 log = get_logger(__name__)
@@ -22,12 +23,12 @@ class _ImagePass(NamedTuple):
     localized: int
     reused: int
     pruned: int
-    remaining: int
+    remaining: int  # remote refs left outside code samples
     gone: int  # of ``remaining``, refs whose source answered 404/410
     total: int  # images now in incoming/<slug>/images/
 
 
-def _image_pass(deliverable: Path, incoming_dir: Path) -> _ImagePass:
+def _image_pass(deliverable: Path, incoming_dir: Path, kind: str) -> _ImagePass:
     """Localize ``deliverable``'s remote images. Ingest and localize share it: skipping the reuse
     probe and orphan sweep re-downloads every image onto a ``-2`` name on each re-ingest."""
     from pagespring import _image_cache, images
@@ -39,8 +40,9 @@ def _image_pass(deliverable: Path, incoming_dir: Path) -> _ImagePass:
     # sidecar holds and the server still calls unchanged is re-pointed, not re-fetched.
     reused = _image_cache.reuse_unchanged(deliverable, incoming_dir)
     localized = images.download_images(deliverable, images_dir)
-    remaining = images.count_remote_images(deliverable)
-    gone = images.gone_remote_images(deliverable, incoming_dir)
+    # A code sample's ref is fetched like any other, but one that never lands is not unfinished work.
+    rendered = prose(deliverable.read_text(encoding="utf-8"), kind=kind)
+    remaining, gone = images.unfetched_refs(rendered, incoming_dir)
     pruned = _image_cache.prune_orphans(deliverable, incoming_dir)
     total = sum(1 for p in images_dir.iterdir() if p.is_file()) if images_dir.exists() else 0
     return _ImagePass(localized, reused, pruned, remaining, gone, total)
@@ -52,7 +54,7 @@ def _recorded_image_pass(deliverable: Path, incoming_dir: Path, m: manifest.Mani
     open_for_image_pass(incoming_dir, m)
     finished = False
     try:
-        passed = _image_pass(deliverable, incoming_dir)
+        passed = _image_pass(deliverable, incoming_dir, m["kind"])
         finished = True
         return passed
     finally:
@@ -77,7 +79,7 @@ class LocalizeResult(TypedDict):
     localized: int  # images downloaded THIS run
     reused: int  # refs re-pointed from the sidecar without a download
     pruned: int  # image files deleted because the deliverable no longer references them
-    remaining: int  # remote refs still left (0 ⇒ fully localized)
+    remaining: int  # remote refs still left outside code samples (0 ⇒ fully localized)
     gone: int  # of ``remaining``, refs whose source answered 404/410: a re-run cannot fetch them
     images_total: int  # images now in incoming/<slug>/images/
 

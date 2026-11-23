@@ -6,6 +6,7 @@ import urllib.error
 from email.message import Message
 
 import pytest
+from pw_core.fetch import images as core_images
 
 from pagespring import _image_cache, http, images
 
@@ -138,7 +139,7 @@ def test_failed_download_keeps_remote_ref(tmp_path, monkeypatch):
     text = doc.read_text(encoding="utf-8")
     assert "](https://x.com/gone.png)" in text
     assert "](images/ok.png)" in text
-    assert images.count_remote_images(doc) == 1
+    assert len(images.remote_image_urls(doc)) == 1
 
 
 def test_non_image_body_keeps_remote_ref(tmp_path, monkeypatch):
@@ -160,7 +161,7 @@ def test_non_image_body_keeps_remote_ref(tmp_path, monkeypatch):
     text = doc.read_text(encoding="utf-8")
     assert "](https://x.com/login.png)" in text
     assert "](images/ok.png)" in text
-    assert images.count_remote_images(doc) == 1
+    assert len(images.remote_image_urls(doc)) == 1
 
 
 def test_a_titled_ref_and_an_uppercase_src_are_localized(tmp_path, monkeypatch):
@@ -199,13 +200,13 @@ def test_a_ref_with_an_unreadable_host_or_port_does_not_stop_the_pass(tmp_path, 
     assert "](images/ok.png)" in text
 
 
-def test_count_remote_images_ignores_localized(tmp_path):
+def test_remote_image_urls_ignores_localized(tmp_path):
     doc = tmp_path / "d.md"
     doc.write_text(
         '![a](https://x/1.png)\n![b](images/2.png)\n<img src="https://x/3.png">\n',
         encoding="utf-8",
     )
-    assert images.count_remote_images(doc) == 2  # local images/2.png not counted
+    assert len(images.remote_image_urls(doc)) == 2  # local images/2.png not counted
 
 
 # --- image sidecar: per-image provenance so a refresh can skip unchanged images ---
@@ -318,7 +319,7 @@ def test_reuse_unchanged_rewrites_refs_without_downloading(tmp_path, monkeypatch
     text = doc.read_text(encoding="utf-8")
     assert "](images/a.png)" in text
     assert "](https://x.com/new.png)" in text  # left for localize to fetch
-    assert images.count_remote_images(doc) == 1
+    assert len(images.remote_image_urls(doc)) == 1
 
 
 def test_reuse_unchanged_paces_every_probe_it_sends(tmp_path, monkeypatch):
@@ -410,7 +411,7 @@ def test_reuse_unchanged_does_not_corrupt_a_prefix_sibling_ref(tmp_path, monkeyp
     assert 'src="images/pic.png"' in text
     assert 'src="images/pic-2.png"' in text
     assert "images/pic.png?wid=1200" not in text
-    assert images.count_remote_images(doc) == 0
+    assert len(images.remote_image_urls(doc)) == 0
 
 
 def test_reuse_unchanged_probes_the_decoded_url(tmp_path, monkeypatch):
@@ -446,7 +447,7 @@ def test_reuse_unchanged_probes_the_decoded_url(tmp_path, monkeypatch):
     assert _image_cache.reuse_unchanged(doc, tmp_path) == 1
     assert probed == ["https://cdn/i.png?a=1&wid=9"]
     assert 'src="images/i.png"' in doc.read_text(encoding="utf-8")
-    assert images.count_remote_images(doc) == 0
+    assert len(images.remote_image_urls(doc)) == 0
 
 
 def test_reuse_matches_a_record_for_a_ref_with_a_bare_legacy_name(tmp_path, monkeypatch):
@@ -482,7 +483,7 @@ def test_reuse_matches_a_record_for_a_ref_with_a_bare_legacy_name(tmp_path, monk
     assert _image_cache.reuse_unchanged(doc, tmp_path) == 1
     assert probed == [url]
     assert "](images/i.png)" in doc.read_text(encoding="utf-8")
-    assert images.count_remote_images(doc) == 0
+    assert len(images.remote_image_urls(doc)) == 0
 
 
 def _cached(tmp_path, local, url, data, *, etag='"old"'):
@@ -540,7 +541,7 @@ def test_reuse_unchanged_keeps_the_cached_image_when_its_source_is_unreachable(
 
     assert (tmp_path / "images" / "fig.png").read_bytes() == _PNG
     assert images.read_sidecar(tmp_path) == [rec]
-    assert images.count_remote_images(doc) == 1  # still pending, so a later pass retries it
+    assert len(images.remote_image_urls(doc)) == 1  # still pending, so a later pass retries it
 
 
 @pytest.mark.parametrize("code", [404, 410])
@@ -578,7 +579,7 @@ def test_reuse_unchanged_leaves_a_ref_remote_when_its_source_may_come_back(
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
     assert _image_cache.reuse_unchanged(doc, tmp_path) == 0
-    assert images.count_remote_images(doc) == 1
+    assert len(images.remote_image_urls(doc)) == 1
 
 
 def test_reuse_unchanged_keeps_the_cached_image_when_a_page_comes_back(tmp_path, monkeypatch):
@@ -621,7 +622,7 @@ def test_reuse_unchanged_leaves_a_format_change_to_the_localizer(tmp_path, monke
 
     assert (tmp_path / "images" / "hero.png").read_bytes() == _PNG
     assert images.read_sidecar(tmp_path) == [rec]
-    assert images.count_remote_images(doc) == 1
+    assert len(images.remote_image_urls(doc)) == 1
 
 
 def test_reuse_unchanged_is_a_noop_without_a_sidecar(tmp_path):
@@ -630,7 +631,7 @@ def test_reuse_unchanged_is_a_noop_without_a_sidecar(tmp_path):
     assert _image_cache.reuse_unchanged(doc, tmp_path) == 0
 
 
-def test_remote_image_urls_agrees_with_count_remote_images(tmp_path):
+def test_remote_image_urls_agrees_with_pw_cores_counter(tmp_path):
     """remote_image_urls uses a private pw-core matcher; pin it to the counter, not copied regexes."""
     doc = tmp_path / "d.md"
     doc.write_text(
@@ -643,7 +644,7 @@ def test_remote_image_urls_agrees_with_count_remote_images(tmp_path):
         encoding="utf-8",
     )
     urls = images.remote_image_urls(doc)
-    assert len(urls) == images.count_remote_images(doc)
+    assert len(urls) == core_images.count_remote_images(doc.read_text(encoding="utf-8"))
     assert "https://x/1.png" in urls
     assert urls.count("https://x/1.png") == 1  # deduped
     assert "images/3.png" not in urls

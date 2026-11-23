@@ -510,7 +510,7 @@ def _staged_slug(tmp_path, body, *, local_from_staging):
 
 
 def _kill_the_pass_before_it_writes(monkeypatch):
-    def killed(deliverable, incoming_dir):
+    def killed(deliverable, incoming_dir, kind):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(localize, "_image_pass", killed)

@@ -4,6 +4,16 @@ All notable changes to **pagespring** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); the project aims to follow
 semantic versioning.
 
+## [0.22.0] — 2026-11-23
+
+### Fixed
+
+- **A backslash-escaped backtick opens no inline code span**: the markdown patterns rewrite a link
+  or image that follows one, and `audit` counts its image ref.
+- **`localize` counts `remaining` and `gone` outside code samples**, as `audit` does: a sample's
+  remote ref that never fetches no longer asks for another run. Sample refs are still fetched and
+  re-pointed.
+
 ## [0.21.0] — 2026-11-21
 
 ### Changed

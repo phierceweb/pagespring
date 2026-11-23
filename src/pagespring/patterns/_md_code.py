@@ -4,6 +4,7 @@ rewrite of the prose around them can leave them as written."""
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from collections.abc import Callable
 
 _FENCE_RE = re.compile(r"(?:[ \t>]|[-*+][ \t]|\d{1,9}[.)][ \t])*(`{3,}|~{3,})(.*)")
@@ -11,8 +12,9 @@ _LIST_ITEM_RE = re.compile(r"( *)([-*+]|\d{1,9}[.)])( +|$)")
 # A line opening or closing an HTML or JSX element. MDX has no indented code blocks,
 # and indentation under markup is nesting.
 _MARKUP_LINE_RE = re.compile(r"^[ \t]*</?[A-Za-z][\w.-]*(?:[\s/>]|$)", re.MULTILINE)
-# A backtick run closed by the next run of the same length, within one paragraph.
-_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n).)+?(?<!`)\1(?!`)", re.DOTALL)
+_RUN_RE = re.compile(r"`+")
+_ESCAPE_OR_RUN_RE = re.compile(r"\\[\s\S]|`+")
+_PARAGRAPH_END_RE = re.compile(r"(?=\n[ \t]*\n)")
 _PLACEHOLDER_RE = re.compile(r"\0(\d+)\0")
 
 
@@ -33,6 +35,28 @@ def fence_closes(line: str, fence: str) -> bool:
         and len(m.group(1)) >= len(fence)
         and not m.group(2).strip()
     )
+
+
+def _code_spans(text: str) -> list[tuple[int, int]]:
+    """Inline code spans, read left to right: a backtick run, less a first backtick a backslash
+    escapes, opens one when the next run of that length comes before a blank line; else it is text."""
+    starts: dict[int, list[int]] = {}
+    for run in _RUN_RE.finditer(text):
+        starts.setdefault(len(run[0]), []).append(run.start())
+    ends = [m.start() for m in _PARAGRAPH_END_RE.finditer(text)]
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while (m := _ESCAPE_OR_RUN_RE.search(text, pos)) is not None:
+        pos = m.end()
+        if m[0][0] == "\\":
+            continue
+        closers = starts.get(len(m[0]), [])
+        nearest = bisect_left(closers, pos)
+        end = bisect_left(ends, pos)
+        if nearest < len(closers) and (end == len(ends) or ends[end] >= closers[nearest]):
+            pos = closers[nearest] + len(m[0])
+            spans.append((m.start(), pos))
+    return spans
 
 
 class _IndentedCode:
@@ -79,19 +103,22 @@ def outside_code(md: str, rewrite: Callable[[str], str]) -> str:
     prose: list[str] = []
 
     def flush() -> None:
+        text = "".join(prose)
+        prose.clear()
         spans: list[str] = []
-
-        def hide(m: re.Match[str]) -> str:
-            spans.append(m.group(0))
-            return f"\0{len(spans) - 1}\0"
+        hidden: list[str] = []
+        pos = 0
+        for start, end in _code_spans(text):
+            hidden.append(f"{text[pos:start]}\0{len(spans)}\0")
+            spans.append(text[start:end])
+            pos = end
+        hidden.append(text[pos:])
 
         def show(m: re.Match[str]) -> str:
             i = int(m.group(1))
             return spans[i] if i < len(spans) else m.group(0)
 
-        text = rewrite(_INLINE_CODE_RE.sub(hide, "".join(prose)))
-        prose.clear()
-        out.append(_PLACEHOLDER_RE.sub(show, text))
+        out.append(_PLACEHOLDER_RE.sub(show, rewrite("".join(hidden))))
 
     fence: str | None = None
     indented = _IndentedCode(md)

@@ -14,7 +14,7 @@ from pagespring._integrity import image_pass_ran, integrity, local_refs_in_prose
 from pagespring._prose import prose
 from pagespring._staging import source_key
 from pagespring.config import cfg
-from pagespring.images import decode_ref, read_gone, remote_image_refs, remote_image_starts
+from pagespring.images import remote_image_starts, unfetched_refs
 from pagespring.paths import slug_dir
 from pagespring.registry import pattern_by_name
 
@@ -164,17 +164,14 @@ def audit_slug(slug: str) -> list[Finding]:
         # images/ existing is the fact that a localize pass ran; the count can be
         # 0 when every download failed.
         if m["images"] > 0 or (incoming_dir / "images").is_dir():
-            # Counted as localize counts: distinct refs as written, gone by their decoded URL.
-            refs = remote_image_refs(text)
-            marked = set(read_gone(incoming_dir))
-            gone = sum(1 for ref in refs if decode_ref(ref) in marked)
+            remaining, gone = unfetched_refs(text, incoming_dir)
             declined = _declined_refs(text)
-            if len(refs) > gone:
+            if remaining > gone:
                 findings.append(
                     _f(
                         "localize_incomplete",
                         "warning",
-                        f"{len(refs) - gone} remote image ref(s) remain — re-run localize",
+                        f"{remaining - gone} remote image ref(s) remain — re-run localize",
                     )
                 )
             if declined:

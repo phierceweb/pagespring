@@ -113,8 +113,7 @@ _MD_ANY_SCHEME_RE = re.compile(r"\]\(((?i:https?)://[^)\s]++)(?=" + _core._MD_RE
 
 
 def remote_image_urls(doc_path: Path) -> list[str]:
-    """The remote image URLs in ``doc_path`` in first-seen order, by the localizer's own matcher, so
-    it always agrees with ``count_remote_images``."""
+    """The remote image URLs in ``doc_path`` in first-seen order, by the localizer's own matcher."""
     return remote_image_refs(doc_path.read_text(encoding="utf-8"))
 
 
@@ -208,17 +207,12 @@ def local_name(url: str) -> str:
     return _core.with_query_digest(f"{stem}{ext}", decoded)
 
 
-def gone_remote_images(doc_path: Path, slug_dir: Path) -> int:
-    """Distinct remote refs in ``doc_path`` whose source was last found gone; a re-run cannot fetch
-    them. Counted as ``count_remote_images`` counts."""
+def unfetched_refs(text: str, slug_dir: Path) -> tuple[int, int]:
+    """Distinct remote image refs left in ``text``, and how many of them were last found gone at
+    the source, which a re-run cannot fetch."""
+    refs = remote_image_refs(text)
     gone = set(read_gone(slug_dir))
-    return sum(1 for url in remote_image_urls(doc_path) if decode_ref(url) in gone)
-
-
-def count_remote_images(doc_path: Path) -> int:
-    """Distinct remote image refs still in ``doc_path`` (0 ⇒ fully localized) — lets
-    a caller know whether another ``download_images`` pass is needed."""
-    return _core.count_remote_images(doc_path.read_text(encoding="utf-8"))
+    return len(refs), sum(1 for url in refs if decode_ref(url) in gone)
 
 
 def download_images(doc_path: Path, images_dir: Path, *, checkpoint_every: int = 50) -> int:

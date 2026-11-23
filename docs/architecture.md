@@ -49,7 +49,7 @@ Every staged deliverable gets a sibling `incoming/<slug>/manifest.json` (`manife
 ```json
 {
   "schema_version": 8,
-  "pagespring_version": "0.21.0",
+  "pagespring_version": "0.22.0",
   "source_url": "https://docs.tableplus.com/",
   "pattern": "docs_probe",
   "slug": "tableplus",

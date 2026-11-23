@@ -35,6 +35,10 @@ def _no_sleep(monkeypatch):
     monkeypatch.setattr(http, "polite_sleep", lambda *a, **k: None)
 
 
+def _gone(doc, slug_dir):
+    return images.unfetched_refs(doc.read_text(encoding="utf-8"), slug_dir)[1]
+
+
 def _doc(tmp_path, body):
     doc = tmp_path / "d.md"
     doc.write_text(body, encoding="utf-8")
@@ -49,7 +53,7 @@ def test_a_source_that_is_gone_is_recorded(tmp_path, monkeypatch, code):
     images.download_images(doc, tmp_path / "images")
 
     assert images.read_gone(tmp_path) == ["https://x.com/gone.png"]
-    assert images.gone_remote_images(doc, tmp_path) == 1
+    assert _gone(doc, tmp_path) == 1
 
 
 @pytest.mark.parametrize("code", [403, 429, 500, 503])
@@ -60,7 +64,7 @@ def test_a_failure_that_may_pass_is_not_recorded_as_gone(tmp_path, monkeypatch, 
     images.download_images(doc, tmp_path / "images")
 
     assert images.read_gone(tmp_path) == []
-    assert images.gone_remote_images(doc, tmp_path) == 0
+    assert _gone(doc, tmp_path) == 0
 
 
 def test_an_unreachable_host_is_not_recorded_as_gone(tmp_path, monkeypatch):
@@ -109,7 +113,7 @@ def test_an_escaped_ref_counts_against_its_decoded_mark(tmp_path, monkeypatch):
     images.download_images(doc, tmp_path / "images")
 
     assert images.read_gone(tmp_path) == ["https://x.com/a.png?w=1&h=2"]
-    assert images.gone_remote_images(doc, tmp_path) == 1
+    assert _gone(doc, tmp_path) == 1
 
 
 def test_other_sidecar_writes_keep_the_gone_marks(tmp_path, monkeypatch):
@@ -135,17 +139,17 @@ def test_a_gone_ref_with_a_cached_copy_settles_and_is_not_counted(tmp_path, monk
     assert _image_cache.reuse_unchanged(doc, tmp_path) == 1
     images.download_images(doc, tmp_path / "images")
 
-    assert images.count_remote_images(doc) == 0
+    assert len(images.remote_image_urls(doc)) == 0
     assert images.read_gone(tmp_path) == []
 
 
 # --- what localize and audit say ---
 
 
-def _stage(tmp_path, body, *, image_count=1):
+def _stage(tmp_path, body, *, image_count=1, kind="markdown"):
     d = tmp_path / "incoming" / "fakeapp"
     d.mkdir(parents=True)
-    f = d / "fakeapp.md"
+    f = d / ("fakeapp.md" if kind == "markdown" else "fakeapp.html")
     f.write_text(body, encoding="utf-8")
     manifest.write_manifest(
         d,
@@ -153,7 +157,7 @@ def _stage(tmp_path, body, *, image_count=1):
             source_url="https://x/docs/fakeapp",
             pattern="fake",
             slug="fakeapp",
-            kind="markdown",
+            kind=kind,
             deliverable=f.name,
             pages=2,
             size_bytes=f.stat().st_size,
@@ -182,6 +186,54 @@ def test_localize_counts_the_gone_refs_apart(tmp_path, monkeypatch, incoming):
 
 def _checks(findings):
     return {f["check"]: f["detail"] for f in findings}
+
+
+@pytest.mark.parametrize(
+    ("kind", "sample", "rendered"),
+    [
+        ("markdown", "```md\n![s](https://x.com/sample-{}.png)\n```\n", "![b]({})"),
+        ("markdown", "Write `![s](https://x.com/sample-{}.png)` for it.\n", "![b]({})"),
+        ("html", "<pre>![s](https://x.com/sample-{}.png)</pre>\n", '<img src="{}">'),
+    ],
+    ids=["md-fence", "md-span", "html-pre"],
+)
+def test_localize_counts_no_ref_in_a_code_sample(
+    tmp_path, monkeypatch, incoming, kind, sample, rendered
+):
+    """A sample's placeholder host never answers, so counting it would ask for a re-run forever."""
+    shown = rendered.format("https://x.com/b-flaky.png")
+    body = f"# T\n\n{sample.format('flaky')}\n{sample.format('gone')}\n{shown}\n"
+    _stage(tmp_path, body, kind=kind)
+    monkeypatch.setattr(http, "fetch_bytes_meta", _answering({"flaky.png": 503, "gone.png": 404}))
+
+    r = localize_images("fakeapp")
+
+    assert (r["remaining"], r["gone"]) == (1, 0)
+
+
+def test_localize_counts_as_audit_does(tmp_path, monkeypatch, incoming):
+    body = "# T\n\n```\n![s](https://x.com/s-gone.png)\n```\n\n![a](https://x.com/gone.png)\n![b](https://x.com/flaky.png)\n"
+    _stage(tmp_path, body)
+    monkeypatch.setattr(http, "fetch_bytes_meta", _answering({"gone.png": 404, "flaky.png": 503}))
+
+    r = localize_images("fakeapp")
+
+    found = _checks(audit.audit_slug("fakeapp"))
+    assert found["localize_incomplete"].startswith(
+        f"{r['remaining'] - r['gone']} remote image ref(s)"
+    )
+    assert found["image_source_gone"].startswith(f"{r['gone']} remote image ref(s)")
+    assert (r["remaining"], r["gone"]) == (2, 1)
+
+
+def test_localize_still_fetches_a_ref_in_a_code_sample(tmp_path, monkeypatch, incoming):
+    d = _stage(tmp_path, "# T\n\n```md\n![s](https://x.com/sample.png)\n```\n")
+    monkeypatch.setattr(http, "fetch_bytes_meta", _answering({}))
+
+    r = localize_images("fakeapp")
+
+    assert (r["localized"], r["remaining"]) == (1, 0)
+    assert "![s](images/sample.png)" in (d / "fakeapp.md").read_text(encoding="utf-8")
 
 
 def test_audit_does_not_advise_a_rerun_for_a_gone_ref(tmp_path, monkeypatch, incoming):
